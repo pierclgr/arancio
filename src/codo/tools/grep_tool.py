@@ -61,6 +61,10 @@ class GrepTool(BaseTool):
             A dict with keys ``matches`` (list), ``total_matches``
             (int), ``truncated`` (bool), ``timed_out`` (bool),
             ``exit_code`` (int) and ``output_mode`` (str).
+
+        Raises:
+            RuntimeError: when rg exits with code 2 or stderr is
+                present on a non-zero exit.
         """
         args = ["rg", "--no-heading"]
 
