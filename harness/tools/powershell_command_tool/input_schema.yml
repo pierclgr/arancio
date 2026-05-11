@@ -1,0 +1,14 @@
+properties:
+  command:
+    type: string
+    description: The command to run via PowerShell -Command.
+  timeout:
+    type: integer
+    description: Maximum runtime in seconds. Defaults to 120, capped at 600.
+    minimum: 1
+    maximum: 600
+  cwd:
+    type: string
+    description: Absolute working directory for the command. Defaults to the current process working directory ("./")
+required:
+  - command

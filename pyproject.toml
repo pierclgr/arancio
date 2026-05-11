@@ -1,0 +1,35 @@
+[project]
+name = "codo"
+version = "0.1.0"
+description = "Another coding agent."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "dynamic-markdown",
+    "litellm>=1.83.14",
+    "pyyaml>=6.0.3",
+    "requests>=2.33.1",
+]
+
+[dependency-groups]
+dev = [
+    "docformatter",
+    "pytest",
+    "ruff",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.11,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+dynamic-markdown = { git = "https://github.com/pierclgr/dynamic-markdown.git", tag = "v0.1.1" }
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["D", "DOC"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"

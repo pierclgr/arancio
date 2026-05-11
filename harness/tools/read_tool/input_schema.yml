@@ -1,0 +1,15 @@
+properties:
+  file_path:
+    type: string
+    description: Absolute path to the file to read.
+  offset:
+    type: integer
+    description: 1-indexed line number to start reading from. Defaults to 1.
+    minimum: 1
+  limit:
+    type: integer
+    description: Maximum number of lines to read. Defaults to 2000, capped at 2000.
+    minimum: 1
+    maximum: 2000
+required:
+  - file_path

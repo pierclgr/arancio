@@ -1,0 +1,22 @@
+# cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.idea/
+
+# coding agents
+.claude/
+.codex
+
+# manual tests
+smoke_test/
+
+# playground
+playground.py
+
+# research bundle
+docs/
+
+CLAUDE.md
+AGENTS.md

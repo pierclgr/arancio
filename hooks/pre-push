@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# pre-push hook: docstring-check and test the whole repo
+# aborts on docstring or test failures; does not edit files or create commits
+
+set -e
+
+REPO=$(git rev-parse --show-toplevel)
+VENV=$REPO/.venv/bin
+cd "$REPO"
+
+# docstring completeness across the whole repo
+"$VENV/ruff" check --select=D,DOC --preview src/ tests/
+
+# tests
+pytest_status=0
+"$VENV/python" -m pytest tests/ || pytest_status=$?
+
+# allow empty test suite, but keep blocking real pytest failures
+if [ "$pytest_status" -eq 5 ]; then
+    echo "No tests collected; allowing push."
+elif [ "$pytest_status" -ne 0 ]; then
+    exit "$pytest_status"
+fi

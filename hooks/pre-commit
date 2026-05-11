@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# pre-commit hook: auto-fix lint and formatting before creating a commit
+# stages fixes only for non-deleted paths already staged under src/ and tests/
+
+set -e
+
+REPO=$(git rev-parse --show-toplevel)
+VENV=$REPO/.venv/bin
+cd "$REPO"
+
+STAGED_PATHS=$(mktemp)
+INDEX_BEFORE=$(mktemp)
+INDEX_AFTER=$(mktemp)
+trap 'rm -f "$STAGED_PATHS" "$INDEX_BEFORE" "$INDEX_AFTER"' EXIT
+
+git diff --cached --name-only --diff-filter=d -z -- src/ tests/ > "$STAGED_PATHS"
+git diff --cached --binary -- src/ tests/ > "$INDEX_BEFORE"
+
+# auto-fix pass - do not abort before format + final check have run
+"$VENV/ruff" check --fix src/ tests/ || true
+
+docf_exit=0
+"$VENV/docformatter" --in-place --recursive --wrap-summaries 88 --wrap-descriptions 88 src/ tests/ || docf_exit=$?
+if [ "$docf_exit" -ne 0 ] && [ "$docf_exit" -ne 3 ]; then
+    echo "pre-commit: docformatter failed with exit $docf_exit" >&2
+    exit "$docf_exit"
+fi
+
+"$VENV/ruff" format src/ tests/
+
+if [ -s "$STAGED_PATHS" ]; then
+    git add -u --pathspec-from-file="$STAGED_PATHS" --pathspec-file-nul
+    git diff --cached --binary -- src/ tests/ > "$INDEX_AFTER"
+fi
+
+if ! cmp -s "$INDEX_BEFORE" "$INDEX_AFTER"; then
+    echo "" >&2
+    echo "pre-commit: staged auto-fixes for previously staged paths under src/ and tests/." >&2
+    echo "" >&2
+fi
+
+# final verdict: re-check after format has had a chance to fix layout-driven errors
+ruff_check_exit=0
+"$VENV/ruff" check src/ tests/ || ruff_check_exit=$?
+if [ "$ruff_check_exit" -ne 0 ]; then
+    exit "$ruff_check_exit"
+fi
