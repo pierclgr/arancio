@@ -1,0 +1,47 @@
+properties:
+  pattern:
+    type: string
+    description: The regex pattern to search for (e.g. "log.*Error", "def\s+\w+").
+  path:
+    type: string
+    description: Absolute path to the file or directory to search in. Defaults to the current working directory.
+  glob:
+    type: string
+    description: Filename pattern filter (e.g. "*.py", "*.{js,ts}").
+  file_type:
+    type: string
+    description: Language type filter using rg's built-in type map (e.g. "py", "js", "rust").
+  output_mode:
+    type: string
+    enum:
+      - files_with_matches
+      - content
+      - count
+    description: Output mode. "files_with_matches" returns matching file paths. "content" returns matching lines. "count" returns match counts per file.
+  i:
+    type: boolean
+    description: Case insensitive search. Default false.
+  n:
+    type: boolean
+    description: Show line numbers in content mode. Default true.
+  A:
+    type: integer
+    description: Number of lines to show after each match.
+    minimum: 0
+  B:
+    type: integer
+    description: Number of lines to show before each match.
+    minimum: 0
+  C:
+    type: integer
+    description: Number of lines to show before and after each match.
+    minimum: 0
+  head_limit:
+    type: integer
+    description: Maximum number of matches/lines to return. Defaults to 100.
+    minimum: 0
+  multiline:
+    type: boolean
+    description: Enable multi-line matching across line boundaries. Default false.
+required:
+  - pattern

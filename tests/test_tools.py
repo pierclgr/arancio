@@ -13,6 +13,7 @@ from dynamic_markdown.types.files.base import DynamicMarkdownFile
 from codo.parsers.tool_result.base import BaseToolResultParser
 from codo.tools.base import BaseTool
 from codo.tools.edit_tool import EditTool
+from codo.tools.grep_tool import GrepTool
 from codo.tools.powershell_command import PowershellCommandTool
 from codo.tools.read_tool import ReadTool
 from codo.tools.session import default_session
@@ -908,3 +909,238 @@ def test_tool_instance_schema_carries_loaded_attrs() -> None:
         description=expected_description_file.content,
         input_schema=expected_input_schema,
     )
+
+
+# — GrepTool ——————————————————————————————————————————————————————————
+
+
+def test_grep_tool_files_with_matches_default(tmp_path: Path) -> None:
+    """Default mode returns only matching file paths."""
+    target = tmp_path / "greptest"
+    target.mkdir()
+    (target / "a.py").write_text("def foo():\n    pass\n")
+    (target / "b.py").write_text("x = 1\n")
+    (target / "c.txt").write_text("not python\n")
+
+    result = GrepTool().call(
+        call_id="call_1",
+        pattern=r"def\s+\w+",
+        path=str(target),
+        output_mode="files_with_matches",
+    )
+
+    canonical_a = str((target / "a.py").resolve())
+    output = result.output
+    assert output["output_mode"] == "files_with_matches"
+    assert canonical_a in output["matches"]
+    assert output["total_matches"] == 1
+    assert output["truncated"] is False
+    assert result == ToolResultMessage(
+        content=f"{canonical_a}\n[1 file matched]",
+        id="call_1",
+        output=output,
+    )
+
+
+def test_grep_tool_content_mode(tmp_path: Path) -> None:
+    """Content mode returns matching lines with file, line number and content."""
+    target = tmp_path / "greptest"
+    target.mkdir()
+    (target / "app.py").write_text("def alpha():\n    pass\n\ndef beta():\n    pass\n")
+
+    result = GrepTool().call(
+        call_id="call_1",
+        pattern=r"def\s+\w+",
+        path=str(target),
+        output_mode="content",
+    )
+
+    canonical = str((target / "app.py").resolve())
+    output = result.output
+    assert output["output_mode"] == "content"
+    assert output["matches"] == [
+        {"file": canonical, "line": 1, "content": "def alpha():", "is_context": False},
+        {"file": canonical, "line": 4, "content": "def beta():", "is_context": False},
+    ]
+    assert output["total_matches"] == 2
+
+
+def test_grep_tool_count_mode(tmp_path: Path) -> None:
+    """Count mode returns match counts per file."""
+    target = tmp_path / "greptest"
+    target.mkdir()
+    (target / "f.py").write_text("foo\nfoo\nfoo\nbar\nfoo\n")
+
+    result = GrepTool().call(
+        call_id="call_1",
+        pattern="foo",
+        path=str(target),
+        output_mode="count",
+    )
+
+    canonical = str((target / "f.py").resolve())
+    output = result.output
+    assert output["output_mode"] == "count"
+    assert output["matches"] == [
+        {"file": canonical, "count": 4},
+    ]
+    assert output["total_matches"] == 1
+
+
+def test_grep_tool_case_insensitive(tmp_path: Path) -> None:
+    """Case insensitive flag matches mixed-case content."""
+    target = tmp_path / "greptest"
+    target.mkdir()
+    (target / "f.py").write_text("Hello World\n")
+
+    result = GrepTool().call(
+        call_id="call_1",
+        pattern="hello",
+        path=str(target),
+        output_mode="files_with_matches",
+        i=True,
+    )
+
+    assert len(result.output["matches"]) == 1
+
+
+def test_grep_tool_glob_filter(tmp_path: Path) -> None:
+    """Glob filter restricts search to matching filenames only."""
+    target = tmp_path / "greptest"
+    target.mkdir()
+    (target / "a.py").write_text("hello\n")
+    (target / "b.txt").write_text("hello\n")
+
+    result = GrepTool().call(
+        call_id="call_1",
+        pattern="hello",
+        path=str(target),
+        output_mode="files_with_matches",
+        glob="*.py",
+    )
+
+    output = result.output
+    assert len(output["matches"]) == 1
+    assert output["matches"][0].endswith("a.py")
+
+
+def test_grep_tool_file_type_filter(tmp_path: Path) -> None:
+    """File type filter restricts search to the given language."""
+    target = tmp_path / "greptest"
+    target.mkdir()
+    (target / "a.py").write_text("hello\n")
+    (target / "b.js").write_text("hello\n")
+
+    result = GrepTool().call(
+        call_id="call_1",
+        pattern="hello",
+        path=str(target),
+        output_mode="files_with_matches",
+        file_type="py",
+    )
+
+    output = result.output
+    assert len(output["matches"]) == 1
+    assert output["matches"][0].endswith("a.py")
+
+
+def test_grep_tool_head_limit_caps_output(tmp_path: Path) -> None:
+    """Head limit truncates output and sets the truncated flag."""
+    target = tmp_path / "greptest"
+    target.mkdir()
+    content = "\n".join(f"line-{i}" for i in range(20))
+    (target / "f.txt").write_text(content + "\n")
+
+    result = GrepTool().call(
+        call_id="call_1",
+        pattern=r"line-\d+",
+        path=str(target),
+        output_mode="content",
+        head_limit=5,
+    )
+
+    output = result.output
+    assert len(output["matches"]) == 5
+    assert output["total_matches"] == 20
+    assert output["truncated"] is True
+    assert "truncated" in result.content
+
+
+def test_grep_tool_context_lines(tmp_path: Path) -> None:
+    """Context lines are returned with the ``is_context`` flag set."""
+    target = tmp_path / "greptest"
+    target.mkdir()
+    (target / "f.txt").write_text("before\nmatch\nmiddle\nafter\n")
+
+    result = GrepTool().call(
+        call_id="call_1",
+        pattern="match",
+        path=str(target),
+        output_mode="content",
+        A=1,
+        B=1,
+    )
+
+    output = result.output
+    assert len(output["matches"]) == 3
+    contexts = [m for m in output["matches"] if m["is_context"]]
+    matches = [m for m in output["matches"] if not m["is_context"]]
+    assert len(contexts) == 2
+    assert len(matches) == 1
+    assert matches[0]["content"] == "match"
+
+
+def test_grep_tool_zero_matches(tmp_path: Path) -> None:
+    """Zero matches returns an empty result with exit code 1."""
+    target = tmp_path / "greptest"
+    target.mkdir()
+    (target / "f.txt").write_text("nothing here\n")
+
+    result = GrepTool().call(
+        call_id="call_1",
+        pattern="nonesuch",
+        path=str(target),
+        output_mode="content",
+    )
+
+    output = result.output
+    assert output["matches"] == []
+    assert output["total_matches"] == 0
+    assert output["exit_code"] == 1
+
+
+def test_grep_tool_escaped_literal_braces(tmp_path: Path) -> None:
+    """Literal braces are matched when properly escaped."""
+    target = tmp_path / "greptest"
+    target.mkdir()
+    (target / "f.txt").write_text("interface{}\n")
+
+    result = GrepTool().call(
+        call_id="call_1",
+        pattern=r"interface\{\}",
+        path=str(target),
+        output_mode="files_with_matches",
+    )
+
+    assert len(result.output["matches"]) == 1
+
+
+def test_grep_tool_reports_missing_path() -> None:
+    """Missing paths surface as tool errors."""
+    result = GrepTool().call(
+        call_id="call_1",
+        pattern="hello",
+        path="/nonexistent/path/for/grep",
+    )
+
+    assert isinstance(result, ToolErrorMessage)
+
+
+def test_grep_tool_reports_invalid_pattern() -> None:
+    """Invalid regex patterns surface as tool errors."""
+    result = GrepTool().call(
+        call_id="call_1",
+        pattern="[unclosed",
+    )
+
+    assert isinstance(result, ToolErrorMessage)

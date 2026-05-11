@@ -1,6 +1,7 @@
 """Tests for tool result parsers."""
 
 from codo.parsers.tool_result.edit_tool import EditToolResultParser
+from codo.parsers.tool_result.grep_tool import GrepToolResultParser
 from codo.parsers.tool_result.read_tool import ReadToolResultParser
 from codo.parsers.tool_result.shell_command import ShellCommandToolResultParser
 from codo.parsers.tool_result.write_tool import WriteToolResultParser
@@ -292,6 +293,145 @@ def test_edit_tool_parser_honors_explicit_error_flag() -> None:
     output = "Error while executing EditTool: boom"
 
     result = EditToolResultParser.parse(
+        call_id="call_1",
+        output=output,
+        is_error=True,
+    )
+
+    assert result == ToolErrorMessage(
+        content=output,
+        id="call_1",
+        output=output,
+    )
+
+
+# — GrepToolResultParser ——————————————————————————————————————————————
+
+
+def test_grep_parser_files_with_matches() -> None:
+    """Files-with-matches output is formatted with one path per line and a footer."""
+    output = {
+        "matches": ["/abs/a.py", "/abs/b.py"],
+        "total_matches": 2,
+        "truncated": False,
+        "timed_out": False,
+        "exit_code": 0,
+        "output_mode": "files_with_matches",
+    }
+
+    result = GrepToolResultParser.parse(call_id="call_1", output=output)
+
+    assert result == ToolResultMessage(
+        content="/abs/a.py\n/abs/b.py\n[2 files matched]",
+        id="call_1",
+        output=output,
+    )
+
+
+def test_grep_parser_content_mode() -> None:
+    """Content mode formats entries as file:line:text with a summary footer."""
+    output = {
+        "matches": [
+            {
+                "file": "/abs/a.py",
+                "line": 3,
+                "content": "def foo():",
+                "is_context": False,
+            },
+            {
+                "file": "/abs/b.py",
+                "line": 7,
+                "content": "def bar():",
+                "is_context": False,
+            },
+        ],
+        "total_matches": 2,
+        "truncated": False,
+        "timed_out": False,
+        "exit_code": 0,
+        "output_mode": "content",
+    }
+
+    result = GrepToolResultParser.parse(call_id="call_1", output=output)
+
+    expected = (
+        "/abs/a.py:3:def foo():\n/abs/b.py:7:def bar():\n[2 matches across 2 files]"
+    )
+    assert result == ToolResultMessage(
+        content=expected,
+        id="call_1",
+        output=output,
+    )
+
+
+def test_grep_parser_count_mode() -> None:
+    """Count mode formats entries as file:N with a summary footer."""
+    output = {
+        "matches": [
+            {"file": "/abs/a.py", "count": 5},
+            {"file": "/abs/b.py", "count": 3},
+        ],
+        "total_matches": 2,
+        "truncated": False,
+        "timed_out": False,
+        "exit_code": 0,
+        "output_mode": "count",
+    }
+
+    result = GrepToolResultParser.parse(call_id="call_1", output=output)
+
+    assert result == ToolResultMessage(
+        content="/abs/a.py:5\n/abs/b.py:3\n[2 files with matches]",
+        id="call_1",
+        output=output,
+    )
+
+
+def test_grep_parser_truncated_output() -> None:
+    """Truncated output includes a different footer indicating the cap."""
+    output = {
+        "matches": ["/abs/a.py"],
+        "total_matches": 42,
+        "truncated": True,
+        "timed_out": False,
+        "exit_code": 0,
+        "output_mode": "files_with_matches",
+    }
+
+    result = GrepToolResultParser.parse(call_id="call_1", output=output)
+
+    assert result == ToolResultMessage(
+        content="/abs/a.py\n[output truncated, showing first 1 of 42]",
+        id="call_1",
+        output=output,
+    )
+
+
+def test_grep_parser_timeout() -> None:
+    """Timed-out results are surfaced as tool errors."""
+    output = {
+        "matches": [],
+        "total_matches": 0,
+        "truncated": False,
+        "timed_out": True,
+        "exit_code": -1,
+        "output_mode": "content",
+    }
+
+    result = GrepToolResultParser.parse(call_id="call_1", output=output)
+
+    assert result == ToolErrorMessage(
+        content="[0 matches across 0 files]\n[timed out]",
+        id="call_1",
+        output=output,
+    )
+
+
+def test_grep_parser_explicit_error_flag() -> None:
+    """Explicit tool execution errors are preserved by the grep parser."""
+    output = "Error while executing GrepTool: boom"
+
+    result = GrepToolResultParser.parse(
         call_id="call_1",
         output=output,
         is_error=True,
