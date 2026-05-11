@@ -1,13 +1,13 @@
-"""Edit tool exposing an exact-substring file replacement primitive."""
+"""File edit tool exposing an exact-substring file replacement primitive."""
 
 from pathlib import Path
 from typing import Type
 
-from codo.parsers.tool_result.edit_tool import EditToolResultParser
+from codo.parsers.tool_result.files.edit import EditFileToolResultParser
 from codo.tools.base import BaseTool
 
 
-class EditTool(BaseTool):
+class EditFileTool(BaseTool):
     """Replace an exact substring in an existing UTF-8 file.
 
     The tool refuses to edit a file that was not read in this session or whose mtime has
@@ -16,7 +16,7 @@ class EditTool(BaseTool):
     match is strictly byte-exact and must be unique unless ``replace_all`` is set.
     """
 
-    _result_parser: Type[EditToolResultParser] = EditToolResultParser
+    _result_parser: Type[EditFileToolResultParser] = EditFileToolResultParser
 
     def _call(
         self,

@@ -1,23 +1,23 @@
-"""Write tool exposing a file create/overwrite primitive to LLM clients."""
+"""File write tool exposing a file create/overwrite primitive to LLM clients."""
 
 from pathlib import Path
 from typing import Type
 
-from codo.parsers.tool_result.write_tool import WriteToolResultParser
+from codo.parsers.tool_result.files.write import WriteFileToolResultParser
 from codo.tools.base import BaseTool
 
 
-class WriteTool(BaseTool):
+class WriteFileTool(BaseTool):
     """Create a new file or overwrite an existing one on disk.
 
     Existing files are protected by a read-first guard: the tool refuses to
     overwrite a file that has not been read in this session, or whose mtime
     has drifted since the last recorded read. The guard is enforced via the
     shared :class:`~codo.tools.session.ToolSession` registry that
-    :class:`~codo.tools.read_tool.ReadTool` populates on every successful read.
+    :class:`~codo.tools.files.read.ReadFileTool` populates on every successful read.
     """
 
-    _result_parser: Type[WriteToolResultParser] = WriteToolResultParser
+    _result_parser: Type[WriteFileToolResultParser] = WriteFileToolResultParser
 
     def _call(self, file_path: str, content: str) -> dict:
         """Write ``content`` to ``file_path`` and return write metadata.

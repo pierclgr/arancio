@@ -12,12 +12,12 @@ from dynamic_markdown.types.files.base import DynamicMarkdownFile
 
 from codo.parsers.tool_result.base import BaseToolResultParser
 from codo.tools.base import BaseTool
-from codo.tools.edit_tool import EditTool
-from codo.tools.grep_tool import GrepTool
-from codo.tools.powershell_command import PowershellCommandTool
-from codo.tools.read_tool import ReadTool
+from codo.tools.commands.powershell import PowershellCommandTool
+from codo.tools.files.edit import EditFileTool
+from codo.tools.files.read import ReadFileTool
+from codo.tools.files.write import WriteFileTool
+from codo.tools.grep import GrepTool
 from codo.tools.session import default_session
-from codo.tools.write_tool import WriteTool
 from codo.types.messages import ToolErrorMessage, ToolResultMessage
 from codo.types.tools import ToolSchema
 
@@ -108,8 +108,8 @@ def test_tool_exception_routes_through_result_parser() -> None:
     )
 
 
-@patch("codo.tools.powershell_command.subprocess.run")
-@patch("codo.tools.powershell_command.shutil.which")
+@patch("codo.tools.commands.powershell.subprocess.run")
+@patch("codo.tools.commands.powershell.shutil.which")
 def test_powershell_command_prefers_windows_powershell(
     which_mock,
     run_mock,
@@ -160,8 +160,8 @@ def test_powershell_command_prefers_windows_powershell(
     )
 
 
-@patch("codo.tools.powershell_command.subprocess.run")
-@patch("codo.tools.powershell_command.shutil.which")
+@patch("codo.tools.commands.powershell.subprocess.run")
+@patch("codo.tools.commands.powershell.shutil.which")
 def test_powershell_command_falls_back_to_pwsh(which_mock, run_mock) -> None:
     """PowerShell tool falls back to pwsh when powershell.exe is unavailable."""
     which_mock.side_effect = lambda name: "pwsh" if name == "pwsh" else None
@@ -179,8 +179,8 @@ def test_powershell_command_falls_back_to_pwsh(which_mock, run_mock) -> None:
     assert command_args[-1] == "Write-Output ok"
 
 
-@patch("codo.tools.powershell_command.subprocess.run")
-@patch("codo.tools.powershell_command.shutil.which")
+@patch("codo.tools.commands.powershell.subprocess.run")
+@patch("codo.tools.commands.powershell.shutil.which")
 def test_powershell_command_reports_missing_host(which_mock, run_mock) -> None:
     """Missing PowerShell hosts are reported as tool errors."""
     which_mock.return_value = None
@@ -199,8 +199,8 @@ def test_powershell_command_reports_missing_host(which_mock, run_mock) -> None:
     )
 
 
-@patch("codo.tools.powershell_command.subprocess.run")
-@patch("codo.tools.powershell_command.shutil.which")
+@patch("codo.tools.commands.powershell.subprocess.run")
+@patch("codo.tools.commands.powershell.shutil.which")
 def test_powershell_command_reports_timeout(which_mock, run_mock) -> None:
     """Timed-out PowerShell commands return partial output as an error."""
     which_mock.return_value = "powershell.exe"
@@ -231,8 +231,8 @@ def test_powershell_command_reports_timeout(which_mock, run_mock) -> None:
     )
 
 
-@patch("codo.tools.powershell_command.subprocess.run")
-@patch("codo.tools.powershell_command.shutil.which")
+@patch("codo.tools.commands.powershell.subprocess.run")
+@patch("codo.tools.commands.powershell.shutil.which")
 def test_powershell_command_truncates_long_output(which_mock, run_mock) -> None:
     """PowerShell command streams are truncated independently."""
     which_mock.return_value = "powershell.exe"
@@ -251,11 +251,11 @@ def test_powershell_command_truncates_long_output(which_mock, run_mock) -> None:
 
 
 def test_read_tool_reads_full_file_with_line_numbers(tmp_path: Path) -> None:
-    """ReadTool returns each line prefixed with its 1-indexed line number."""
+    """ReadFileTool returns each line prefixed with its 1-indexed line number."""
     target = tmp_path / "sample.txt"
     target.write_text("alpha\nbeta\ngamma\n")
 
-    result = ReadTool().call(call_id="call_1", file_path=str(target))
+    result = ReadFileTool().call(call_id="call_1", file_path=str(target))
 
     expected_block = "     1\talpha\n     2\tbeta\n     3\tgamma"
     output = {
@@ -273,11 +273,11 @@ def test_read_tool_reads_full_file_with_line_numbers(tmp_path: Path) -> None:
 
 
 def test_read_tool_slices_with_offset_and_limit(tmp_path: Path) -> None:
-    """ReadTool respects offset and limit while preserving line numbers."""
+    """ReadFileTool respects offset and limit while preserving line numbers."""
     target = tmp_path / "sample.txt"
     target.write_text("\n".join(f"line-{i}" for i in range(1, 6)) + "\n")
 
-    result = ReadTool().call(
+    result = ReadFileTool().call(
         call_id="call_1",
         file_path=str(target),
         offset=2,
@@ -301,13 +301,13 @@ def test_read_tool_slices_with_offset_and_limit(tmp_path: Path) -> None:
 
 def test_read_tool_truncates_long_lines(tmp_path: Path) -> None:
     """Lines exceeding the per-line cap are truncated with a marker."""
-    long_line = "a" * (ReadTool._max_line_chars + 25)
+    long_line = "a" * (ReadFileTool._max_line_chars + 25)
     target = tmp_path / "sample.txt"
     target.write_text(long_line + "\n")
 
-    result = ReadTool().call(call_id="call_1", file_path=str(target))
+    result = ReadFileTool().call(call_id="call_1", file_path=str(target))
 
-    capped = "a" * ReadTool._max_line_chars + ReadTool._line_truncation_marker
+    capped = "a" * ReadFileTool._max_line_chars + ReadFileTool._line_truncation_marker
     expected_block = f"     1\t{capped}"
     output = {
         "content": expected_block,
@@ -328,7 +328,7 @@ def test_read_tool_handles_empty_file(tmp_path: Path) -> None:
     target = tmp_path / "empty.txt"
     target.write_text("")
 
-    result = ReadTool().call(call_id="call_1", file_path=str(target))
+    result = ReadFileTool().call(call_id="call_1", file_path=str(target))
 
     output = {
         "content": "",
@@ -346,9 +346,11 @@ def test_read_tool_handles_empty_file(tmp_path: Path) -> None:
 
 def test_read_tool_rejects_relative_paths() -> None:
     """Relative paths surface as tool errors via the wrapper."""
-    result = ReadTool().call(call_id="call_1", file_path="relative.txt")
+    result = ReadFileTool().call(call_id="call_1", file_path="relative.txt")
 
-    output = "Error while executing ReadTool: file_path must be absolute: relative.txt"
+    output = (
+        "Error while executing ReadFileTool: file_path must be absolute: relative.txt"
+    )
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
@@ -360,9 +362,9 @@ def test_read_tool_reports_missing_file(tmp_path: Path) -> None:
     """Missing files surface as tool errors via the wrapper."""
     target = tmp_path / "missing.txt"
 
-    result = ReadTool().call(call_id="call_1", file_path=str(target))
+    result = ReadFileTool().call(call_id="call_1", file_path=str(target))
 
-    output = f"Error while executing ReadTool: File not found: {target}"
+    output = f"Error while executing ReadFileTool: File not found: {target}"
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
@@ -372,9 +374,11 @@ def test_read_tool_reports_missing_file(tmp_path: Path) -> None:
 
 def test_read_tool_reports_directory_path(tmp_path: Path) -> None:
     """Directory paths surface as tool errors via the wrapper."""
-    result = ReadTool().call(call_id="call_1", file_path=str(tmp_path))
+    result = ReadFileTool().call(call_id="call_1", file_path=str(tmp_path))
 
-    output = f"Error while executing ReadTool: Path is not a regular file: {tmp_path}"
+    output = (
+        f"Error while executing ReadFileTool: Path is not a regular file: {tmp_path}"
+    )
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
@@ -387,7 +391,7 @@ def test_read_tool_registers_read_with_session(tmp_path: Path) -> None:
     target = tmp_path / "sample.txt"
     target.write_text("hello\n")
 
-    ReadTool().call(call_id="call_1", file_path=str(target))
+    ReadFileTool().call(call_id="call_1", file_path=str(target))
 
     canonical = str(target.resolve())
     assert default_session.is_known(canonical) is True
@@ -398,7 +402,7 @@ def test_write_tool_creates_new_file(tmp_path: Path) -> None:
     """Writing to a path that does not exist creates the file."""
     target = tmp_path / "new.txt"
 
-    result = WriteTool().call(
+    result = WriteFileTool().call(
         call_id="call_1",
         file_path=str(target),
         content="hello\nworld\n",
@@ -424,8 +428,8 @@ def test_write_tool_overwrites_after_read(tmp_path: Path) -> None:
     target = tmp_path / "sample.txt"
     target.write_text("old")
 
-    ReadTool().call(call_id="call_1", file_path=str(target))
-    result = WriteTool().call(
+    ReadFileTool().call(call_id="call_1", file_path=str(target))
+    result = WriteFileTool().call(
         call_id="call_2",
         file_path=str(target),
         content="new content",
@@ -451,7 +455,7 @@ def test_write_tool_refuses_overwrite_without_prior_read(tmp_path: Path) -> None
     target = tmp_path / "sample.txt"
     target.write_text("untouched")
 
-    result = WriteTool().call(
+    result = WriteFileTool().call(
         call_id="call_1",
         file_path=str(target),
         content="should not land",
@@ -459,7 +463,7 @@ def test_write_tool_refuses_overwrite_without_prior_read(tmp_path: Path) -> None
 
     assert target.read_text() == "untouched"
     output = (
-        f"Error while executing WriteTool: "
+        f"Error while executing WriteFileTool: "
         f"File exists but was not read this session; "
         f"read it first before overwriting: {target}"
     )
@@ -476,12 +480,12 @@ def test_write_tool_refuses_overwrite_after_mtime_drift(tmp_path: Path) -> None:
     target.write_text("old")
 
     original_mtime = target.stat().st_mtime
-    ReadTool().call(call_id="call_1", file_path=str(target))
+    ReadFileTool().call(call_id="call_1", file_path=str(target))
 
     drifted = original_mtime + 100.0
     os.utime(target, (drifted, drifted))
 
-    result = WriteTool().call(
+    result = WriteFileTool().call(
         call_id="call_2",
         file_path=str(target),
         content="should not land",
@@ -489,7 +493,7 @@ def test_write_tool_refuses_overwrite_after_mtime_drift(tmp_path: Path) -> None:
 
     assert target.read_text() == "old"
     output = (
-        f"Error while executing WriteTool: "
+        f"Error while executing WriteFileTool: "
         f"File has changed on disk since it was read; "
         f"re-read before overwriting: {target}"
     )
@@ -502,13 +506,15 @@ def test_write_tool_refuses_overwrite_after_mtime_drift(tmp_path: Path) -> None:
 
 def test_write_tool_rejects_relative_paths() -> None:
     """Relative paths surface as tool errors via the wrapper."""
-    result = WriteTool().call(
+    result = WriteFileTool().call(
         call_id="call_1",
         file_path="relative.txt",
         content="x",
     )
 
-    output = "Error while executing WriteTool: file_path must be absolute: relative.txt"
+    output = (
+        "Error while executing WriteFileTool: file_path must be absolute: relative.txt"
+    )
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
@@ -520,14 +526,15 @@ def test_write_tool_reports_missing_parent_dir(tmp_path: Path) -> None:
     """Missing parent directories surface as tool errors via the wrapper."""
     target = tmp_path / "missing_dir" / "file.txt"
 
-    result = WriteTool().call(
+    result = WriteFileTool().call(
         call_id="call_1",
         file_path=str(target),
         content="x",
     )
 
     output = (
-        f"Error while executing WriteTool: Parent directory not found: {target.parent}"
+        f"Error while executing WriteFileTool: "
+        f"Parent directory not found: {target.parent}"
     )
     assert result == ToolErrorMessage(
         content=output,
@@ -538,13 +545,15 @@ def test_write_tool_reports_missing_parent_dir(tmp_path: Path) -> None:
 
 def test_write_tool_reports_directory_target(tmp_path: Path) -> None:
     """Directory targets surface as tool errors via the wrapper."""
-    result = WriteTool().call(
+    result = WriteFileTool().call(
         call_id="call_1",
         file_path=str(tmp_path),
         content="x",
     )
 
-    output = f"Error while executing WriteTool: Path is not a regular file: {tmp_path}"
+    output = (
+        f"Error while executing WriteFileTool: Path is not a regular file: {tmp_path}"
+    )
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
@@ -556,7 +565,7 @@ def test_write_tool_handles_empty_content(tmp_path: Path) -> None:
     """Empty content creates a zero-byte file with zero lines."""
     target = tmp_path / "empty.txt"
 
-    result = WriteTool().call(
+    result = WriteFileTool().call(
         call_id="call_1",
         file_path=str(target),
         content="",
@@ -582,8 +591,8 @@ def test_edit_tool_replaces_unique_match(tmp_path: Path) -> None:
     target = tmp_path / "sample.py"
     target.write_text("x = 1\ny = 2\n")
 
-    ReadTool().call(call_id="call_1", file_path=str(target))
-    result = EditTool().call(
+    ReadFileTool().call(call_id="call_1", file_path=str(target))
+    result = EditFileTool().call(
         call_id="call_2",
         file_path=str(target),
         old_string="x = 1",
@@ -611,8 +620,8 @@ def test_edit_tool_replaces_all_occurrences(tmp_path: Path) -> None:
     target = tmp_path / "sample.txt"
     target.write_text("foo\nfoo\nfoo\n")
 
-    ReadTool().call(call_id="call_1", file_path=str(target))
-    result = EditTool().call(
+    ReadFileTool().call(call_id="call_1", file_path=str(target))
+    result = EditFileTool().call(
         call_id="call_2",
         file_path=str(target),
         old_string="foo",
@@ -633,8 +642,8 @@ def test_edit_tool_refuses_ambiguous_match_without_replace_all(
     target = tmp_path / "sample.txt"
     target.write_text("foo\nfoo\n")
 
-    ReadTool().call(call_id="call_1", file_path=str(target))
-    result = EditTool().call(
+    ReadFileTool().call(call_id="call_1", file_path=str(target))
+    result = EditFileTool().call(
         call_id="call_2",
         file_path=str(target),
         old_string="foo",
@@ -643,7 +652,7 @@ def test_edit_tool_refuses_ambiguous_match_without_replace_all(
 
     assert target.read_text() == "foo\nfoo\n"
     output = (
-        "Error while executing EditTool: "
+        "Error while executing EditFileTool: "
         "old_string is not unique (occurs 2 times); "
         "use replace_all=True or expand context"
     )
@@ -659,15 +668,15 @@ def test_edit_tool_reports_missing_match(tmp_path: Path) -> None:
     target = tmp_path / "sample.txt"
     target.write_text("hello\n")
 
-    ReadTool().call(call_id="call_1", file_path=str(target))
-    result = EditTool().call(
+    ReadFileTool().call(call_id="call_1", file_path=str(target))
+    result = EditFileTool().call(
         call_id="call_2",
         file_path=str(target),
         old_string="goodbye",
         new_string="hello",
     )
 
-    output = "Error while executing EditTool: old_string not found in file"
+    output = "Error while executing EditFileTool: old_string not found in file"
     assert result == ToolErrorMessage(
         content=output,
         id="call_2",
@@ -680,15 +689,15 @@ def test_edit_tool_rejects_empty_old_string(tmp_path: Path) -> None:
     target = tmp_path / "sample.txt"
     target.write_text("hello\n")
 
-    ReadTool().call(call_id="call_1", file_path=str(target))
-    result = EditTool().call(
+    ReadFileTool().call(call_id="call_1", file_path=str(target))
+    result = EditFileTool().call(
         call_id="call_2",
         file_path=str(target),
         old_string="",
         new_string="x",
     )
 
-    output = "Error while executing EditTool: old_string must not be empty"
+    output = "Error while executing EditFileTool: old_string must not be empty"
     assert result == ToolErrorMessage(
         content=output,
         id="call_2",
@@ -701,8 +710,8 @@ def test_edit_tool_rejects_identical_strings(tmp_path: Path) -> None:
     target = tmp_path / "sample.txt"
     target.write_text("hello\n")
 
-    ReadTool().call(call_id="call_1", file_path=str(target))
-    result = EditTool().call(
+    ReadFileTool().call(call_id="call_1", file_path=str(target))
+    result = EditFileTool().call(
         call_id="call_2",
         file_path=str(target),
         old_string="hello",
@@ -710,7 +719,7 @@ def test_edit_tool_rejects_identical_strings(tmp_path: Path) -> None:
     )
 
     output = (
-        "Error while executing EditTool: "
+        "Error while executing EditFileTool: "
         "old_string and new_string are identical; nothing to do"
     )
     assert result == ToolErrorMessage(
@@ -722,14 +731,16 @@ def test_edit_tool_rejects_identical_strings(tmp_path: Path) -> None:
 
 def test_edit_tool_rejects_relative_paths() -> None:
     """Relative paths surface as tool errors via the wrapper."""
-    result = EditTool().call(
+    result = EditFileTool().call(
         call_id="call_1",
         file_path="relative.txt",
         old_string="a",
         new_string="b",
     )
 
-    output = "Error while executing EditTool: file_path must be absolute: relative.txt"
+    output = (
+        "Error while executing EditFileTool: file_path must be absolute: relative.txt"
+    )
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
@@ -741,14 +752,14 @@ def test_edit_tool_reports_missing_file(tmp_path: Path) -> None:
     """Missing files surface as tool errors via the wrapper."""
     target = tmp_path / "missing.txt"
 
-    result = EditTool().call(
+    result = EditFileTool().call(
         call_id="call_1",
         file_path=str(target),
         old_string="a",
         new_string="b",
     )
 
-    output = f"Error while executing EditTool: File not found: {target}"
+    output = f"Error while executing EditFileTool: File not found: {target}"
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
@@ -758,14 +769,16 @@ def test_edit_tool_reports_missing_file(tmp_path: Path) -> None:
 
 def test_edit_tool_reports_directory_target(tmp_path: Path) -> None:
     """Directory targets surface as tool errors via the wrapper."""
-    result = EditTool().call(
+    result = EditFileTool().call(
         call_id="call_1",
         file_path=str(tmp_path),
         old_string="a",
         new_string="b",
     )
 
-    output = f"Error while executing EditTool: Path is not a regular file: {tmp_path}"
+    output = (
+        f"Error while executing EditFileTool: Path is not a regular file: {tmp_path}"
+    )
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
@@ -778,7 +791,7 @@ def test_edit_tool_refuses_without_prior_read(tmp_path: Path) -> None:
     target = tmp_path / "sample.txt"
     target.write_text("hello\n")
 
-    result = EditTool().call(
+    result = EditFileTool().call(
         call_id="call_1",
         file_path=str(target),
         old_string="hello",
@@ -787,7 +800,7 @@ def test_edit_tool_refuses_without_prior_read(tmp_path: Path) -> None:
 
     assert target.read_text() == "hello\n"
     output = (
-        f"Error while executing EditTool: "
+        f"Error while executing EditFileTool: "
         f"File was not read this session; "
         f"read it first before editing: {target}"
     )
@@ -804,12 +817,12 @@ def test_edit_tool_refuses_after_mtime_drift(tmp_path: Path) -> None:
     target.write_text("hello\n")
 
     original_mtime = target.stat().st_mtime
-    ReadTool().call(call_id="call_1", file_path=str(target))
+    ReadFileTool().call(call_id="call_1", file_path=str(target))
 
     drifted = original_mtime + 100.0
     os.utime(target, (drifted, drifted))
 
-    result = EditTool().call(
+    result = EditFileTool().call(
         call_id="call_2",
         file_path=str(target),
         old_string="hello",
@@ -818,7 +831,7 @@ def test_edit_tool_refuses_after_mtime_drift(tmp_path: Path) -> None:
 
     assert target.read_text() == "hello\n"
     output = (
-        f"Error while executing EditTool: "
+        f"Error while executing EditFileTool: "
         f"File has changed on disk since it was read; "
         f"re-read before editing: {target}"
     )
@@ -834,14 +847,14 @@ def test_edit_tool_registers_post_edit_mtime(tmp_path: Path) -> None:
     target = tmp_path / "sample.txt"
     target.write_text("first\nsecond\n")
 
-    ReadTool().call(call_id="call_1", file_path=str(target))
-    EditTool().call(
+    ReadFileTool().call(call_id="call_1", file_path=str(target))
+    EditFileTool().call(
         call_id="call_2",
         file_path=str(target),
         old_string="first",
         new_string="FIRST",
     )
-    result = EditTool().call(
+    result = EditFileTool().call(
         call_id="call_3",
         file_path=str(target),
         old_string="second",

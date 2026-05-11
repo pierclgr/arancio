@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Type
 
-from codo.parsers.tool_result.grep_tool import GrepToolResultParser
+from codo.parsers.tool_result.grep import GrepToolResultParser
 from codo.tools.base import BaseTool
 
 
@@ -14,7 +14,7 @@ class GrepTool(BaseTool):
 
     The tool shells out to ``rg`` with the requested flags, parses its stdout, and
     returns a structured dict with matches, counts, and truncation status. This is a
-    read-only tool — it does not interact with ``ToolSession``.
+    read-only tool -- it does not interact with ``ToolSession``.
     """
 
     _default_head_limit: int = 100

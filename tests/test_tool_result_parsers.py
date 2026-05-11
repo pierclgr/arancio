@@ -1,10 +1,10 @@
 """Tests for tool result parsers."""
 
-from codo.parsers.tool_result.edit_tool import EditToolResultParser
-from codo.parsers.tool_result.grep_tool import GrepToolResultParser
-from codo.parsers.tool_result.read_tool import ReadToolResultParser
-from codo.parsers.tool_result.shell_command import ShellCommandToolResultParser
-from codo.parsers.tool_result.write_tool import WriteToolResultParser
+from codo.parsers.tool_result.commands.shell import ShellCommandToolResultParser
+from codo.parsers.tool_result.files.edit import EditFileToolResultParser
+from codo.parsers.tool_result.files.read import ReadFileToolResultParser
+from codo.parsers.tool_result.files.write import WriteFileToolResultParser
+from codo.parsers.tool_result.grep import GrepToolResultParser
 from codo.types.messages import ToolErrorMessage, ToolResultMessage
 
 
@@ -111,7 +111,7 @@ def test_read_tool_parser_formats_successful_slice() -> None:
         "truncated_lines": 0,
     }
 
-    result = ReadToolResultParser.parse(call_id="call_1", output=output)
+    result = ReadFileToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
         content="     1\thello\n     2\tworld\n[lines 1-2 of 2]",
@@ -130,7 +130,7 @@ def test_read_tool_parser_marks_empty_file() -> None:
         "truncated_lines": 0,
     }
 
-    result = ReadToolResultParser.parse(call_id="call_1", output=output)
+    result = ReadFileToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
         content="[empty file]",
@@ -149,7 +149,7 @@ def test_read_tool_parser_marks_offset_past_end() -> None:
         "truncated_lines": 0,
     }
 
-    result = ReadToolResultParser.parse(call_id="call_1", output=output)
+    result = ReadFileToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
         content="[no lines returned, file has 5 lines]",
@@ -168,7 +168,7 @@ def test_read_tool_parser_reports_truncated_lines() -> None:
         "truncated_lines": 1,
     }
 
-    result = ReadToolResultParser.parse(call_id="call_1", output=output)
+    result = ReadFileToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
         content=(
@@ -182,9 +182,9 @@ def test_read_tool_parser_reports_truncated_lines() -> None:
 
 def test_read_tool_parser_honors_explicit_error_flag() -> None:
     """Explicit tool execution errors are preserved by the read parser."""
-    output = "Error while executing ReadTool: boom"
+    output = "Error while executing ReadFileTool: boom"
 
-    result = ReadToolResultParser.parse(
+    result = ReadFileToolResultParser.parse(
         call_id="call_1",
         output=output,
         is_error=True,
@@ -206,7 +206,7 @@ def test_write_tool_parser_reports_created() -> None:
         "total_lines": 2,
     }
 
-    result = WriteToolResultParser.parse(call_id="call_1", output=output)
+    result = WriteFileToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
         content="Created /abs/new.txt (12 bytes, 2 lines)",
@@ -224,7 +224,7 @@ def test_write_tool_parser_reports_overwritten() -> None:
         "total_lines": 1,
     }
 
-    result = WriteToolResultParser.parse(call_id="call_1", output=output)
+    result = WriteFileToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
         content="Overwrote /abs/file.txt (5 bytes, 1 lines)",
@@ -235,9 +235,9 @@ def test_write_tool_parser_reports_overwritten() -> None:
 
 def test_write_tool_parser_honors_explicit_error_flag() -> None:
     """Explicit tool execution errors are preserved by the write parser."""
-    output = "Error while executing WriteTool: boom"
+    output = "Error while executing WriteFileTool: boom"
 
-    result = WriteToolResultParser.parse(
+    result = WriteFileToolResultParser.parse(
         call_id="call_1",
         output=output,
         is_error=True,
@@ -260,7 +260,7 @@ def test_edit_tool_parser_reports_single_replacement() -> None:
         "action": "edited",
     }
 
-    result = EditToolResultParser.parse(call_id="call_1", output=output)
+    result = EditFileToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
         content="Edited /abs/file.py (1 replacement, 12 → 13 bytes)",
@@ -279,7 +279,7 @@ def test_edit_tool_parser_reports_plural_replacements() -> None:
         "action": "edited",
     }
 
-    result = EditToolResultParser.parse(call_id="call_1", output=output)
+    result = EditFileToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
         content="Edited /abs/file.py (3 replacements, 30 → 33 bytes)",
@@ -290,9 +290,9 @@ def test_edit_tool_parser_reports_plural_replacements() -> None:
 
 def test_edit_tool_parser_honors_explicit_error_flag() -> None:
     """Explicit tool execution errors are preserved by the edit parser."""
-    output = "Error while executing EditTool: boom"
+    output = "Error while executing EditFileTool: boom"
 
-    result = EditToolResultParser.parse(
+    result = EditFileToolResultParser.parse(
         call_id="call_1",
         output=output,
         is_error=True,

@@ -1,13 +1,13 @@
-"""Read tool exposing a text-file reader to LLM clients."""
+"""File read tool exposing a text-file reader to LLM clients."""
 
 from pathlib import Path
 from typing import Type
 
-from codo.parsers.tool_result.read_tool import ReadToolResultParser
+from codo.parsers.tool_result.files.read import ReadFileToolResultParser
 from codo.tools.base import BaseTool
 
 
-class ReadTool(BaseTool):
+class ReadFileTool(BaseTool):
     """Read a text file from disk with ``cat -n``-style line numbering.
 
     The tool reads a UTF-8 file, optionally slicing it with ``offset`` and ``limit``,
@@ -19,7 +19,7 @@ class ReadTool(BaseTool):
     _default_limit: int = 2000
     _max_line_chars: int = 2000
     _line_truncation_marker: str = "… [line truncated]"
-    _result_parser: Type[ReadToolResultParser] = ReadToolResultParser
+    _result_parser: Type[ReadFileToolResultParser] = ReadFileToolResultParser
 
     def _call(
         self,

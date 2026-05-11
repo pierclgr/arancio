@@ -1,4 +1,4 @@
-"""Read tool result parser."""
+"""Read file tool result parser."""
 
 from typing import Any
 
@@ -6,8 +6,8 @@ from codo.parsers.tool_result.base import BaseToolResultParser
 from codo.types.messages import ToolErrorMessage, ToolResultMessage
 
 
-class ReadToolResultParser(BaseToolResultParser):
-    """Parse read tool output into a tool result message."""
+class ReadFileToolResultParser(BaseToolResultParser):
+    """Parse read file tool output into a tool result message."""
 
     @classmethod
     def parse(
@@ -16,11 +16,11 @@ class ReadToolResultParser(BaseToolResultParser):
         output: Any,
         is_error: bool = False,
     ) -> ToolResultMessage:
-        """Parse read tool output into a normalized result message.
+        """Parse read file tool output into a normalized result message.
 
         Args:
             call_id: identifier of the tool call this result answers.
-            output: raw read tool output.
+            output: raw read file tool output.
             is_error: whether the tool execution failed.
 
         Returns:

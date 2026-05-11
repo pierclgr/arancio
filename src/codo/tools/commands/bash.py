@@ -1,15 +1,14 @@
-"""PowerShell command tool exposing a PowerShell runner to LLM clients."""
+"""Bash command tool exposing a shell command runner to LLM clients."""
 
-import shutil
 import subprocess
 from typing import Type
 
-from codo.parsers.tool_result.shell_command import ShellCommandToolResultParser
+from codo.parsers.tool_result.commands.shell import ShellCommandToolResultParser
 from codo.tools.base import BaseTool
 
 
-class PowershellCommandTool(BaseTool):
-    """Run a PowerShell command and return its output.
+class BashCommandTool(BaseTool):
+    """Run a shell command via ``/bin/sh -c`` and return its output.
 
     The tool captures ``stdout`` and ``stderr`` separately, returns the process exit
     code and reports whether the run timed out or produced truncated output.
@@ -26,10 +25,10 @@ class PowershellCommandTool(BaseTool):
         timeout: int | None = None,
         cwd: str | None = None,
     ) -> dict:
-        """Run a PowerShell command and return its raw captured output.
+        """Run a shell command and return its raw captured output.
 
         Args:
-            command: the PowerShell command line to execute.
+            command: the shell command line to execute.
             timeout: maximum runtime in seconds. Defaults to ``120`` and
                 is capped at ``600``.
             cwd: absolute working directory for the command. Defaults
@@ -42,18 +41,11 @@ class PowershellCommandTool(BaseTool):
             output captured before the timeout is included.
         """
         effective_timeout = min(timeout or self._default_timeout, self._max_timeout)
-        host = self._resolve_host()
 
         try:
             completed = subprocess.run(
-                [
-                    host,
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-Command",
-                    command,
-                ],
-                shell=False,
+                command,
+                shell=True,
                 cwd=cwd,
                 capture_output=True,
                 text=True,
@@ -79,22 +71,6 @@ class PowershellCommandTool(BaseTool):
             "timed_out": timed_out,
             "truncated": stdout_truncated or stderr_truncated,
         }
-
-    @staticmethod
-    def _resolve_host() -> str:
-        """Return the first available PowerShell executable.
-
-        Returns:
-            The path or executable name for the selected PowerShell host.
-
-        Raises:
-            RuntimeError: when neither ``powershell.exe`` nor ``pwsh`` is found.
-        """
-        for name in ("powershell.exe", "pwsh"):
-            host = shutil.which(name)
-            if host:
-                return host
-        raise RuntimeError("PowerShell host not found: powershell.exe or pwsh")
 
     @staticmethod
     def _decode(stream: bytes | str | None) -> str:

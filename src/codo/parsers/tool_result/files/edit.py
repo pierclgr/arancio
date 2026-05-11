@@ -1,4 +1,4 @@
-"""Edit tool result parser."""
+"""Edit file tool result parser."""
 
 from typing import Any
 
@@ -6,8 +6,8 @@ from codo.parsers.tool_result.base import BaseToolResultParser
 from codo.types.messages import ToolErrorMessage, ToolResultMessage
 
 
-class EditToolResultParser(BaseToolResultParser):
-    """Parse edit tool output into a tool result message."""
+class EditFileToolResultParser(BaseToolResultParser):
+    """Parse edit file tool output into a tool result message."""
 
     @classmethod
     def parse(
@@ -16,11 +16,11 @@ class EditToolResultParser(BaseToolResultParser):
         output: Any,
         is_error: bool = False,
     ) -> ToolResultMessage:
-        """Parse edit tool output into a normalized result message.
+        """Parse edit file tool output into a normalized result message.
 
         Args:
             call_id: identifier of the tool call this result answers.
-            output: raw edit tool output.
+            output: raw edit file tool output.
             is_error: whether the tool execution failed.
 
         Returns:
