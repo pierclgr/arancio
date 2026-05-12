@@ -16,6 +16,7 @@ from codo.tools.commands.powershell import PowershellCommandTool
 from codo.tools.files.edit import EditFileTool
 from codo.tools.files.read import ReadFileTool
 from codo.tools.files.write import WriteFileTool
+from codo.tools.glob import GlobTool
 from codo.tools.grep import GrepTool
 from codo.tools.session import default_session
 from codo.types.messages import ToolErrorMessage, ToolResultMessage
@@ -1157,3 +1158,333 @@ def test_grep_tool_reports_invalid_pattern() -> None:
     )
 
     assert isinstance(result, ToolErrorMessage)
+
+
+def test_grep_tool_default_excludes_gitignored(tmp_path: Path) -> None:
+    """Defaults (``ignore_aware=True``) skip files matched by ``.gitignore``."""
+    target = tmp_path / "greptest"
+    target.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=target, check=True)
+    (target / ".gitignore").write_text("*.log\n")
+    (target / "a.log").write_text("hello\n")
+    (target / "b.py").write_text("hello\n")
+
+    result = GrepTool().call(
+        call_id="call_1",
+        pattern="hello",
+        path=str(target),
+        output_mode="files_with_matches",
+    )
+
+    matched_names = {os.path.basename(p) for p in result.output["matches"]}
+    assert "a.log" not in matched_names
+    assert "b.py" in matched_names
+
+
+def test_grep_tool_default_excludes_hidden(tmp_path: Path) -> None:
+    """Defaults (``hidden_aware=True``) skip hidden files."""
+    target = tmp_path / "greptest"
+    target.mkdir()
+    (target / ".hidden").write_text("hello\n")
+    (target / "visible.py").write_text("hello\n")
+
+    result = GrepTool().call(
+        call_id="call_1",
+        pattern="hello",
+        path=str(target),
+        output_mode="files_with_matches",
+    )
+
+    matched_names = {os.path.basename(p) for p in result.output["matches"]}
+    assert ".hidden" not in matched_names
+    assert "visible.py" in matched_names
+
+
+def test_grep_tool_ignore_aware_false_includes_gitignored(tmp_path: Path) -> None:
+    """Passing ``ignore_aware=False`` searches files matched by ``.gitignore``."""
+    target = tmp_path / "greptest"
+    target.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=target, check=True)
+    (target / ".gitignore").write_text("*.log\n")
+    (target / "a.log").write_text("hello\n")
+    (target / "b.py").write_text("hello\n")
+
+    result = GrepTool(ignore_aware=False).call(
+        call_id="call_1",
+        pattern="hello",
+        path=str(target),
+        output_mode="files_with_matches",
+    )
+
+    matched_names = {os.path.basename(p) for p in result.output["matches"]}
+    assert "a.log" in matched_names
+    assert "b.py" in matched_names
+
+
+def test_grep_tool_hidden_aware_false_includes_hidden(tmp_path: Path) -> None:
+    """Passing ``hidden_aware=False`` searches hidden files."""
+    target = tmp_path / "greptest"
+    target.mkdir()
+    (target / ".hidden").write_text("hello\n")
+    (target / "visible.py").write_text("hello\n")
+
+    result = GrepTool(hidden_aware=False).call(
+        call_id="call_1",
+        pattern="hello",
+        path=str(target),
+        output_mode="files_with_matches",
+    )
+
+    matched_names = {os.path.basename(p) for p in result.output["matches"]}
+    assert ".hidden" in matched_names
+    assert "visible.py" in matched_names
+
+
+def test_grep_tool_glob_filter_still_respects_ignore(tmp_path: Path) -> None:
+    """``glob`` filter combined with defaults still excludes gitignored files."""
+    target = tmp_path / "greptest"
+    target.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=target, check=True)
+    (target / ".gitignore").write_text("ignored.py\n")
+    (target / "ignored.py").write_text("hello\n")
+    (target / "kept.py").write_text("hello\n")
+
+    result = GrepTool().call(
+        call_id="call_1",
+        pattern="hello",
+        path=str(target),
+        output_mode="files_with_matches",
+        glob="*.py",
+    )
+
+    matched_names = {os.path.basename(p) for p in result.output["matches"]}
+    assert "ignored.py" not in matched_names
+    assert "kept.py" in matched_names
+
+
+# — GlobTool ——————————————————————————————————————————————————————————
+
+
+def test_glob_tool_returns_matching_paths(tmp_path: Path) -> None:
+    """Default mode returns absolute paths of files matching the glob."""
+    target = tmp_path / "globtest"
+    target.mkdir()
+    (target / "a.py").write_text("x\n")
+    (target / "b.py").write_text("y\n")
+    (target / "c.txt").write_text("z\n")
+
+    result = GlobTool().call(
+        call_id="call_1",
+        pattern="*.py",
+        path=str(target),
+    )
+
+    output = result.output
+    canonical_a = str((target / "a.py").resolve())
+    canonical_b = str((target / "b.py").resolve())
+    assert sorted(output["matches"]) == sorted([canonical_a, canonical_b])
+    assert output["total_matches"] == 2
+    assert output["truncated"] is False
+    assert output["timed_out"] is False
+    assert output["pattern"] == "*.py"
+    assert output["search_path"] == str(target.resolve())
+    assert isinstance(result, ToolResultMessage)
+
+
+def test_glob_tool_recursive_pattern(tmp_path: Path) -> None:
+    """Recursive ``**`` pattern descends into subdirectories."""
+    target = tmp_path / "globtest"
+    nested = target / "a" / "b"
+    nested.mkdir(parents=True)
+    (nested / "deep.py").write_text("x\n")
+
+    result = GlobTool().call(
+        call_id="call_1",
+        pattern="**/*.py",
+        path=str(target),
+    )
+
+    canonical = str((nested / "deep.py").resolve())
+    assert result.output["matches"] == [canonical]
+
+
+def test_glob_tool_sorts_by_mtime_descending(tmp_path: Path) -> None:
+    """Results are sorted by modification time, most recent first."""
+    target = tmp_path / "globtest"
+    target.mkdir()
+    paths = [target / f"f{i}.py" for i in range(3)]
+    for p in paths:
+        p.write_text("x\n")
+
+    os.utime(paths[0], (1_000_000, 1_000_000))
+    os.utime(paths[1], (3_000_000, 3_000_000))
+    os.utime(paths[2], (2_000_000, 2_000_000))
+
+    result = GlobTool().call(
+        call_id="call_1",
+        pattern="*.py",
+        path=str(target),
+    )
+
+    canonicals = [str(p.resolve()) for p in paths]
+    assert result.output["matches"] == [canonicals[1], canonicals[2], canonicals[0]]
+
+
+def test_glob_tool_head_limit_caps_output(tmp_path: Path) -> None:
+    """Head limit truncates output and sets the truncated flag."""
+    target = tmp_path / "globtest"
+    target.mkdir()
+    for i in range(5):
+        (target / f"f{i}.py").write_text("x\n")
+
+    result = GlobTool().call(
+        call_id="call_1",
+        pattern="*.py",
+        path=str(target),
+        head_limit=2,
+    )
+
+    output = result.output
+    assert len(output["matches"]) == 2
+    assert output["total_matches"] == 5
+    assert output["truncated"] is True
+    assert "truncated" in result.content
+
+
+def test_glob_tool_zero_matches(tmp_path: Path) -> None:
+    """Zero matches returns an empty result with exit code 1."""
+    target = tmp_path / "globtest"
+    target.mkdir()
+    (target / "f.txt").write_text("x\n")
+
+    result = GlobTool().call(
+        call_id="call_1",
+        pattern="*.nonexistent_ext",
+        path=str(target),
+    )
+
+    output = result.output
+    assert output["matches"] == []
+    assert output["total_matches"] == 0
+    assert output["exit_code"] == 1
+    assert output["truncated"] is False
+    assert result.content == "[no files matched]"
+
+
+def test_glob_tool_brace_expansion(tmp_path: Path) -> None:
+    """Brace expansion in the pattern matches multiple extensions."""
+    target = tmp_path / "globtest"
+    target.mkdir()
+    (target / "a.py").write_text("x\n")
+    (target / "b.txt").write_text("y\n")
+    (target / "c.md").write_text("z\n")
+
+    result = GlobTool().call(
+        call_id="call_1",
+        pattern="*.{py,txt}",
+        path=str(target),
+    )
+
+    output = result.output
+    matched_names = {os.path.basename(p) for p in output["matches"]}
+    assert matched_names == {"a.py", "b.txt"}
+
+
+def test_glob_tool_returns_absolute_paths(tmp_path: Path) -> None:
+    """All returned paths are absolute."""
+    target = tmp_path / "globtest"
+    target.mkdir()
+    (target / "f.py").write_text("x\n")
+
+    result = GlobTool().call(
+        call_id="call_1",
+        pattern="*.py",
+        path=str(target),
+    )
+
+    for p in result.output["matches"]:
+        assert os.path.isabs(p)
+
+
+def test_glob_tool_reports_missing_path() -> None:
+    """Missing paths surface as tool errors."""
+    result = GlobTool().call(
+        call_id="call_1",
+        pattern="*.py",
+        path="/nonexistent/path/for/glob",
+    )
+
+    assert isinstance(result, ToolErrorMessage)
+
+
+def test_glob_tool_default_excludes_gitignored(tmp_path: Path) -> None:
+    """Defaults (``ignore_aware=True``) exclude files matched by ``.gitignore``."""
+    target = tmp_path / "globtest"
+    target.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=target, check=True)
+    (target / ".gitignore").write_text("*.log\nsecret.txt\n")
+    (target / "a.log").write_text("x\n")
+    (target / "secret.txt").write_text("x\n")
+    (target / "b.py").write_text("x\n")
+
+    result = GlobTool().call(call_id="call_1", pattern="*", path=str(target))
+
+    names = {os.path.basename(p) for p in result.output["matches"]}
+    assert "a.log" not in names
+    assert "secret.txt" not in names
+    assert "b.py" in names
+
+
+def test_glob_tool_default_excludes_hidden(tmp_path: Path) -> None:
+    """Defaults (``hidden_aware=True``) exclude hidden files and directories."""
+    target = tmp_path / "globtest"
+    target.mkdir()
+    (target / ".hidden").write_text("x\n")
+    (target / "visible.py").write_text("x\n")
+    (target / ".hidden_dir").mkdir()
+    (target / ".hidden_dir" / "inside.py").write_text("x\n")
+
+    result = GlobTool().call(call_id="call_1", pattern="*", path=str(target))
+
+    names = {os.path.basename(p) for p in result.output["matches"]}
+    assert ".hidden" not in names
+    assert "inside.py" not in names
+    assert "visible.py" in names
+
+
+def test_glob_tool_ignore_aware_false_includes_gitignored(tmp_path: Path) -> None:
+    """Passing ``ignore_aware=False`` surfaces files matched by ``.gitignore``."""
+    target = tmp_path / "globtest"
+    target.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=target, check=True)
+    (target / ".gitignore").write_text("*.log\n")
+    (target / "a.log").write_text("x\n")
+    (target / "b.py").write_text("x\n")
+
+    result = GlobTool(ignore_aware=False).call(
+        call_id="call_1",
+        pattern="*",
+        path=str(target),
+    )
+
+    names = {os.path.basename(p) for p in result.output["matches"]}
+    assert "a.log" in names
+    assert "b.py" in names
+
+
+def test_glob_tool_hidden_aware_false_includes_hidden(tmp_path: Path) -> None:
+    """Passing ``hidden_aware=False`` surfaces hidden files."""
+    target = tmp_path / "globtest"
+    target.mkdir()
+    (target / ".hidden").write_text("x\n")
+    (target / "visible.py").write_text("x\n")
+
+    result = GlobTool(hidden_aware=False).call(
+        call_id="call_1",
+        pattern="*",
+        path=str(target),
+    )
+
+    names = {os.path.basename(p) for p in result.output["matches"]}
+    assert ".hidden" in names
+    assert "visible.py" in names

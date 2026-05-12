@@ -4,6 +4,7 @@ from codo.parsers.tool_result.commands.shell import ShellCommandToolResultParser
 from codo.parsers.tool_result.files.edit import EditFileToolResultParser
 from codo.parsers.tool_result.files.read import ReadFileToolResultParser
 from codo.parsers.tool_result.files.write import WriteFileToolResultParser
+from codo.parsers.tool_result.glob import GlobToolResultParser
 from codo.parsers.tool_result.grep import GrepToolResultParser
 from codo.types.messages import ToolErrorMessage, ToolResultMessage
 
@@ -432,6 +433,131 @@ def test_grep_parser_explicit_error_flag() -> None:
     output = "Error while executing GrepTool: boom"
 
     result = GrepToolResultParser.parse(
+        call_id="call_1",
+        output=output,
+        is_error=True,
+    )
+
+    assert result == ToolErrorMessage(
+        content=output,
+        id="call_1",
+        output=output,
+    )
+
+
+# — GlobToolResultParser ——————————————————————————————————————————————
+
+
+def test_glob_parser_formats_matches_with_footer() -> None:
+    """Successful glob output is rendered as paths plus an mtime footer."""
+    output = {
+        "matches": ["/abs/b.py", "/abs/a.py"],
+        "total_matches": 2,
+        "truncated": False,
+        "timed_out": False,
+        "exit_code": 0,
+        "search_path": "/abs",
+        "pattern": "*.py",
+    }
+
+    result = GlobToolResultParser.parse(call_id="call_1", output=output)
+
+    assert result == ToolResultMessage(
+        content="/abs/b.py\n/abs/a.py\n[2 files matched, sorted by mtime]",
+        id="call_1",
+        output=output,
+    )
+
+
+def test_glob_parser_empty_match() -> None:
+    """Empty match dicts render as a single ``[no files matched]`` marker."""
+    output = {
+        "matches": [],
+        "total_matches": 0,
+        "truncated": False,
+        "timed_out": False,
+        "exit_code": 1,
+        "search_path": "/abs",
+        "pattern": "*.nope",
+    }
+
+    result = GlobToolResultParser.parse(call_id="call_1", output=output)
+
+    assert result == ToolResultMessage(
+        content="[no files matched]",
+        id="call_1",
+        output=output,
+    )
+
+
+def test_glob_parser_singular_noun() -> None:
+    """A single match uses the singular ``file`` noun in the footer."""
+    output = {
+        "matches": ["/abs/only.py"],
+        "total_matches": 1,
+        "truncated": False,
+        "timed_out": False,
+        "exit_code": 0,
+        "search_path": "/abs",
+        "pattern": "*.py",
+    }
+
+    result = GlobToolResultParser.parse(call_id="call_1", output=output)
+
+    assert result == ToolResultMessage(
+        content="/abs/only.py\n[1 file matched, sorted by mtime]",
+        id="call_1",
+        output=output,
+    )
+
+
+def test_glob_parser_truncated_output() -> None:
+    """Truncated output uses the truncation footer with the original total."""
+    output = {
+        "matches": ["/abs/a.py"],
+        "total_matches": 42,
+        "truncated": True,
+        "timed_out": False,
+        "exit_code": 0,
+        "search_path": "/abs",
+        "pattern": "*.py",
+    }
+
+    result = GlobToolResultParser.parse(call_id="call_1", output=output)
+
+    assert result == ToolResultMessage(
+        content="/abs/a.py\n[output truncated, showing first 1 of 42]",
+        id="call_1",
+        output=output,
+    )
+
+
+def test_glob_parser_timeout() -> None:
+    """Timed-out results are surfaced as tool errors with the ``[timed out]`` tag."""
+    output = {
+        "matches": [],
+        "total_matches": 0,
+        "truncated": False,
+        "timed_out": True,
+        "exit_code": -1,
+        "search_path": "/abs",
+        "pattern": "*.py",
+    }
+
+    result = GlobToolResultParser.parse(call_id="call_1", output=output)
+
+    assert result == ToolErrorMessage(
+        content="[no files matched]\n[timed out]",
+        id="call_1",
+        output=output,
+    )
+
+
+def test_glob_parser_explicit_error_flag() -> None:
+    """Explicit tool execution errors are preserved by the glob parser."""
+    output = "Error while executing GlobTool: boom"
+
+    result = GlobToolResultParser.parse(
         call_id="call_1",
         output=output,
         is_error=True,
