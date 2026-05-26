@@ -1,13 +1,15 @@
 """LiteLLM response parser implementation."""
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from typing import Any, List
 
 from codo.parsers.base import Parser
 from codo.types.messages import (
+    AssistantChunkMessage,
     AssistantMessage,
     Message,
+    ReasoningChunkMessage,
     ReasoningMessage,
     ToolCallMessage,
 )
@@ -36,6 +38,57 @@ class LiteLLMResponseParser(Parser):
             parsed = cls._parse_output_item(item_dict)
             if parsed is not None:
                 yield parsed
+
+    @classmethod
+    def parse_stream(cls, stream: Iterable[Any]) -> Iterator[Message]:
+        """Walk a LiteLLM streaming event iterator and yield messages.
+
+        Three event types are mapped to normalized messages; the rest
+        are skipped:
+
+        - ``response.output_text.delta`` →
+          :class:`AssistantChunkMessage` with the text fragment.
+        - ``response.reasoning_summary_text.delta`` →
+          :class:`ReasoningChunkMessage` with the summary fragment.
+        - ``response.output_item.done`` → finalized message for the
+          completed output item (reasoning, assistant, or tool call),
+          built via :meth:`_parse_output_item`.
+
+        Args:
+            stream: the iterator of Responses streaming events returned
+                by ``litellm.responses(..., stream=True)``.
+
+        Yields:
+            Each chunk and finalized message extracted from the stream,
+            in event order.
+        """
+        for event in stream:
+            event_type = cls._event_type(event)
+            if event_type == "response.output_text.delta":
+                delta = getattr(event, "delta", "") or ""
+                yield AssistantChunkMessage(content=delta)
+            elif event_type == "response.reasoning_summary_text.delta":
+                delta = getattr(event, "delta", "") or ""
+                yield ReasoningChunkMessage(content=delta, item={})
+            elif event_type == "response.output_item.done":
+                item_dict = cls._to_dict(getattr(event, "item", {}))
+                parsed = cls._parse_output_item(item_dict)
+                if parsed is not None:
+                    yield parsed
+
+    @staticmethod
+    def _event_type(event: Any) -> str | None:
+        """Return the event type string, unwrapping enum values.
+
+        Args:
+            event: a Responses streaming event.
+
+        Returns:
+            The dotted event type (e.g. ``"response.output_text.delta"``),
+            or ``None`` when the event has no recognizable type.
+        """
+        value = getattr(event, "type", None)
+        return getattr(value, "value", value)
 
     @staticmethod
     def _to_dict(item: Any) -> dict[str, Any]:

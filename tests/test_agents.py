@@ -434,7 +434,9 @@ def test_agent_repr_includes_configuration_without_history_contents() -> None:
 
     assert repr(agent) == (
         "Agent("
-        "client=_ReasoningClient(model_id='fake-model', thinking_effort=None), "
+        "client=_ReasoningClient("
+        "model_id='fake-model', thinking_effort=None, thinking_summary=None"
+        "), "
         "max_turns=3, "
         "tools=[]"
         ")"

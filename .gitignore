@@ -13,7 +13,7 @@ __pycache__/
 smoke_test/
 
 # playground
-playground.py
+playground/
 
 # research bundle
 docs/

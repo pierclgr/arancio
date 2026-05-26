@@ -28,13 +28,13 @@ class BasePayloadBuilder(Builder, ABC):
     @staticmethod
     @abstractmethod
     def _build_tool(tool: ToolSchema) -> dict[str, Any]:
-        """Convert a tool dict to an OpenAI Responses function tool."""
+        """Convert a tool schema to the provider's function tool item."""
         raise NotImplementedError("Subclasses must implement this method")
 
     @classmethod
     @abstractmethod
     def _build_input_item(cls, message: Message) -> dict[str, Any]:
-        """Convert a normalized message to an OpenAI input item."""
+        """Convert a normalized message to the provider's input item shape."""
         raise NotImplementedError("Subclasses must implement this method")
 
     @staticmethod

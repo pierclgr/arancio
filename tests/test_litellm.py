@@ -49,10 +49,10 @@ def _patch_responses(monkeypatch: pytest.MonkeyPatch, output: list) -> Mock:
 def test_send_request_calls_litellm_with_minimal_kwargs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A bare request forwards only model, input, and api_key."""
+    """A bare request forwards only model and input; no credential kwargs."""
     responses = _patch_responses(monkeypatch, [])
 
-    client = LiteLLMClient(api_key="api-key")
+    client = LiteLLMClient()
     request = BaseRequest(
         model_id="openai/gpt-4o",
         message_list=[UserMessage(content="ping")],
@@ -63,36 +63,8 @@ def test_send_request_calls_litellm_with_minimal_kwargs(
     responses.assert_called_once_with(
         model="openai/gpt-4o",
         input=[{"role": "user", "content": "ping"}],
-        api_key="api-key",
     )
-
-
-def test_send_request_reads_api_key_from_configured_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """When no key is passed, the configured environment variable is used."""
-    responses = _patch_responses(monkeypatch, [])
-    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
-
-    client = LiteLLMClient(env_var="OPENAI_API_KEY")
-    request = BaseRequest(
-        model_id="openai/gpt-4o",
-        message_list=[UserMessage(content="ping")],
-    )
-
-    list(client.send_request(request))
-
-    assert responses.call_args.kwargs["api_key"] == "env-key"
-
-
-def test_client_requires_api_key_or_configured_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Missing credentials fail during client construction."""
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-
-    with pytest.raises(ValueError, match="API key missing"):
-        LiteLLMClient(env_var="OPENAI_API_KEY")
+    assert "api_key" not in responses.call_args.kwargs
 
 
 def test_send_request_passes_instructions_tools_and_reasoning(
@@ -109,12 +81,13 @@ def test_send_request_passes_instructions_tools_and_reasoning(
     request = BaseRequest(
         model_id="openai/gpt-4o",
         thinking_effort="high",
+        thinking_summary="auto",
         system_prompt="be terse",
         tool_list=[tool],
         message_list=[UserMessage(content="ping")],
     )
 
-    list(LiteLLMClient(api_key="api-key").send_request(request))
+    list(LiteLLMClient().send_request(request))
 
     kwargs = responses.call_args.kwargs
     assert kwargs["instructions"] == "be terse"
@@ -143,7 +116,7 @@ def test_send_request_omits_optional_kwargs_when_unset(
         message_list=[UserMessage(content="ping")],
     )
 
-    list(LiteLLMClient(api_key="api-key").send_request(request))
+    list(LiteLLMClient().send_request(request))
 
     kwargs = responses.call_args.kwargs
     assert "instructions" not in kwargs
@@ -163,7 +136,7 @@ def test_send_request_forwards_max_output_tokens_when_set(
         message_list=[UserMessage(content="ping")],
     )
 
-    list(LiteLLMClient(api_key="api-key", max_output_tokens=256).send_request(request))
+    list(LiteLLMClient(max_output_tokens=256).send_request(request))
 
     assert responses.call_args.kwargs["max_output_tokens"] == 256
 
@@ -196,7 +169,7 @@ def test_send_request_converts_full_message_history(
         ],
     )
 
-    list(LiteLLMClient(api_key="api-key").send_request(request))
+    list(LiteLLMClient().send_request(request))
 
     assert responses.call_args.kwargs["input"] == [
         {"role": "user", "content": "hi"},
@@ -229,7 +202,7 @@ def test_send_request_serializes_non_string_tool_result_output(
         ],
     )
 
-    list(LiteLLMClient(api_key="api-key").send_request(request))
+    list(LiteLLMClient().send_request(request))
 
     assert responses.call_args.kwargs["input"] == [
         {
@@ -257,7 +230,7 @@ def test_send_request_rejects_unsupported_message_type(
     )
 
     with pytest.raises(ValueError, match="Unsupported message type"):
-        list(LiteLLMClient(api_key="api-key").send_request(request))
+        list(LiteLLMClient().send_request(request))
     responses.assert_not_called()
 
 
@@ -297,7 +270,7 @@ def test_parse_response_returns_assistant_tool_call_and_reasoning(
         message_list=[UserMessage(content="add 1+2")],
     )
 
-    result = list(LiteLLMClient(api_key="api-key").send_request(request))
+    result = list(LiteLLMClient().send_request(request))
 
     assert result == [
         ReasoningMessage(content="step one\nstep two", item=reasoning_item),
@@ -327,7 +300,7 @@ def test_parse_response_handles_null_summary_and_content_fields(
         message_list=[UserMessage(content="hi")],
     )
 
-    result = list(LiteLLMClient(api_key="api-key").send_request(request))
+    result = list(LiteLLMClient().send_request(request))
 
     assert result == [ReasoningMessage(content="", item=reasoning_item)]
 
@@ -352,7 +325,7 @@ def test_parse_response_extracts_anthropic_reasoning_text(
         message_list=[UserMessage(content="hi")],
     )
 
-    result = list(LiteLLMClient(api_key="api-key").send_request(request))
+    result = list(LiteLLMClient().send_request(request))
 
     assert result == [
         ReasoningMessage(content="step a\nstep b", item=reasoning_item),
@@ -377,7 +350,7 @@ def test_parse_response_skips_unknown_output_item_types(
         message_list=[UserMessage(content="hi")],
     )
 
-    result = list(LiteLLMClient(api_key="api-key").send_request(request))
+    result = list(LiteLLMClient().send_request(request))
 
     assert result == [AssistantMessage(content="ok")]
 
@@ -409,6 +382,6 @@ def test_parse_response_handles_pydantic_style_output_items(
         message_list=[UserMessage(content="ping")],
     )
 
-    result = list(LiteLLMClient(api_key="api-key").send_request(request))
+    result = list(LiteLLMClient().send_request(request))
 
     assert result == [AssistantMessage(content="pong")]

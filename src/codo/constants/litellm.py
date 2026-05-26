@@ -1,3 +1,4 @@
 """LiteLLM constants."""
 
 LITELLM_DEFAULT_THINKING_EFFORT: str = "medium"
+LITELLM_DEFAULT_THINKING_SUMMARY: str = "auto"
