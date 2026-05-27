@@ -403,14 +403,19 @@ def test_agent_yields_error_message_for_loop_exception() -> None:
     assert all(not isinstance(msg, ErrorMessage) for msg in agent._message_history)
 
 
-def test_agent_swallows_post_finalize_exception_without_retry() -> None:
-    """Exceptions raised after a finalized message ends the turn cleanly."""
+def test_agent_yields_error_but_does_not_retry_after_finalized() -> None:
+    """Exceptions after a finalized message surface as errors but end the turn."""
     client = _PostFinalizeFailingClient()
     agent = Agent(client=client)
 
     response = list(agent.run(UserMessage(content="hello")))
 
-    assert response == [AssistantMessage(content="visible")]
+    assert response == [
+        AssistantMessage(content="visible"),
+        ErrorMessage(
+            content="Error while executing user request: post-stream logging blew up"
+        ),
+    ]
     assert len(client.requests) == 1
     assert AssistantMessage(content="visible") in agent._message_history
     assert all(not isinstance(msg, ErrorMessage) for msg in agent._message_history)

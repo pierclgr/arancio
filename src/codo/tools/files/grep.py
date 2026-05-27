@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Type
 
-from codo.parsers.tool_result.grep import GrepToolResultParser
+from codo.parsers.tool_result.files.grep import GrepToolResultParser
 from codo.tools.base import BaseTool
 from codo.tools.session import ToolSession
 

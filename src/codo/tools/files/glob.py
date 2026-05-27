@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 from typing import Type
 
-from codo.parsers.tool_result.glob import GlobToolResultParser
+from codo.parsers.tool_result.files.glob import GlobToolResultParser
 from codo.tools.base import BaseTool
 from codo.tools.session import ToolSession
 

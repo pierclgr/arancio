@@ -147,14 +147,13 @@ class Agent:
                     yield response_message
 
             except Exception as e:
+                # always surface the error to the consumer for visibility,
+                # but only retry the turn when nothing finalized came through;
                 # post-stream errors that fire after finalized messages were
                 # already delivered (e.g. provider-side logging callback bugs)
-                # must not trigger a retry; surface the error only when nothing
-                # finalized came through this turn
+                # must not trigger a retry
+                yield ErrorMessage(content=f"Error while executing user request: {e}")
                 if not received_finalized:
-                    yield ErrorMessage(
-                        content=f"Error while executing user request: {e}"
-                    )
                     continue
 
             # no response from the client, something happened so retry

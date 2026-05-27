@@ -5,11 +5,11 @@ from typing import Type
 from ddgs import DDGS
 from ddgs.exceptions import TimeoutException
 
-from codo.parsers.tool_result.web_search import WebSearchToolResultParser
+from codo.parsers.tool_result.web.search import SearchWebToolResultParser
 from codo.tools.base import BaseTool
 
 
-class WebSearchTool(BaseTool):
+class SearchWebTool(BaseTool):
     """Run a web search via DuckDuckGo (through the ``ddgs`` library).
 
     The tool dispatches the query to ``ddgs.DDGS().text(...)`` with a configurable
@@ -23,7 +23,7 @@ class WebSearchTool(BaseTool):
     _max_num_results: int = 20
     _default_timeout: int = 60
     _max_timeout: int = 300
-    _result_parser: Type[WebSearchToolResultParser] = WebSearchToolResultParser
+    _result_parser: Type[SearchWebToolResultParser] = SearchWebToolResultParser
 
     def _call(
         self,

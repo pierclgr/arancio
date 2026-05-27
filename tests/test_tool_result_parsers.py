@@ -2,11 +2,11 @@
 
 from codo.parsers.tool_result.commands.shell import ShellCommandToolResultParser
 from codo.parsers.tool_result.files.edit import EditFileToolResultParser
+from codo.parsers.tool_result.files.glob import GlobToolResultParser
+from codo.parsers.tool_result.files.grep import GrepToolResultParser
 from codo.parsers.tool_result.files.read import ReadFileToolResultParser
 from codo.parsers.tool_result.files.write import WriteFileToolResultParser
-from codo.parsers.tool_result.glob import GlobToolResultParser
-from codo.parsers.tool_result.grep import GrepToolResultParser
-from codo.parsers.tool_result.web_search import WebSearchToolResultParser
+from codo.parsers.tool_result.web.search import SearchWebToolResultParser
 from codo.types.messages import ToolErrorMessage, ToolResultMessage
 
 
@@ -571,10 +571,10 @@ def test_glob_parser_explicit_error_flag() -> None:
     )
 
 
-# — WebSearchToolResultParser ——————————————————————————————————————————
+# — SearchWebToolResultParser ——————————————————————————————————————————
 
 
-def test_web_search_parser_formats_results_with_footer() -> None:
+def test_search_web_parser_formats_results_with_footer() -> None:
     """Successful results render as a numbered list plus the query footer."""
     output = {
         "query": "pytorch",
@@ -593,7 +593,7 @@ def test_web_search_parser_formats_results_with_footer() -> None:
         "timed_out": False,
     }
 
-    result = WebSearchToolResultParser.parse(call_id="call_1", output=output)
+    result = SearchWebToolResultParser.parse(call_id="call_1", output=output)
 
     expected_content = (
         "1. PyTorch docs\n"
@@ -613,7 +613,7 @@ def test_web_search_parser_formats_results_with_footer() -> None:
     )
 
 
-def test_web_search_parser_singular_noun() -> None:
+def test_search_web_parser_singular_noun() -> None:
     """A single result uses the singular ``result`` noun in the footer."""
     output = {
         "query": "only one",
@@ -623,7 +623,7 @@ def test_web_search_parser_singular_noun() -> None:
         "timed_out": False,
     }
 
-    result = WebSearchToolResultParser.parse(call_id="call_1", output=output)
+    result = SearchWebToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
         content=('1. T\n   https://x\n   E\n\n[1 result for "only one"]'),
@@ -632,11 +632,11 @@ def test_web_search_parser_singular_noun() -> None:
     )
 
 
-def test_web_search_parser_empty_results() -> None:
+def test_search_web_parser_empty_results() -> None:
     """Empty result list renders the ``[no results]`` marker."""
     output = {"query": "no hits", "results": [], "timed_out": False}
 
-    result = WebSearchToolResultParser.parse(call_id="call_1", output=output)
+    result = SearchWebToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
         content="[no results]",
@@ -645,11 +645,11 @@ def test_web_search_parser_empty_results() -> None:
     )
 
 
-def test_web_search_parser_timeout() -> None:
+def test_search_web_parser_timeout() -> None:
     """Timeout dicts are surfaced as tool errors with the ``[timed out]`` tag."""
     output = {"query": "slow", "results": [], "timed_out": True}
 
-    result = WebSearchToolResultParser.parse(call_id="call_1", output=output)
+    result = SearchWebToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolErrorMessage(
         content="[no results]\n[timed out]",
@@ -658,11 +658,11 @@ def test_web_search_parser_timeout() -> None:
     )
 
 
-def test_web_search_parser_explicit_error_flag() -> None:
+def test_search_web_parser_explicit_error_flag() -> None:
     """Explicit tool execution errors are preserved by the web search parser."""
-    output = "Error while executing WebSearchTool: rate limited"
+    output = "Error while executing SearchWebTool: rate limited"
 
-    result = WebSearchToolResultParser.parse(
+    result = SearchWebToolResultParser.parse(
         call_id="call_1",
         output=output,
         is_error=True,

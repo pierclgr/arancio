@@ -6,7 +6,7 @@ from codo.parsers.tool_result.base import BaseToolResultParser
 from codo.types.messages import ToolErrorMessage, ToolResultMessage
 
 
-class WebSearchToolResultParser(BaseToolResultParser):
+class SearchWebToolResultParser(BaseToolResultParser):
     """Parse web search tool output into a tool result message."""
 
     @classmethod
