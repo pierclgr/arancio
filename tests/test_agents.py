@@ -246,6 +246,31 @@ class _FailingClient(_ReasoningClient):
         return [AssistantMessage(content="done")]
 
 
+class _PostFinalizeFailingClient(_ReasoningClient):
+    """Client yielding a finalized message then raising during iteration.
+
+    Simulates upstream libraries (e.g. LiteLLM logging callbacks) that crash *after* the
+    stream has already delivered all finalized output, which must not cause the agent to
+    retry the turn.
+    """
+
+    def send_request(self, request: BaseRequest):
+        """Yield the finalized assistant message, then raise on next iteration.
+
+        Args:
+            request: the request built by the agent.
+
+        Yields:
+            A finalized assistant message before raising.
+
+        Raises:
+            RuntimeError: after the finalized message has been yielded.
+        """
+        self.requests.append(request)
+        yield AssistantMessage(content="visible")
+        raise RuntimeError("post-stream logging blew up")
+
+
 def test_agent_stores_and_returns_reasoning_messages() -> None:
     """Reasoning messages stay in history and are yielded to the caller."""
     client = _ReasoningClient()
@@ -375,6 +400,19 @@ def test_agent_yields_error_message_for_loop_exception() -> None:
         ErrorMessage(content="Error while executing user request: network down"),
         AssistantMessage(content="done"),
     ]
+    assert all(not isinstance(msg, ErrorMessage) for msg in agent._message_history)
+
+
+def test_agent_swallows_post_finalize_exception_without_retry() -> None:
+    """Exceptions raised after a finalized message ends the turn cleanly."""
+    client = _PostFinalizeFailingClient()
+    agent = Agent(client=client)
+
+    response = list(agent.run(UserMessage(content="hello")))
+
+    assert response == [AssistantMessage(content="visible")]
+    assert len(client.requests) == 1
+    assert AssistantMessage(content="visible") in agent._message_history
     assert all(not isinstance(msg, ErrorMessage) for msg in agent._message_history)
 
 

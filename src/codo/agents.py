@@ -127,6 +127,9 @@ class Agent:
         self._add_message_to_history(message=message)
 
         for _ in range(self._max_turns):
+            tool_calls: List[ToolCallMessage] = []
+            received_finalized = False
+
             # try sending request to the client, if something goes wrong, retry
             try:
                 request = self._client.build_request(
@@ -135,8 +138,6 @@ class Agent:
                     tools=self._tool_schemas,
                 )
 
-                tool_calls: List[ToolCallMessage] = []
-                received_finalized = False
                 for response_message in self._client.send_request(request=request):
                     if not isinstance(response_message, ChunkMessage):
                         received_finalized = True
@@ -145,22 +146,30 @@ class Agent:
                             tool_calls.append(response_message)
                     yield response_message
 
-                # no response from the client, something happened so retry
+            except Exception as e:
+                # post-stream errors that fire after finalized messages were
+                # already delivered (e.g. provider-side logging callback bugs)
+                # must not trigger a retry; surface the error only when nothing
+                # finalized came through this turn
                 if not received_finalized:
+                    yield ErrorMessage(
+                        content=f"Error while executing user request: {e}"
+                    )
                     continue
 
-                # natural stop: text-only reply
-                if not tool_calls:
-                    return
+            # no response from the client, something happened so retry
+            if not received_finalized:
+                continue
 
-                # call the tools if tools are requested
-                for call in tool_calls:
-                    tool_result = self._run_tool(call)
-                    self._add_message_to_history(tool_result)
-                    yield tool_result
+            # natural stop: text-only reply
+            if not tool_calls:
+                return
 
-            except Exception as e:
-                yield ErrorMessage(content=f"Error while executing user request: {e}")
+            # call the tools if tools are requested
+            for call in tool_calls:
+                tool_result = self._run_tool(call)
+                self._add_message_to_history(tool_result)
+                yield tool_result
 
         message = "Max turns exceeded"
         yield ErrorMessage(content=message)
