@@ -1,0 +1,16 @@
+properties:
+  query:
+    type: string
+    description: The free-form search query (e.g. "pytorch transformer api 2026").
+  num_results:
+    type: integer
+    description: Maximum number of results to return. Defaults to 10. Hard cap 20.
+    minimum: 1
+    maximum: 20
+  timeout:
+    type: integer
+    description: Per-search timeout in seconds. Defaults to 60. Hard cap 300.
+    minimum: 1
+    maximum: 300
+required:
+  - query

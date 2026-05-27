@@ -19,6 +19,7 @@ from codo.tools.files.write import WriteFileTool
 from codo.tools.glob import GlobTool
 from codo.tools.grep import GrepTool
 from codo.tools.session import default_session
+from codo.tools.web_search import WebSearchTool
 from codo.types.messages import ToolErrorMessage, ToolResultMessage
 from codo.types.tools import ToolSchema
 
@@ -1488,3 +1489,154 @@ def test_glob_tool_hidden_aware_false_includes_hidden(tmp_path: Path) -> None:
     names = {os.path.basename(p) for p in result.output["matches"]}
     assert ".hidden" in names
     assert "visible.py" in names
+
+
+# — WebSearchTool ——————————————————————————————————————————————————————————
+
+
+def _ddgs_hit(href: str, title: str, body: str) -> dict[str, str]:
+    """Build a ddgs-shaped raw hit dict.
+
+    Args:
+        href: result URL.
+        title: result title.
+        body: result excerpt.
+
+    Returns:
+        A dict using ddgs' native ``href``/``title``/``body`` keys.
+    """
+    return {"href": href, "title": title, "body": body}
+
+
+def test_web_search_tool_happy_path() -> None:
+    """Happy path returns normalized results and a numbered formatted body."""
+    raw = [
+        _ddgs_hit("https://pytorch.org/docs/", "PyTorch docs", "Docs excerpt."),
+        _ddgs_hit(
+            "https://pytorch.org/tutorials/",
+            "PyTorch tutorials",
+            "Tut excerpt.",
+        ),
+    ]
+    with patch("codo.tools.web_search.DDGS") as mock_ddgs:
+        mock_ddgs.return_value.__enter__.return_value.text.return_value = raw
+        result = WebSearchTool().call(call_id="call_1", query="pytorch")
+
+    expected_output = {
+        "query": "pytorch",
+        "results": [
+            {
+                "url": "https://pytorch.org/docs/",
+                "title": "PyTorch docs",
+                "excerpt": "Docs excerpt.",
+            },
+            {
+                "url": "https://pytorch.org/tutorials/",
+                "title": "PyTorch tutorials",
+                "excerpt": "Tut excerpt.",
+            },
+        ],
+        "timed_out": False,
+    }
+    expected_content = (
+        "1. PyTorch docs\n"
+        "   https://pytorch.org/docs/\n"
+        "   Docs excerpt.\n"
+        "\n"
+        "2. PyTorch tutorials\n"
+        "   https://pytorch.org/tutorials/\n"
+        "   Tut excerpt.\n"
+        "\n"
+        '[2 results for "pytorch"]'
+    )
+    assert result == ToolResultMessage(
+        content=expected_content,
+        id="call_1",
+        output=expected_output,
+    )
+
+
+def test_web_search_tool_clamps_num_results_to_max() -> None:
+    """num_results above the cap is clamped before being passed to ddgs."""
+    with patch("codo.tools.web_search.DDGS") as mock_ddgs:
+        text = mock_ddgs.return_value.__enter__.return_value.text
+        text.return_value = []
+        WebSearchTool().call(call_id="call_1", query="x", num_results=50)
+
+    text.assert_called_once_with("x", max_results=20)
+
+
+def test_web_search_tool_clamps_timeout_to_max() -> None:
+    """Timeout above the cap is clamped before being passed to DDGS()."""
+    with patch("codo.tools.web_search.DDGS") as mock_ddgs:
+        mock_ddgs.return_value.__enter__.return_value.text.return_value = []
+        WebSearchTool().call(call_id="call_1", query="x", timeout=9000)
+
+    mock_ddgs.assert_called_once_with(timeout=300)
+
+
+def test_web_search_tool_uses_defaults_when_args_missing() -> None:
+    """When num_results/timeout are omitted the class defaults are used."""
+    with patch("codo.tools.web_search.DDGS") as mock_ddgs:
+        text = mock_ddgs.return_value.__enter__.return_value.text
+        text.return_value = []
+        WebSearchTool().call(call_id="call_1", query="x")
+
+    mock_ddgs.assert_called_once_with(timeout=60)
+    text.assert_called_once_with("x", max_results=10)
+
+
+def test_web_search_tool_empty_results_formats_no_results_footer() -> None:
+    """Zero hits produces a ``[no results]`` content body and a success message."""
+    with patch("codo.tools.web_search.DDGS") as mock_ddgs:
+        mock_ddgs.return_value.__enter__.return_value.text.return_value = []
+        result = WebSearchTool().call(call_id="call_1", query="nothing matches")
+
+    assert result == ToolResultMessage(
+        content="[no results]",
+        id="call_1",
+        output={"query": "nothing matches", "results": [], "timed_out": False},
+    )
+
+
+def test_web_search_tool_timeout_returns_tool_error_message() -> None:
+    """``TimeoutException`` surfaces as a ToolErrorMessage with timed_out=True."""
+    from ddgs.exceptions import TimeoutException
+
+    with patch("codo.tools.web_search.DDGS") as mock_ddgs:
+        mock_ddgs.return_value.__enter__.return_value.text.side_effect = (
+            TimeoutException("ddgs timed out")
+        )
+        result = WebSearchTool().call(call_id="call_1", query="slow", timeout=1)
+
+    assert result == ToolErrorMessage(
+        content="[no results]\n[timed out]",
+        id="call_1",
+        output={"query": "slow", "results": [], "timed_out": True},
+    )
+
+
+def test_web_search_tool_arbitrary_exception_wraps_as_error_string() -> None:
+    """Non-timeout failures propagate and are wrapped by BaseTool.call."""
+    from ddgs.exceptions import DDGSException
+
+    with patch("codo.tools.web_search.DDGS") as mock_ddgs:
+        mock_ddgs.return_value.__enter__.return_value.text.side_effect = DDGSException(
+            "rate limited"
+        )
+        result = WebSearchTool().call(call_id="call_1", query="x")
+
+    assert isinstance(result, ToolErrorMessage)
+    assert result.id == "call_1"
+    assert "rate limited" in result.content
+    assert result.content.startswith("Error while executing WebSearchTool:")
+    assert result.output == result.content
+
+
+def test_web_search_tool_handles_missing_fields_in_raw_hits() -> None:
+    """Raw hits missing href/title/body keys default to empty strings."""
+    with patch("codo.tools.web_search.DDGS") as mock_ddgs:
+        mock_ddgs.return_value.__enter__.return_value.text.return_value = [{}]
+        result = WebSearchTool().call(call_id="call_1", query="x")
+
+    assert result.output["results"] == [{"url": "", "title": "", "excerpt": ""}]
