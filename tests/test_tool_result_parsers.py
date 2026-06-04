@@ -6,6 +6,7 @@ from codo.parsers.tool_result.files.glob import GlobToolResultParser
 from codo.parsers.tool_result.files.grep import GrepToolResultParser
 from codo.parsers.tool_result.files.read import ReadFileToolResultParser
 from codo.parsers.tool_result.files.write import WriteFileToolResultParser
+from codo.parsers.tool_result.web.fetch import FetchWebToolResultParser
 from codo.parsers.tool_result.web.search import SearchWebToolResultParser
 from codo.types.messages import ToolErrorMessage, ToolResultMessage
 
@@ -663,6 +664,89 @@ def test_search_web_parser_explicit_error_flag() -> None:
     output = "Error while executing SearchWebTool: rate limited"
 
     result = SearchWebToolResultParser.parse(
+        call_id="call_1",
+        output=output,
+        is_error=True,
+    )
+
+    assert result == ToolErrorMessage(
+        content=output,
+        id="call_1",
+        output=output,
+    )
+
+
+# — FetchWebToolResultParser ———————————————————————————————————————————
+
+
+def test_fetch_web_parser_formats_answer_with_footer() -> None:
+    """Successful output renders the answer plus a title/url footer."""
+    output = {
+        "url": "https://x/final",
+        "query": "what does it cover?",
+        "title": "Title",
+        "content_type": None,
+        "retrieved_at": "2026-01-01T00:00:00+00:00",
+        "answer": "The page covers X.",
+        "truncated": False,
+    }
+
+    result = FetchWebToolResultParser.parse(call_id="call_1", output=output)
+
+    assert result == ToolResultMessage(
+        content="The page covers X.\n\n[Title — https://x/final]",
+        id="call_1",
+        output=output,
+    )
+
+
+def test_fetch_web_parser_appends_truncated_marker() -> None:
+    """Truncated content adds a ``[content truncated]`` marker to the footer."""
+    output = {
+        "url": "https://x",
+        "query": "q",
+        "title": "T",
+        "content_type": None,
+        "retrieved_at": "2026-01-01T00:00:00+00:00",
+        "answer": "answer",
+        "truncated": True,
+    }
+
+    result = FetchWebToolResultParser.parse(call_id="call_1", output=output)
+
+    assert result == ToolResultMessage(
+        content="answer\n\n[T — https://x]\n[content truncated]",
+        id="call_1",
+        output=output,
+    )
+
+
+def test_fetch_web_parser_empty_answer_marker() -> None:
+    """An empty answer renders the ``[no answer]`` marker."""
+    output = {
+        "url": "https://x",
+        "query": "q",
+        "title": None,
+        "content_type": None,
+        "retrieved_at": "2026-01-01T00:00:00+00:00",
+        "answer": "",
+        "truncated": False,
+    }
+
+    result = FetchWebToolResultParser.parse(call_id="call_1", output=output)
+
+    assert result == ToolResultMessage(
+        content="[no answer]\n\n[https://x]",
+        id="call_1",
+        output=output,
+    )
+
+
+def test_fetch_web_parser_explicit_error_flag() -> None:
+    """Explicit tool execution errors are preserved by the web fetch parser."""
+    output = "Error while executing FetchWebTool: failed to fetch https://x"
+
+    result = FetchWebToolResultParser.parse(
         call_id="call_1",
         output=output,
         is_error=True,

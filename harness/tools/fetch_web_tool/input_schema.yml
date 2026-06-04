@@ -1,0 +1,15 @@
+properties:
+  url:
+    type: string
+    description: The http(s) URL of the page to fetch (e.g. "https://docs.pytorch.org").
+  query:
+    type: string
+    description: Instruction describing what to extract, summarize, or answer from the page.
+  timeout:
+    type: integer
+    description: Fetch timeout in seconds. Defaults to 60. Hard cap 300.
+    minimum: 1
+    maximum: 300
+required:
+  - url
+  - query

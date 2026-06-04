@@ -9,6 +9,7 @@ import pytest
 import codo.clients.litellm as litellm_module
 from codo.clients.litellm import LiteLLMClient
 from codo.types.messages import (
+    AssistantChunkMessage,
     AssistantMessage,
     ReasoningMessage,
     ToolCallMessage,
@@ -385,3 +386,85 @@ def test_parse_response_handles_pydantic_style_output_items(
     result = list(LiteLLMClient().send_request(request))
 
     assert result == [AssistantMessage(content="pong")]
+
+
+def test_streaming_registers_unknown_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A streaming call registers an unknown model and forwards ``stream``."""
+    from litellm.utils import supports_native_streaming
+
+    event = SimpleNamespace(type="response.output_text.delta", delta="hi")
+    responses = Mock(return_value=[event])
+    monkeypatch.setattr(litellm_module.litellm, "responses", responses)
+
+    model = "chatgpt/gpt-unknown-stream-test"
+    request = BaseRequest(
+        model_id=model,
+        message_list=[UserMessage(content="hi")],
+    )
+
+    result = list(LiteLLMClient(stream=True).send_request(request))
+
+    assert responses.call_args.kwargs["stream"] is True
+    assert result == [AssistantChunkMessage(content="hi")]
+    assert supports_native_streaming(model=model, custom_llm_provider="chatgpt")
+
+
+def test_streaming_does_not_reregister_known_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model already in the registry is not re-registered."""
+    responses = Mock(return_value=[])
+    monkeypatch.setattr(litellm_module.litellm, "responses", responses)
+    register = Mock()
+    monkeypatch.setattr(litellm_module.litellm, "register_model", register)
+
+    request = BaseRequest(
+        model_id="openai/gpt-4o",
+        message_list=[UserMessage(content="hi")],
+    )
+
+    list(LiteLLMClient(stream=True).send_request(request))
+
+    register.assert_not_called()
+    assert responses.call_args.kwargs["stream"] is True
+
+
+def test_non_streaming_does_not_register_unknown_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-streaming call never touches the model registry."""
+    responses = _patch_responses(monkeypatch, [])
+    register = Mock()
+    monkeypatch.setattr(litellm_module.litellm, "register_model", register)
+
+    request = BaseRequest(
+        model_id="chatgpt/gpt-unknown-nonstream-test",
+        message_list=[UserMessage(content="hi")],
+    )
+
+    list(LiteLLMClient().send_request(request))
+
+    register.assert_not_called()
+    assert "stream" not in responses.call_args.kwargs
+
+
+def test_stream_setter_toggles_request_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Setting ``stream`` after construction switches the request path."""
+    responses = _patch_responses(monkeypatch, [])
+
+    client = LiteLLMClient(stream=True)
+    client.stream = False
+
+    assert client.stream is False
+
+    request = BaseRequest(
+        model_id="openai/gpt-4o",
+        message_list=[UserMessage(content="hi")],
+    )
+    list(client.send_request(request))
+
+    assert "stream" not in responses.call_args.kwargs

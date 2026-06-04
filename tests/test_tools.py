@@ -3,8 +3,9 @@
 import os
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, ClassVar, List
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
@@ -19,8 +20,9 @@ from codo.tools.files.grep import GrepTool
 from codo.tools.files.read import ReadFileTool
 from codo.tools.files.write import WriteFileTool
 from codo.tools.session import default_session
+from codo.tools.web.fetch import FetchWebTool
 from codo.tools.web.search import SearchWebTool
-from codo.types.messages import ToolErrorMessage, ToolResultMessage
+from codo.types.messages import AssistantMessage, ToolErrorMessage, ToolResultMessage
 from codo.types.tools import ToolSchema
 
 
@@ -1640,3 +1642,177 @@ def test_search_web_tool_handles_missing_fields_in_raw_hits() -> None:
         result = SearchWebTool().call(call_id="call_1", query="x")
 
     assert result.output["results"] == [{"url": "", "title": "", "excerpt": ""}]
+
+
+# — FetchWebTool —————————————————————————————————————————————————————————————
+
+
+def _fetch_tool_with_answer(answer: str):
+    """Build a FetchWebTool with a mocked injected client returning an answer.
+
+    Args:
+        answer: text the mocked summarization client returns as its finalized
+            assistant message.
+
+    Returns:
+        A tuple ``(tool, client)`` where ``client`` is the mocked summarization
+        client so tests can inspect its calls.
+    """
+    client = MagicMock()
+    client.send_request.return_value = [AssistantMessage(content=answer)]
+    return FetchWebTool(client=client), client
+
+
+def test_fetch_web_tool_happy_path() -> None:
+    """Happy path returns the answer plus metadata and a source footer."""
+    tool, client = _fetch_tool_with_answer("The page covers X.")
+
+    with (
+        patch("codo.tools.web.fetch.trafilatura") as traf,
+        patch("codo.tools.web.fetch.use_config"),
+    ):
+        traf.fetch_url.return_value = "<html>...</html>"
+        traf.extract.return_value = "# Heading\nbody"
+        traf.extract_metadata.return_value = SimpleNamespace(
+            title="Title", url="https://x/final"
+        )
+        result = tool.call(
+            call_id="call_1",
+            url="https://x",
+            query="what does it cover?",
+        )
+
+    output = result.output
+    assert output["url"] == "https://x/final"
+    assert output["title"] == "Title"
+    assert output["query"] == "what does it cover?"
+    assert output["answer"] == "The page covers X."
+    assert output["content_type"] is None
+    assert output["truncated"] is False
+    assert "retrieved_at" in output
+    assert isinstance(result, ToolResultMessage)
+    assert result.content == "The page covers X.\n\n[Title — https://x/final]"
+
+    kwargs = client.build_request.call_args.kwargs
+    assert kwargs["tools"] == []
+    assert "Task: what does it cover?" in kwargs["messages"][0].content
+
+
+def test_fetch_web_tool_rejects_non_http_url() -> None:
+    """Non-http(s) URLs are rejected before any fetch."""
+    tool = FetchWebTool(client=MagicMock())
+
+    result = tool.call(call_id="call_1", url="ftp://x", query="q")
+
+    assert isinstance(result, ToolErrorMessage)
+    assert "url must be an http(s) URL" in result.content
+
+
+def test_fetch_web_tool_fetch_failure_is_error() -> None:
+    """A None download surfaces as a tool error."""
+    tool = FetchWebTool(client=MagicMock())
+
+    with (
+        patch("codo.tools.web.fetch.trafilatura") as traf,
+        patch("codo.tools.web.fetch.use_config"),
+    ):
+        traf.fetch_url.return_value = None
+        result = tool.call(call_id="call_1", url="https://x", query="q")
+
+    assert isinstance(result, ToolErrorMessage)
+    assert "failed to fetch https://x" in result.content
+
+
+def test_fetch_web_tool_empty_extraction_is_error() -> None:
+    """No extractable content surfaces as a tool error."""
+    tool = FetchWebTool(client=MagicMock())
+
+    with (
+        patch("codo.tools.web.fetch.trafilatura") as traf,
+        patch("codo.tools.web.fetch.use_config"),
+    ):
+        traf.fetch_url.return_value = "<html></html>"
+        traf.extract.return_value = None
+        result = tool.call(call_id="call_1", url="https://x", query="q")
+
+    assert isinstance(result, ToolErrorMessage)
+    assert "no readable content extracted from https://x" in result.content
+
+
+def test_fetch_web_tool_truncates_long_content() -> None:
+    """Content longer than the cap is truncated before summarization."""
+    tool, client = _fetch_tool_with_answer("ok")
+    long_text = "a" * (FetchWebTool._max_content_chars + 10)
+
+    with (
+        patch("codo.tools.web.fetch.trafilatura") as traf,
+        patch("codo.tools.web.fetch.use_config"),
+    ):
+        traf.fetch_url.return_value = "<html></html>"
+        traf.extract.return_value = long_text
+        traf.extract_metadata.return_value = SimpleNamespace(title="T", url="https://x")
+        result = tool.call(call_id="call_1", url="https://x", query="q")
+
+    assert result.output["truncated"] is True
+    sent = client.build_request.call_args.kwargs["messages"][0].content
+    assert "a" * FetchWebTool._max_content_chars in sent
+    assert "a" * (FetchWebTool._max_content_chars + 1) not in sent
+
+
+def test_fetch_web_tool_clamps_timeout_to_max() -> None:
+    """Timeout above the cap is clamped into the trafilatura config."""
+    tool, _ = _fetch_tool_with_answer("ok")
+
+    with (
+        patch("codo.tools.web.fetch.trafilatura") as traf,
+        patch("codo.tools.web.fetch.use_config") as mock_use_config,
+    ):
+        cfg = mock_use_config.return_value
+        traf.fetch_url.return_value = "<html></html>"
+        traf.extract.return_value = "body"
+        traf.extract_metadata.return_value = SimpleNamespace(
+            title=None, url="https://x"
+        )
+        tool.call(call_id="call_1", url="https://x", query="q", timeout=9000)
+
+    cfg.set.assert_called_once_with("DEFAULT", "DOWNLOAD_TIMEOUT", "300")
+
+
+def test_fetch_web_tool_empty_answer_is_error() -> None:
+    """An empty summarization answer surfaces as a tool error."""
+    tool, _ = _fetch_tool_with_answer("")
+
+    with (
+        patch("codo.tools.web.fetch.trafilatura") as traf,
+        patch("codo.tools.web.fetch.use_config"),
+    ):
+        traf.fetch_url.return_value = "<html></html>"
+        traf.extract.return_value = "body"
+        traf.extract_metadata.return_value = SimpleNamespace(
+            title=None, url="https://x"
+        )
+        result = tool.call(call_id="call_1", url="https://x", query="q")
+
+    assert isinstance(result, ToolErrorMessage)
+    assert "summarization produced no answer" in result.content
+
+
+def test_fetch_web_tool_llm_failure_is_error() -> None:
+    """A summarization client exception surfaces as a tool error."""
+    client = MagicMock()
+    client.send_request.side_effect = RuntimeError("llm down")
+    tool = FetchWebTool(client=client)
+
+    with (
+        patch("codo.tools.web.fetch.trafilatura") as traf,
+        patch("codo.tools.web.fetch.use_config"),
+    ):
+        traf.fetch_url.return_value = "<html></html>"
+        traf.extract.return_value = "body"
+        traf.extract_metadata.return_value = SimpleNamespace(
+            title=None, url="https://x"
+        )
+        result = tool.call(call_id="call_1", url="https://x", query="q")
+
+    assert isinstance(result, ToolErrorMessage)
+    assert "llm down" in result.content

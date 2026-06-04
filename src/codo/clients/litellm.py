@@ -78,10 +78,12 @@ class LiteLLMClient(BaseClient):
                 emits both chunk and finalized messages. When ``False``
                 (the default, matching LiteLLM's own default) the
                 client receives a single response object and emits only
-                finalized messages. Note: some providers (e.g.
-                ``chatgpt/*``) return an empty ``output`` list in
-                non-streaming mode and require ``stream=True`` to
-                produce content.
+                finalized messages. Note: when ``True`` and the target
+                model is missing from LiteLLM's registry (e.g. a freshly
+                released ``chatgpt/*`` model), the client registers it as
+                natively streamable so LiteLLM streams it instead of
+                taking its broken fake-stream path; see
+                :meth:`_register_native_streaming`.
             *args: positional arguments forwarded to :class:`BaseClient`.
             **kwargs: keyword arguments forwarded to :class:`BaseClient`.
         """
@@ -103,6 +105,26 @@ class LiteLLMClient(BaseClient):
             f"stream={self._stream!r}"
             ")"
         )
+
+    @property
+    def stream(self) -> bool:
+        """Return whether responses are streamed incrementally.
+
+        Returns:
+            ``True`` when the client streams responses, ``False`` when it
+            receives a single response object.
+        """
+        return self._stream
+
+    @stream.setter
+    def stream(self, value: bool) -> None:
+        """Set whether responses are streamed incrementally.
+
+        Args:
+            value: ``True`` to stream responses, ``False`` to receive a
+                single response object.
+        """
+        self._stream = value
 
     def send_request(self, request: LiteLLMRequest) -> Iterator[Message]:
         """Send a request through LiteLLM and yield normalized messages.
@@ -130,9 +152,42 @@ class LiteLLMClient(BaseClient):
             kwargs["max_output_tokens"] = self._max_output_tokens
 
         if self._stream:
+            self._register_native_streaming(request.model_id)
             kwargs["stream"] = True
             stream = litellm.responses(**kwargs)
             yield from self._response_parser.parse_stream(stream)
         else:
             response = litellm.responses(**kwargs)
             yield from self._response_parser.parse(response)
+
+    @staticmethod
+    def _register_native_streaming(model_id: str) -> None:
+        """Register an unknown model as natively streamable in LiteLLM.
+
+        LiteLLM fakes streaming for models absent from its registry by
+        issuing a non-streaming call and stripping ``stream`` from the
+        request body. The ChatGPT backend requires ``stream:true`` in
+        the body and rejects such calls with ``"Stream must be set to
+        true"``. Registering the model with ``supports_native_streaming``
+        makes LiteLLM stream it natively instead, so real incremental
+        chunks are delivered. Models already in the registry are left
+        untouched.
+
+        Args:
+            model_id: the model identifier to register when unknown.
+        """
+        try:
+            litellm.get_model_info(model_id)
+            return
+        except Exception:
+            pass
+        _, provider, _, _ = litellm.get_llm_provider(model=model_id)
+        litellm.register_model(
+            {
+                model_id: {
+                    "supports_native_streaming": True,
+                    "litellm_provider": provider,
+                    "mode": "responses",
+                }
+            }
+        )
