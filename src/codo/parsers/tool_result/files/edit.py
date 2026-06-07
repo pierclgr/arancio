@@ -50,6 +50,10 @@ class EditFileToolResultParser(BaseToolResultParser):
             f"({replacements} {noun}, {bytes_before} → {bytes_after} bytes)"
         )
 
+        diff = output.get("diff") or ""
+        if diff:
+            content = f"{content}\n{diff}"
+
         if is_error:
             return ToolErrorMessage(
                 content=content,

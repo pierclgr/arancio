@@ -1,5 +1,6 @@
 """File edit tool exposing an exact-substring file replacement primitive."""
 
+import difflib
 from pathlib import Path
 from typing import Type
 
@@ -42,8 +43,9 @@ class EditFileTool(BaseTool):
             A dict with keys ``file_path`` (str, canonical absolute path),
             ``replacements`` (int, occurrences replaced), ``bytes_before``
             (int, UTF-8 byte size before the edit), ``bytes_after`` (int,
-            UTF-8 byte size after the edit) and ``action`` (always
-            ``"edited"``).
+            UTF-8 byte size after the edit), ``action`` (always
+            ``"edited"``) and ``diff`` (str, git-style unified diff of the
+            change; empty when the edit produces no line-level difference).
 
         Raises:
             ValueError: when ``file_path`` is not absolute, when
@@ -102,6 +104,16 @@ class EditFileTool(BaseTool):
             -1 if replace_all else 1,
         )
 
+        diff = "\n".join(
+            difflib.unified_diff(
+                text.splitlines(),
+                new_text.splitlines(),
+                fromfile=f"a/{path.name}",
+                tofile=f"b/{path.name}",
+                lineterm="",
+            )
+        )
+
         bytes_before = len(text.encode("utf-8"))
         encoded = new_text.encode("utf-8")
         path.write_bytes(encoded)
@@ -114,4 +126,5 @@ class EditFileTool(BaseTool):
             "bytes_before": bytes_before,
             "bytes_after": len(encoded),
             "action": "edited",
+            "diff": diff,
         }

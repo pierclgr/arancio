@@ -605,15 +605,17 @@ def test_edit_tool_replaces_unique_match(tmp_path: Path) -> None:
 
     assert target.read_text() == "x = 42\ny = 2\n"
     canonical = str(target.resolve())
+    diff = "--- a/sample.py\n+++ b/sample.py\n@@ -1,2 +1,2 @@\n-x = 1\n+x = 42\n y = 2"
     output = {
         "file_path": canonical,
         "replacements": 1,
         "bytes_before": 12,
         "bytes_after": 13,
         "action": "edited",
+        "diff": diff,
     }
     assert result == ToolResultMessage(
-        content=f"Edited {canonical} (1 replacement, 12 → 13 bytes)",
+        content=f"Edited {canonical} (1 replacement, 12 → 13 bytes)\n{diff}",
         id="call_2",
         output=output,
     )

@@ -291,6 +291,27 @@ def test_edit_tool_parser_reports_plural_replacements() -> None:
     )
 
 
+def test_edit_tool_parser_appends_diff() -> None:
+    """A unified diff in the output is appended below the summary line."""
+    diff = "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@\n-x = 1\n+x = 2"
+    output = {
+        "file_path": "/abs/file.py",
+        "replacements": 1,
+        "bytes_before": 5,
+        "bytes_after": 5,
+        "action": "edited",
+        "diff": diff,
+    }
+
+    result = EditFileToolResultParser.parse(call_id="call_1", output=output)
+
+    assert result == ToolResultMessage(
+        content=f"Edited /abs/file.py (1 replacement, 5 → 5 bytes)\n{diff}",
+        id="call_1",
+        output=output,
+    )
+
+
 def test_edit_tool_parser_honors_explicit_error_flag() -> None:
     """Explicit tool execution errors are preserved by the edit parser."""
     output = "Error while executing EditFileTool: boom"
