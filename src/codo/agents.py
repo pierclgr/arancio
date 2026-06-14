@@ -6,6 +6,8 @@ from typing import Dict, List, Type
 from codo.builders.system_prompt import SystemPromptBuilder
 from codo.clients.base import BaseClient
 from codo.exceptions import MaxTurnsException
+from codo.permissions.manager import PermissionManager
+from codo.permissions.permission import PermissionCategory, PermissionLevel
 from codo.tools.base import BaseTool
 from codo.types.messages import (
     ChunkMessage,
@@ -24,15 +26,16 @@ class Agent:
     def __init__(
         self,
         client: BaseClient,
-        tools: List[BaseTool] | None = None,
+        permission_manager: PermissionManager | None = None,
         max_turns: int = 1000,
     ) -> None:
-        """Initialize the agent with a client, model and tool catalog.
+        """Initialize the agent with a client and permission manager.
 
         Args:
             client: the LLM client used to send requests.
-            tools: the tool catalog available to the model; when None
-                the agent runs without tools.
+            permission_manager: the permission manager that creates the agent's
+                tools and gates each tool call. Defaults to a fully granted
+                manager (every category at ``ASK``) when omitted.
             max_turns: the maximum number of loop turns before aborting.
         """
         self._client: BaseClient = client
@@ -40,9 +43,12 @@ class Agent:
         self._message_history: List[Message] = []
         self._system_prompt_builder: Type[SystemPromptBuilder] = SystemPromptBuilder
 
-        if not tools:
-            tools = []
-        self._tools: Dict[str, BaseTool] = {tool.name: tool for tool in tools}
+        if not permission_manager:
+            permission_manager = PermissionManager()
+        self._permission_manager: PermissionManager = permission_manager
+
+        self._tools: Dict[str, BaseTool] = {}
+        self._refresh_tools()
 
     def __repr__(self) -> str:
         """Return a developer-friendly representation of the agent.
@@ -53,6 +59,7 @@ class Agent:
         return (
             f"{type(self).__name__}("
             f"client={self._client!r}, "
+            f"permissions={self._permission_manager!r}, "
             f"max_turns={self._max_turns!r}, "
             f"tools={list(self._tools)!r}"
             ")"
@@ -78,6 +85,48 @@ class Agent:
             tool: the tool definition to expose to the model.
         """
         self._tools[tool.name] = tool
+
+    def _refresh_tools(self) -> None:
+        """Rebuild the tool catalog from the permission manager's grants."""
+        self._tools = {
+            tool.name: tool for tool in self._permission_manager.allowed_tools()
+        }
+
+    def add_permission(
+        self,
+        category: PermissionCategory,
+        level: PermissionLevel = PermissionLevel.ASK,
+    ) -> None:
+        """Grant a category and rebuild the tool catalog.
+
+        Args:
+            category: the category to grant.
+            level: the permission level. Defaults to
+                :attr:`PermissionLevel.ASK`.
+        """
+        self._permission_manager.add_permission(category, level)
+        self._refresh_tools()
+
+    def remove_permission(self, category: PermissionCategory) -> None:
+        """Revoke a category's grant and rebuild the tool catalog.
+
+        Args:
+            category: the category whose grant is removed.
+        """
+        self._permission_manager.remove_permission(category)
+        self._refresh_tools()
+
+    def set_permission_level(
+        self, category: PermissionCategory, level: PermissionLevel
+    ) -> None:
+        """Change a category's permission level and rebuild the tool catalog.
+
+        Args:
+            category: the category whose grant to update.
+            level: the new permission level.
+        """
+        self._permission_manager.set_permission_level(category, level)
+        self._refresh_tools()
 
     def _add_message_to_history(self, message: Message) -> None:
         """Append a single message to the conversation history.
@@ -166,6 +215,16 @@ class Agent:
 
             # call the tools if tools are requested
             for call in tool_calls:
+                if not self._permission_manager.validate(call):
+                    denial = ToolResultMessage(
+                        content=f"Tool call {call.name} denied by user.",
+                        id=call.id,
+                        output=f"Tool call {call.name} denied by user.",
+                    )
+                    self._add_message_to_history(denial)
+                    yield denial
+                    continue
+
                 tool_result = self._run_tool(call)
                 self._add_message_to_history(tool_result)
                 yield tool_result
