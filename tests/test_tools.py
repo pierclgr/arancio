@@ -11,19 +11,23 @@ import pytest
 import yaml
 from dynamic_markdown.types.files.base import DynamicMarkdownFile
 
-from codo.parsers.tool_result.base import BaseToolResultParser
-from codo.tools.base import BaseTool
-from codo.tools.commands.powershell import PowershellCommandTool
-from codo.tools.files.edit import EditFileTool
-from codo.tools.files.glob import GlobTool
-from codo.tools.files.grep import GrepTool
-from codo.tools.files.read import ReadFileTool
-from codo.tools.files.write import WriteFileTool
-from codo.tools.session import default_session
-from codo.tools.web.fetch import FetchWebTool
-from codo.tools.web.search import SearchWebTool
-from codo.types.messages import AssistantMessage, ToolErrorMessage, ToolResultMessage
-from codo.types.tools import ToolSchema
+from codo.core.parsers.tool_result.base import BaseToolResultParser
+from codo.core.tools.base import BaseTool
+from codo.core.tools.commands.powershell import PowershellCommandTool
+from codo.core.tools.files.edit import EditFileTool
+from codo.core.tools.files.glob import GlobTool
+from codo.core.tools.files.grep import GrepTool
+from codo.core.tools.files.read import ReadFileTool
+from codo.core.tools.files.write import WriteFileTool
+from codo.core.tools.session import default_session
+from codo.core.tools.web.fetch import FetchWebTool
+from codo.core.tools.web.search import SearchWebTool
+from codo.core.types.messages import (
+    AssistantMessage,
+    ToolErrorMessage,
+    ToolResultMessage,
+)
+from codo.core.types.tools import ToolSchema
 
 
 @pytest.fixture(autouse=True)
@@ -65,7 +69,6 @@ class _RecordingToolResultParser(BaseToolResultParser):
         return result_class(
             content=f"parsed: {output}",
             id=call_id,
-            output=output,
         )
 
 
@@ -108,12 +111,11 @@ def test_tool_exception_routes_through_result_parser() -> None:
     assert result == ToolErrorMessage(
         content=f"parsed: {output}",
         id="call_1",
-        output=output,
     )
 
 
-@patch("codo.tools.commands.powershell.subprocess.run")
-@patch("codo.tools.commands.powershell.shutil.which")
+@patch("codo.core.tools.commands.powershell.subprocess.run")
+@patch("codo.core.tools.commands.powershell.shutil.which")
 def test_powershell_command_prefers_windows_powershell(
     which_mock,
     run_mock,
@@ -158,14 +160,14 @@ def test_powershell_command_prefers_windows_powershell(
         "truncated": False,
     }
     assert result == ToolResultMessage(
-        content="ok",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="ok",
     )
 
 
-@patch("codo.tools.commands.powershell.subprocess.run")
-@patch("codo.tools.commands.powershell.shutil.which")
+@patch("codo.core.tools.commands.powershell.subprocess.run")
+@patch("codo.core.tools.commands.powershell.shutil.which")
 def test_powershell_command_falls_back_to_pwsh(which_mock, run_mock) -> None:
     """PowerShell tool falls back to pwsh when powershell.exe is unavailable."""
     which_mock.side_effect = lambda name: "pwsh" if name == "pwsh" else None
@@ -183,8 +185,8 @@ def test_powershell_command_falls_back_to_pwsh(which_mock, run_mock) -> None:
     assert command_args[-1] == "Write-Output ok"
 
 
-@patch("codo.tools.commands.powershell.subprocess.run")
-@patch("codo.tools.commands.powershell.shutil.which")
+@patch("codo.core.tools.commands.powershell.subprocess.run")
+@patch("codo.core.tools.commands.powershell.shutil.which")
 def test_powershell_command_reports_missing_host(which_mock, run_mock) -> None:
     """Missing PowerShell hosts are reported as tool errors."""
     which_mock.return_value = None
@@ -199,12 +201,11 @@ def test_powershell_command_reports_missing_host(which_mock, run_mock) -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )
 
 
-@patch("codo.tools.commands.powershell.subprocess.run")
-@patch("codo.tools.commands.powershell.shutil.which")
+@patch("codo.core.tools.commands.powershell.subprocess.run")
+@patch("codo.core.tools.commands.powershell.shutil.which")
 def test_powershell_command_reports_timeout(which_mock, run_mock) -> None:
     """Timed-out PowerShell commands return partial output as an error."""
     which_mock.return_value = "powershell.exe"
@@ -229,14 +230,14 @@ def test_powershell_command_reports_timeout(which_mock, run_mock) -> None:
         "truncated": False,
     }
     assert result == ToolErrorMessage(
-        content="partial\nslow\n[timed out]\n[exit code -1]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="partial\nslow\n[timed out]\n[exit code -1]",
     )
 
 
-@patch("codo.tools.commands.powershell.subprocess.run")
-@patch("codo.tools.commands.powershell.shutil.which")
+@patch("codo.core.tools.commands.powershell.subprocess.run")
+@patch("codo.core.tools.commands.powershell.shutil.which")
 def test_powershell_command_truncates_long_output(which_mock, run_mock) -> None:
     """PowerShell command streams are truncated independently."""
     which_mock.return_value = "powershell.exe"
@@ -270,9 +271,9 @@ def test_read_tool_reads_full_file_with_line_numbers(tmp_path: Path) -> None:
         "truncated_lines": 0,
     }
     assert result == ToolResultMessage(
-        content=f"{expected_block}\n[lines 1-3 of 3]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text=f"{expected_block}\n[lines 1-3 of 3]",
     )
 
 
@@ -297,9 +298,9 @@ def test_read_tool_slices_with_offset_and_limit(tmp_path: Path) -> None:
         "truncated_lines": 0,
     }
     assert result == ToolResultMessage(
-        content=f"{expected_block}\n[lines 2-3 of 5]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text=f"{expected_block}\n[lines 2-3 of 5]",
     )
 
 
@@ -321,9 +322,9 @@ def test_read_tool_truncates_long_lines(tmp_path: Path) -> None:
         "truncated_lines": 1,
     }
     assert result == ToolResultMessage(
-        content=f"{expected_block}\n[lines 1-1 of 1]\n[1 long lines truncated]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text=f"{expected_block}\n[lines 1-1 of 1]\n[1 long lines truncated]",
     )
 
 
@@ -342,9 +343,9 @@ def test_read_tool_handles_empty_file(tmp_path: Path) -> None:
         "truncated_lines": 0,
     }
     assert result == ToolResultMessage(
-        content="[empty file]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="[empty file]",
     )
 
 
@@ -358,7 +359,6 @@ def test_read_tool_rejects_relative_paths() -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )
 
 
@@ -372,7 +372,6 @@ def test_read_tool_reports_missing_file(tmp_path: Path) -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )
 
 
@@ -386,7 +385,6 @@ def test_read_tool_reports_directory_path(tmp_path: Path) -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )
 
 
@@ -421,9 +419,9 @@ def test_write_tool_creates_new_file(tmp_path: Path) -> None:
         "total_lines": 2,
     }
     assert result == ToolResultMessage(
-        content=f"Created {canonical} (12 bytes, 2 lines)",
+        content=output,
         id="call_1",
-        output=output,
+        display_text=f"Created {canonical} (12 bytes, 2 lines)",
     )
 
 
@@ -448,9 +446,9 @@ def test_write_tool_overwrites_after_read(tmp_path: Path) -> None:
         "total_lines": 1,
     }
     assert result == ToolResultMessage(
-        content=f"Overwrote {canonical} (11 bytes, 1 lines)",
+        content=output,
         id="call_2",
-        output=output,
+        display_text=f"Overwrote {canonical} (11 bytes, 1 lines)",
     )
 
 
@@ -474,7 +472,6 @@ def test_write_tool_refuses_overwrite_without_prior_read(tmp_path: Path) -> None
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )
 
 
@@ -504,7 +501,6 @@ def test_write_tool_refuses_overwrite_after_mtime_drift(tmp_path: Path) -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_2",
-        output=output,
     )
 
 
@@ -522,7 +518,6 @@ def test_write_tool_rejects_relative_paths() -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )
 
 
@@ -543,7 +538,6 @@ def test_write_tool_reports_missing_parent_dir(tmp_path: Path) -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )
 
 
@@ -561,7 +555,6 @@ def test_write_tool_reports_directory_target(tmp_path: Path) -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )
 
 
@@ -584,9 +577,9 @@ def test_write_tool_handles_empty_content(tmp_path: Path) -> None:
         "total_lines": 0,
     }
     assert result == ToolResultMessage(
-        content=f"Created {canonical} (0 bytes, 0 lines)",
+        content=output,
         id="call_1",
-        output=output,
+        display_text=f"Created {canonical} (0 bytes, 0 lines)",
     )
 
 
@@ -615,9 +608,9 @@ def test_edit_tool_replaces_unique_match(tmp_path: Path) -> None:
         "diff": diff,
     }
     assert result == ToolResultMessage(
-        content=f"Edited {canonical} (1 replacement, 12 → 13 bytes)\n{diff}",
+        content=output,
         id="call_2",
-        output=output,
+        display_text=f"Edited {canonical} (1 replacement, 12 → 13 bytes)\n{diff}",
     )
 
 
@@ -636,7 +629,7 @@ def test_edit_tool_replaces_all_occurrences(tmp_path: Path) -> None:
     )
 
     assert target.read_text() == "bar\nbar\nbar\n"
-    output = result.output
+    output = result.content
     assert output["replacements"] == 3
     assert output["action"] == "edited"
 
@@ -665,7 +658,6 @@ def test_edit_tool_refuses_ambiguous_match_without_replace_all(
     assert result == ToolErrorMessage(
         content=output,
         id="call_2",
-        output=output,
     )
 
 
@@ -686,7 +678,6 @@ def test_edit_tool_reports_missing_match(tmp_path: Path) -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_2",
-        output=output,
     )
 
 
@@ -707,7 +698,6 @@ def test_edit_tool_rejects_empty_old_string(tmp_path: Path) -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_2",
-        output=output,
     )
 
 
@@ -731,7 +721,6 @@ def test_edit_tool_rejects_identical_strings(tmp_path: Path) -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_2",
-        output=output,
     )
 
 
@@ -750,7 +739,6 @@ def test_edit_tool_rejects_relative_paths() -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )
 
 
@@ -769,7 +757,6 @@ def test_edit_tool_reports_missing_file(tmp_path: Path) -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )
 
 
@@ -788,7 +775,6 @@ def test_edit_tool_reports_directory_target(tmp_path: Path) -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )
 
 
@@ -813,7 +799,6 @@ def test_edit_tool_refuses_without_prior_read(tmp_path: Path) -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )
 
 
@@ -844,7 +829,6 @@ def test_edit_tool_refuses_after_mtime_drift(tmp_path: Path) -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_2",
-        output=output,
     )
 
 
@@ -868,7 +852,7 @@ def test_edit_tool_registers_post_edit_mtime(tmp_path: Path) -> None:
     )
 
     assert target.read_text() == "FIRST\nSECOND\n"
-    assert result.output["replacements"] == 1
+    assert result.content["replacements"] == 1
 
 
 def test_tool_raises_when_harness_dir_missing() -> None:
@@ -949,15 +933,15 @@ def test_grep_tool_files_with_matches_default(tmp_path: Path) -> None:
     )
 
     canonical_a = str((target / "a.py").resolve())
-    output = result.output
+    output = result.content
     assert output["output_mode"] == "files_with_matches"
     assert canonical_a in output["matches"]
     assert output["total_matches"] == 1
     assert output["truncated"] is False
     assert result == ToolResultMessage(
-        content=f"{canonical_a}\n[1 file matched]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text=f"{canonical_a}\n[1 file matched]",
     )
 
 
@@ -975,7 +959,7 @@ def test_grep_tool_content_mode(tmp_path: Path) -> None:
     )
 
     canonical = str((target / "app.py").resolve())
-    output = result.output
+    output = result.content
     assert output["output_mode"] == "content"
     assert output["matches"] == [
         {"file": canonical, "line": 1, "content": "def alpha():", "is_context": False},
@@ -998,7 +982,7 @@ def test_grep_tool_count_mode(tmp_path: Path) -> None:
     )
 
     canonical = str((target / "f.py").resolve())
-    output = result.output
+    output = result.content
     assert output["output_mode"] == "count"
     assert output["matches"] == [
         {"file": canonical, "count": 4},
@@ -1020,7 +1004,7 @@ def test_grep_tool_case_insensitive(tmp_path: Path) -> None:
         i=True,
     )
 
-    assert len(result.output["matches"]) == 1
+    assert len(result.content["matches"]) == 1
 
 
 def test_grep_tool_glob_filter(tmp_path: Path) -> None:
@@ -1038,7 +1022,7 @@ def test_grep_tool_glob_filter(tmp_path: Path) -> None:
         glob="*.py",
     )
 
-    output = result.output
+    output = result.content
     assert len(output["matches"]) == 1
     assert output["matches"][0].endswith("a.py")
 
@@ -1058,7 +1042,7 @@ def test_grep_tool_file_type_filter(tmp_path: Path) -> None:
         file_type="py",
     )
 
-    output = result.output
+    output = result.content
     assert len(output["matches"]) == 1
     assert output["matches"][0].endswith("a.py")
 
@@ -1078,11 +1062,11 @@ def test_grep_tool_head_limit_caps_output(tmp_path: Path) -> None:
         head_limit=5,
     )
 
-    output = result.output
+    output = result.content
     assert len(output["matches"]) == 5
     assert output["total_matches"] == 20
     assert output["truncated"] is True
-    assert "truncated" in result.content
+    assert "truncated" in result.display_text
 
 
 def test_grep_tool_context_lines(tmp_path: Path) -> None:
@@ -1100,7 +1084,7 @@ def test_grep_tool_context_lines(tmp_path: Path) -> None:
         B=1,
     )
 
-    output = result.output
+    output = result.content
     assert len(output["matches"]) == 3
     contexts = [m for m in output["matches"] if m["is_context"]]
     matches = [m for m in output["matches"] if not m["is_context"]]
@@ -1122,7 +1106,7 @@ def test_grep_tool_zero_matches(tmp_path: Path) -> None:
         output_mode="content",
     )
 
-    output = result.output
+    output = result.content
     assert output["matches"] == []
     assert output["total_matches"] == 0
     assert output["exit_code"] == 1
@@ -1141,7 +1125,7 @@ def test_grep_tool_escaped_literal_braces(tmp_path: Path) -> None:
         output_mode="files_with_matches",
     )
 
-    assert len(result.output["matches"]) == 1
+    assert len(result.content["matches"]) == 1
 
 
 def test_grep_tool_reports_missing_path() -> None:
@@ -1181,7 +1165,7 @@ def test_grep_tool_default_excludes_gitignored(tmp_path: Path) -> None:
         output_mode="files_with_matches",
     )
 
-    matched_names = {os.path.basename(p) for p in result.output["matches"]}
+    matched_names = {os.path.basename(p) for p in result.content["matches"]}
     assert "a.log" not in matched_names
     assert "b.py" in matched_names
 
@@ -1200,7 +1184,7 @@ def test_grep_tool_default_excludes_hidden(tmp_path: Path) -> None:
         output_mode="files_with_matches",
     )
 
-    matched_names = {os.path.basename(p) for p in result.output["matches"]}
+    matched_names = {os.path.basename(p) for p in result.content["matches"]}
     assert ".hidden" not in matched_names
     assert "visible.py" in matched_names
 
@@ -1221,7 +1205,7 @@ def test_grep_tool_ignore_aware_false_includes_gitignored(tmp_path: Path) -> Non
         output_mode="files_with_matches",
     )
 
-    matched_names = {os.path.basename(p) for p in result.output["matches"]}
+    matched_names = {os.path.basename(p) for p in result.content["matches"]}
     assert "a.log" in matched_names
     assert "b.py" in matched_names
 
@@ -1240,7 +1224,7 @@ def test_grep_tool_hidden_aware_false_includes_hidden(tmp_path: Path) -> None:
         output_mode="files_with_matches",
     )
 
-    matched_names = {os.path.basename(p) for p in result.output["matches"]}
+    matched_names = {os.path.basename(p) for p in result.content["matches"]}
     assert ".hidden" in matched_names
     assert "visible.py" in matched_names
 
@@ -1262,7 +1246,7 @@ def test_grep_tool_glob_filter_still_respects_ignore(tmp_path: Path) -> None:
         glob="*.py",
     )
 
-    matched_names = {os.path.basename(p) for p in result.output["matches"]}
+    matched_names = {os.path.basename(p) for p in result.content["matches"]}
     assert "ignored.py" not in matched_names
     assert "kept.py" in matched_names
 
@@ -1284,7 +1268,7 @@ def test_glob_tool_returns_matching_paths(tmp_path: Path) -> None:
         path=str(target),
     )
 
-    output = result.output
+    output = result.content
     canonical_a = str((target / "a.py").resolve())
     canonical_b = str((target / "b.py").resolve())
     assert sorted(output["matches"]) == sorted([canonical_a, canonical_b])
@@ -1310,7 +1294,7 @@ def test_glob_tool_recursive_pattern(tmp_path: Path) -> None:
     )
 
     canonical = str((nested / "deep.py").resolve())
-    assert result.output["matches"] == [canonical]
+    assert result.content["matches"] == [canonical]
 
 
 def test_glob_tool_sorts_by_mtime_descending(tmp_path: Path) -> None:
@@ -1332,7 +1316,7 @@ def test_glob_tool_sorts_by_mtime_descending(tmp_path: Path) -> None:
     )
 
     canonicals = [str(p.resolve()) for p in paths]
-    assert result.output["matches"] == [canonicals[1], canonicals[2], canonicals[0]]
+    assert result.content["matches"] == [canonicals[1], canonicals[2], canonicals[0]]
 
 
 def test_glob_tool_head_limit_caps_output(tmp_path: Path) -> None:
@@ -1349,11 +1333,11 @@ def test_glob_tool_head_limit_caps_output(tmp_path: Path) -> None:
         head_limit=2,
     )
 
-    output = result.output
+    output = result.content
     assert len(output["matches"]) == 2
     assert output["total_matches"] == 5
     assert output["truncated"] is True
-    assert "truncated" in result.content
+    assert "truncated" in result.display_text
 
 
 def test_glob_tool_zero_matches(tmp_path: Path) -> None:
@@ -1368,12 +1352,12 @@ def test_glob_tool_zero_matches(tmp_path: Path) -> None:
         path=str(target),
     )
 
-    output = result.output
+    output = result.content
     assert output["matches"] == []
     assert output["total_matches"] == 0
     assert output["exit_code"] == 1
     assert output["truncated"] is False
-    assert result.content == "[no files matched]"
+    assert result.display_text == "[no files matched]"
 
 
 def test_glob_tool_brace_expansion(tmp_path: Path) -> None:
@@ -1390,7 +1374,7 @@ def test_glob_tool_brace_expansion(tmp_path: Path) -> None:
         path=str(target),
     )
 
-    output = result.output
+    output = result.content
     matched_names = {os.path.basename(p) for p in output["matches"]}
     assert matched_names == {"a.py", "b.txt"}
 
@@ -1407,7 +1391,7 @@ def test_glob_tool_returns_absolute_paths(tmp_path: Path) -> None:
         path=str(target),
     )
 
-    for p in result.output["matches"]:
+    for p in result.content["matches"]:
         assert os.path.isabs(p)
 
 
@@ -1434,7 +1418,7 @@ def test_glob_tool_default_excludes_gitignored(tmp_path: Path) -> None:
 
     result = GlobTool().call(call_id="call_1", pattern="*", path=str(target))
 
-    names = {os.path.basename(p) for p in result.output["matches"]}
+    names = {os.path.basename(p) for p in result.content["matches"]}
     assert "a.log" not in names
     assert "secret.txt" not in names
     assert "b.py" in names
@@ -1451,7 +1435,7 @@ def test_glob_tool_default_excludes_hidden(tmp_path: Path) -> None:
 
     result = GlobTool().call(call_id="call_1", pattern="*", path=str(target))
 
-    names = {os.path.basename(p) for p in result.output["matches"]}
+    names = {os.path.basename(p) for p in result.content["matches"]}
     assert ".hidden" not in names
     assert "inside.py" not in names
     assert "visible.py" in names
@@ -1472,7 +1456,7 @@ def test_glob_tool_ignore_aware_false_includes_gitignored(tmp_path: Path) -> Non
         path=str(target),
     )
 
-    names = {os.path.basename(p) for p in result.output["matches"]}
+    names = {os.path.basename(p) for p in result.content["matches"]}
     assert "a.log" in names
     assert "b.py" in names
 
@@ -1490,7 +1474,7 @@ def test_glob_tool_hidden_aware_false_includes_hidden(tmp_path: Path) -> None:
         path=str(target),
     )
 
-    names = {os.path.basename(p) for p in result.output["matches"]}
+    names = {os.path.basename(p) for p in result.content["matches"]}
     assert ".hidden" in names
     assert "visible.py" in names
 
@@ -1522,7 +1506,7 @@ def test_search_web_tool_happy_path() -> None:
             "Tut excerpt.",
         ),
     ]
-    with patch("codo.tools.web.search.DDGS") as mock_ddgs:
+    with patch("codo.core.tools.web.search.DDGS") as mock_ddgs:
         mock_ddgs.return_value.__enter__.return_value.text.return_value = raw
         result = SearchWebTool().call(call_id="call_1", query="pytorch")
 
@@ -1554,15 +1538,15 @@ def test_search_web_tool_happy_path() -> None:
         '[2 results for "pytorch"]'
     )
     assert result == ToolResultMessage(
-        content=expected_content,
+        content=expected_output,
         id="call_1",
-        output=expected_output,
+        display_text=expected_content,
     )
 
 
 def test_search_web_tool_clamps_num_results_to_max() -> None:
     """num_results above the cap is clamped before being passed to ddgs."""
-    with patch("codo.tools.web.search.DDGS") as mock_ddgs:
+    with patch("codo.core.tools.web.search.DDGS") as mock_ddgs:
         text = mock_ddgs.return_value.__enter__.return_value.text
         text.return_value = []
         SearchWebTool().call(call_id="call_1", query="x", num_results=50)
@@ -1572,7 +1556,7 @@ def test_search_web_tool_clamps_num_results_to_max() -> None:
 
 def test_search_web_tool_clamps_timeout_to_max() -> None:
     """Timeout above the cap is clamped before being passed to DDGS()."""
-    with patch("codo.tools.web.search.DDGS") as mock_ddgs:
+    with patch("codo.core.tools.web.search.DDGS") as mock_ddgs:
         mock_ddgs.return_value.__enter__.return_value.text.return_value = []
         SearchWebTool().call(call_id="call_1", query="x", timeout=9000)
 
@@ -1581,7 +1565,7 @@ def test_search_web_tool_clamps_timeout_to_max() -> None:
 
 def test_search_web_tool_uses_defaults_when_args_missing() -> None:
     """When num_results/timeout are omitted the class defaults are used."""
-    with patch("codo.tools.web.search.DDGS") as mock_ddgs:
+    with patch("codo.core.tools.web.search.DDGS") as mock_ddgs:
         text = mock_ddgs.return_value.__enter__.return_value.text
         text.return_value = []
         SearchWebTool().call(call_id="call_1", query="x")
@@ -1592,14 +1576,14 @@ def test_search_web_tool_uses_defaults_when_args_missing() -> None:
 
 def test_search_web_tool_empty_results_formats_no_results_footer() -> None:
     """Zero hits produces a ``[no results]`` content body and a success message."""
-    with patch("codo.tools.web.search.DDGS") as mock_ddgs:
+    with patch("codo.core.tools.web.search.DDGS") as mock_ddgs:
         mock_ddgs.return_value.__enter__.return_value.text.return_value = []
         result = SearchWebTool().call(call_id="call_1", query="nothing matches")
 
     assert result == ToolResultMessage(
-        content="[no results]",
+        content={"query": "nothing matches", "results": [], "timed_out": False},
         id="call_1",
-        output={"query": "nothing matches", "results": [], "timed_out": False},
+        display_text="[no results]",
     )
 
 
@@ -1607,16 +1591,16 @@ def test_search_web_tool_timeout_returns_tool_error_message() -> None:
     """``TimeoutException`` surfaces as a ToolErrorMessage with timed_out=True."""
     from ddgs.exceptions import TimeoutException
 
-    with patch("codo.tools.web.search.DDGS") as mock_ddgs:
+    with patch("codo.core.tools.web.search.DDGS") as mock_ddgs:
         mock_ddgs.return_value.__enter__.return_value.text.side_effect = (
             TimeoutException("ddgs timed out")
         )
         result = SearchWebTool().call(call_id="call_1", query="slow", timeout=1)
 
     assert result == ToolErrorMessage(
-        content="[no results]\n[timed out]",
+        content={"query": "slow", "results": [], "timed_out": True},
         id="call_1",
-        output={"query": "slow", "results": [], "timed_out": True},
+        display_text="[no results]\n[timed out]",
     )
 
 
@@ -1624,7 +1608,7 @@ def test_search_web_tool_arbitrary_exception_wraps_as_error_string() -> None:
     """Non-timeout failures propagate and are wrapped by BaseTool.call."""
     from ddgs.exceptions import DDGSException
 
-    with patch("codo.tools.web.search.DDGS") as mock_ddgs:
+    with patch("codo.core.tools.web.search.DDGS") as mock_ddgs:
         mock_ddgs.return_value.__enter__.return_value.text.side_effect = DDGSException(
             "rate limited"
         )
@@ -1632,18 +1616,18 @@ def test_search_web_tool_arbitrary_exception_wraps_as_error_string() -> None:
 
     assert isinstance(result, ToolErrorMessage)
     assert result.id == "call_1"
-    assert "rate limited" in result.content
-    assert result.content.startswith("Error while executing SearchWebTool:")
-    assert result.output == result.content
+    assert "rate limited" in result.display_text
+    assert result.display_text.startswith("Error while executing SearchWebTool:")
+    assert result.content == result.display_text
 
 
 def test_search_web_tool_handles_missing_fields_in_raw_hits() -> None:
     """Raw hits missing href/title/body keys default to empty strings."""
-    with patch("codo.tools.web.search.DDGS") as mock_ddgs:
+    with patch("codo.core.tools.web.search.DDGS") as mock_ddgs:
         mock_ddgs.return_value.__enter__.return_value.text.return_value = [{}]
         result = SearchWebTool().call(call_id="call_1", query="x")
 
-    assert result.output["results"] == [{"url": "", "title": "", "excerpt": ""}]
+    assert result.content["results"] == [{"url": "", "title": "", "excerpt": ""}]
 
 
 # — FetchWebTool —————————————————————————————————————————————————————————————
@@ -1670,8 +1654,8 @@ def test_fetch_web_tool_happy_path() -> None:
     tool, client = _fetch_tool_with_answer("The page covers X.")
 
     with (
-        patch("codo.tools.web.fetch.trafilatura") as traf,
-        patch("codo.tools.web.fetch.use_config"),
+        patch("codo.core.tools.web.fetch.trafilatura") as traf,
+        patch("codo.core.tools.web.fetch.use_config"),
     ):
         traf.fetch_url.return_value = "<html>...</html>"
         traf.extract.return_value = "# Heading\nbody"
@@ -1684,7 +1668,7 @@ def test_fetch_web_tool_happy_path() -> None:
             query="what does it cover?",
         )
 
-    output = result.output
+    output = result.content
     assert output["url"] == "https://x/final"
     assert output["title"] == "Title"
     assert output["query"] == "what does it cover?"
@@ -1693,7 +1677,7 @@ def test_fetch_web_tool_happy_path() -> None:
     assert output["truncated"] is False
     assert "retrieved_at" in output
     assert isinstance(result, ToolResultMessage)
-    assert result.content == "The page covers X.\n\n[Title — https://x/final]"
+    assert result.display_text == "The page covers X.\n\n[Title — https://x/final]"
 
     kwargs = client.build_request.call_args.kwargs
     assert kwargs["tools"] == []
@@ -1707,7 +1691,7 @@ def test_fetch_web_tool_rejects_non_http_url() -> None:
     result = tool.call(call_id="call_1", url="ftp://x", query="q")
 
     assert isinstance(result, ToolErrorMessage)
-    assert "url must be an http(s) URL" in result.content
+    assert "url must be an http(s) URL" in result.display_text
 
 
 def test_fetch_web_tool_fetch_failure_is_error() -> None:
@@ -1715,14 +1699,14 @@ def test_fetch_web_tool_fetch_failure_is_error() -> None:
     tool = FetchWebTool(client=MagicMock())
 
     with (
-        patch("codo.tools.web.fetch.trafilatura") as traf,
-        patch("codo.tools.web.fetch.use_config"),
+        patch("codo.core.tools.web.fetch.trafilatura") as traf,
+        patch("codo.core.tools.web.fetch.use_config"),
     ):
         traf.fetch_url.return_value = None
         result = tool.call(call_id="call_1", url="https://x", query="q")
 
     assert isinstance(result, ToolErrorMessage)
-    assert "failed to fetch https://x" in result.content
+    assert "failed to fetch https://x" in result.display_text
 
 
 def test_fetch_web_tool_empty_extraction_is_error() -> None:
@@ -1730,15 +1714,15 @@ def test_fetch_web_tool_empty_extraction_is_error() -> None:
     tool = FetchWebTool(client=MagicMock())
 
     with (
-        patch("codo.tools.web.fetch.trafilatura") as traf,
-        patch("codo.tools.web.fetch.use_config"),
+        patch("codo.core.tools.web.fetch.trafilatura") as traf,
+        patch("codo.core.tools.web.fetch.use_config"),
     ):
         traf.fetch_url.return_value = "<html></html>"
         traf.extract.return_value = None
         result = tool.call(call_id="call_1", url="https://x", query="q")
 
     assert isinstance(result, ToolErrorMessage)
-    assert "no readable content extracted from https://x" in result.content
+    assert "no readable content extracted from https://x" in result.display_text
 
 
 def test_fetch_web_tool_truncates_long_content() -> None:
@@ -1747,15 +1731,15 @@ def test_fetch_web_tool_truncates_long_content() -> None:
     long_text = "a" * (FetchWebTool._max_content_chars + 10)
 
     with (
-        patch("codo.tools.web.fetch.trafilatura") as traf,
-        patch("codo.tools.web.fetch.use_config"),
+        patch("codo.core.tools.web.fetch.trafilatura") as traf,
+        patch("codo.core.tools.web.fetch.use_config"),
     ):
         traf.fetch_url.return_value = "<html></html>"
         traf.extract.return_value = long_text
         traf.extract_metadata.return_value = SimpleNamespace(title="T", url="https://x")
         result = tool.call(call_id="call_1", url="https://x", query="q")
 
-    assert result.output["truncated"] is True
+    assert result.content["truncated"] is True
     sent = client.build_request.call_args.kwargs["messages"][0].content
     assert "a" * FetchWebTool._max_content_chars in sent
     assert "a" * (FetchWebTool._max_content_chars + 1) not in sent
@@ -1766,8 +1750,8 @@ def test_fetch_web_tool_clamps_timeout_to_max() -> None:
     tool, _ = _fetch_tool_with_answer("ok")
 
     with (
-        patch("codo.tools.web.fetch.trafilatura") as traf,
-        patch("codo.tools.web.fetch.use_config") as mock_use_config,
+        patch("codo.core.tools.web.fetch.trafilatura") as traf,
+        patch("codo.core.tools.web.fetch.use_config") as mock_use_config,
     ):
         cfg = mock_use_config.return_value
         traf.fetch_url.return_value = "<html></html>"
@@ -1785,8 +1769,8 @@ def test_fetch_web_tool_empty_answer_is_error() -> None:
     tool, _ = _fetch_tool_with_answer("")
 
     with (
-        patch("codo.tools.web.fetch.trafilatura") as traf,
-        patch("codo.tools.web.fetch.use_config"),
+        patch("codo.core.tools.web.fetch.trafilatura") as traf,
+        patch("codo.core.tools.web.fetch.use_config"),
     ):
         traf.fetch_url.return_value = "<html></html>"
         traf.extract.return_value = "body"
@@ -1796,7 +1780,7 @@ def test_fetch_web_tool_empty_answer_is_error() -> None:
         result = tool.call(call_id="call_1", url="https://x", query="q")
 
     assert isinstance(result, ToolErrorMessage)
-    assert "summarization produced no answer" in result.content
+    assert "summarization produced no answer" in result.display_text
 
 
 def test_fetch_web_tool_llm_failure_is_error() -> None:
@@ -1806,8 +1790,8 @@ def test_fetch_web_tool_llm_failure_is_error() -> None:
     tool = FetchWebTool(client=client)
 
     with (
-        patch("codo.tools.web.fetch.trafilatura") as traf,
-        patch("codo.tools.web.fetch.use_config"),
+        patch("codo.core.tools.web.fetch.trafilatura") as traf,
+        patch("codo.core.tools.web.fetch.use_config"),
     ):
         traf.fetch_url.return_value = "<html></html>"
         traf.extract.return_value = "body"
@@ -1817,4 +1801,4 @@ def test_fetch_web_tool_llm_failure_is_error() -> None:
         result = tool.call(call_id="call_1", url="https://x", query="q")
 
     assert isinstance(result, ToolErrorMessage)
-    assert "llm down" in result.content
+    assert "llm down" in result.display_text

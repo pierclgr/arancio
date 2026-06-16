@@ -1,4 +1,4 @@
-"""Tests for ``codo.clients.litellm.LiteLLMClient``."""
+"""Tests for ``codo.core.clients.litellm.LiteLLMClient``."""
 
 import json
 from types import SimpleNamespace
@@ -6,9 +6,9 @@ from unittest.mock import Mock
 
 import pytest
 
-import codo.clients.litellm as litellm_module
-from codo.clients.litellm import LiteLLMClient
-from codo.types.messages import (
+import codo.core.clients.litellm as litellm_module
+from codo.core.clients.litellm import LiteLLMClient
+from codo.core.types.messages import (
     AssistantChunkMessage,
     AssistantMessage,
     ReasoningMessage,
@@ -16,8 +16,8 @@ from codo.types.messages import (
     ToolResultMessage,
     UserMessage,
 )
-from codo.types.requests import BaseRequest
-from codo.types.tools import ToolSchema
+from codo.core.types.requests import BaseRequest
+from codo.core.types.tools import ToolSchema
 
 
 def _build_response(output: list) -> SimpleNamespace:
@@ -166,7 +166,10 @@ def test_send_request_converts_full_message_history(
                 arguments={"a": 1, "b": 2},
                 content="add({...})",
             ),
-            ToolResultMessage(id="call-1", content="3", output="3"),
+            ToolResultMessage(
+                id="call-1",
+                content="3",
+            ),
         ],
     )
 
@@ -199,7 +202,7 @@ def test_send_request_serializes_non_string_tool_result_output(
     request = BaseRequest(
         model_id="openai/gpt-4o",
         message_list=[
-            ToolResultMessage(id="call-1", content="...", output={"result": 3}),
+            ToolResultMessage(id="call-1", content={"result": 3}, display_text="..."),
         ],
     )
 

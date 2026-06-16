@@ -4,14 +4,12 @@ from typing import List
 
 import pytest
 
-from codo.agents import Agent
-from codo.clients.base import BaseClient
-from codo.exceptions import MaxTurnsException
-from codo.parsers.tool_result.base import BaseToolResultParser
-from codo.permissions.manager import PermissionManager
-from codo.permissions.permission import PermissionCategory, PermissionLevel
-from codo.tools.base import BaseTool
-from codo.types.messages import (
+from codo.core.agents import Agent
+from codo.core.clients.base import BaseClient
+from codo.core.parsers.tool_result.base import BaseToolResultParser
+from codo.core.permissions.manager import PermissionManager
+from codo.core.tools.base import BaseTool
+from codo.core.types.messages import (
     AssistantChunkMessage,
     AssistantMessage,
     ErrorMessage,
@@ -22,7 +20,8 @@ from codo.types.messages import (
     ToolResultMessage,
     UserMessage,
 )
-from codo.types.requests import BaseRequest
+from codo.core.types.permissions import PermissionCategory, PermissionLevel
+from codo.core.types.requests import BaseRequest
 
 
 class _ReasoningClient(BaseClient):
@@ -131,7 +130,6 @@ class _EchoToolResultParser(BaseToolResultParser):
         return result_class(
             content=output,
             id=call_id,
-            output=output,
         )
 
 
@@ -317,6 +315,7 @@ class _StubManager:
         tools: List[BaseTool] | None = None,
         decisions: dict[str, bool] | None = None,
         default: bool = True,
+        message: Message | None = None,
     ) -> None:
         """Initialize the stub with the tools to expose and decision maps.
 
@@ -325,10 +324,13 @@ class _StubManager:
             decisions: per-call-id or per-name allow/deny answers for
                 ``validate``.
             default: decision returned by ``validate`` when no entry matches.
+            message: message returned by ``validate`` alongside its decision; a
+                denial with no message falls back to a ``ToolErrorMessage``.
         """
         self._tools = tools or []
         self._decisions = decisions or {}
         self._default = default
+        self._message = message
 
     def allowed_tools(self) -> List[BaseTool]:
         """Return the configured tools the agent may access.
@@ -338,18 +340,27 @@ class _StubManager:
         """
         return self._tools
 
-    def validate(self, call: ToolCallMessage) -> bool:
-        """Return the configured decision for a call, defaulting to denial.
+    def validate(self, call: ToolCallMessage) -> tuple[bool, Message | None]:
+        """Return the configured decision and message for a call.
 
         Args:
             call: the tool call to decide on.
 
         Returns:
-            The decision keyed by call id, then by tool name, else default.
+            An ``(allowed, message)`` pair; the decision is keyed by call id,
+            then by tool name, else the default. A denial returns the
+            configured message or a default ``ToolErrorMessage``.
         """
         if call.id in self._decisions:
-            return self._decisions[call.id]
-        return self._decisions.get(call.name, self._default)
+            authorized = self._decisions[call.id]
+        else:
+            authorized = self._decisions.get(call.name, self._default)
+        if authorized:
+            return True, self._message
+        if self._message is not None:
+            return False, self._message
+        denial = f"Tool call {call.name} denied by user."
+        return False, ToolErrorMessage(content=denial, id=call.id)
 
     def __repr__(self) -> str:
         """Return a fixed representation for deterministic repr assertions.
@@ -411,7 +422,7 @@ def test_agent_returns_tool_call_result_and_final_response() -> None:
             name="EchoTool",
             arguments={"text": "hello"},
         ),
-        ToolResultMessage(content="hello", id="call_1", output="hello"),
+        ToolResultMessage(content="hello", id="call_1"),
         AssistantMessage(content="done"),
     ]
 
@@ -433,7 +444,6 @@ def test_agent_yields_error_message_for_unknown_tool() -> None:
         ToolErrorMessage(
             content="Unknown tool MissingTool",
             id="call_1",
-            output="Unknown tool MissingTool",
         ),
         AssistantMessage(content="done"),
     ]
@@ -441,7 +451,6 @@ def test_agent_yields_error_message_for_unknown_tool() -> None:
         ToolErrorMessage(
             content="Unknown tool MissingTool",
             id="call_1",
-            output="Unknown tool MissingTool",
         )
         in agent._message_history
     )
@@ -464,7 +473,6 @@ def test_agent_yields_error_message_for_failing_tool() -> None:
         ToolErrorMessage(
             content="Error while executing FailingTool: boom",
             id="call_1",
-            output="Error while executing FailingTool: boom",
         ),
         AssistantMessage(content="done"),
     ]
@@ -472,7 +480,6 @@ def test_agent_yields_error_message_for_failing_tool() -> None:
         ToolErrorMessage(
             content="Error while executing FailingTool: boom",
             id="call_1",
-            output="Error while executing FailingTool: boom",
         )
         in agent._message_history
     )
@@ -481,7 +488,7 @@ def test_agent_yields_error_message_for_failing_tool() -> None:
 def test_agent_yields_error_message_for_loop_exception() -> None:
     """Agent-loop exceptions are yielded as error messages."""
     client = _FailingClient()
-    agent = Agent(client=client, permission_manager=_StubManager())
+    agent = Agent(client=client, permission_manager=_StubManager(), retry_delay=0)
 
     response = list(agent.run(UserMessage(content="hello")))
 
@@ -510,8 +517,8 @@ def test_agent_yields_error_but_does_not_retry_after_finalized() -> None:
     assert all(not isinstance(msg, ErrorMessage) for msg in agent._message_history)
 
 
-def test_agent_yields_error_message_before_max_turns_exception() -> None:
-    """Max turn exhaustion yields an error message before raising."""
+def test_agent_yields_error_message_when_max_turns_exceeded() -> None:
+    """Max turn exhaustion yields an error message, then the run ends."""
     agent = Agent(
         client=_ToolLoopClient(),
         max_turns=1,
@@ -528,11 +535,10 @@ def test_agent_yields_error_message_before_max_turns_exception() -> None:
     assert next(stream) == ToolResultMessage(
         content="hello",
         id="call_1",
-        output="hello",
     )
     assert next(stream) == ErrorMessage(content="Max turns exceeded")
 
-    with pytest.raises(MaxTurnsException):
+    with pytest.raises(StopIteration):
         next(stream)
 
 
@@ -554,7 +560,6 @@ def test_agent_yields_tool_result_before_next_model_request() -> None:
     assert next(stream) == ToolResultMessage(
         content="hello",
         id="call_1",
-        output="hello",
     )
     assert len(client.requests) == 1
 
@@ -582,14 +587,15 @@ def test_agent_repr_includes_configuration_without_history_contents() -> None:
     )
 
 
-def test_agent_denied_tool_yields_denial_result_and_skips_execution() -> None:
-    """A denied tool call yields a plain denial result and does not execute."""
+def test_agent_denied_tool_yields_error_and_skips_execution() -> None:
+    """A denied tool call yields a tool error and does not execute."""
     client = _ToolLoopClient()
     manager = _StubManager(tools=[EchoTool()], decisions={"EchoTool": False})
     agent = Agent(client=client, permission_manager=manager)
 
     response = list(agent.run(UserMessage(content="hello")))
 
+    denial = "Tool call EchoTool denied by user."
     assert response == [
         ToolCallMessage(
             content='EchoTool({"text": "hello"})',
@@ -597,16 +603,38 @@ def test_agent_denied_tool_yields_denial_result_and_skips_execution() -> None:
             name="EchoTool",
             arguments={"text": "hello"},
         ),
-        ToolResultMessage(
-            content="Tool call EchoTool denied by user.",
-            id="call_1",
-            output="Tool call EchoTool denied by user.",
-        ),
+        ToolErrorMessage(content=denial, id="call_1"),
         AssistantMessage(content="done"),
     ]
-    denial = response[1]
-    assert type(denial) is ToolResultMessage
-    assert not isinstance(denial, ErrorMessage)
+    assert type(response[1]) is ToolErrorMessage
+
+
+def test_agent_allowed_tool_with_note_yields_result_then_note() -> None:
+    """Approving with a note yields the result and the note as separate messages."""
+    client = _ToolLoopClient()
+    note = UserMessage(content="use it carefully")
+    manager = _StubManager(
+        tools=[EchoTool()], decisions={"EchoTool": True}, message=note
+    )
+    agent = Agent(client=client, permission_manager=manager)
+
+    response = list(agent.run(UserMessage(content="hello")))
+
+    result = ToolResultMessage(content="hello", id="call_1")
+    assert response == [
+        ToolCallMessage(
+            content='EchoTool({"text": "hello"})',
+            id="call_1",
+            name="EchoTool",
+            arguments={"text": "hello"},
+        ),
+        result,
+        note,
+        AssistantMessage(content="done"),
+    ]
+    # both the result and the note are stored in history for the model
+    assert result in agent._message_history
+    assert note in agent._message_history
 
 
 def test_agent_allowed_auto_tool_executes() -> None:
@@ -624,7 +652,7 @@ def test_agent_allowed_auto_tool_executes() -> None:
             name="EchoTool",
             arguments={"text": "hello"},
         ),
-        ToolResultMessage(content="hello", id="call_1", output="hello"),
+        ToolResultMessage(content="hello", id="call_1"),
         AssistantMessage(content="done"),
     ]
 
@@ -659,11 +687,10 @@ def test_agent_mixed_calls_allowed_and_denied_keep_history_coherent() -> None:
             name="EchoTool",
             arguments={"text": "B"},
         ),
-        ToolResultMessage(content="A", id="a", output="A"),
-        ToolResultMessage(
+        ToolResultMessage(content="A", id="a"),
+        ToolErrorMessage(
             content="Tool call EchoTool denied by user.",
             id="b",
-            output="Tool call EchoTool denied by user.",
         ),
         AssistantMessage(content="done"),
     ]

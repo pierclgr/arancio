@@ -1,14 +1,14 @@
 """Tests for tool result parsers."""
 
-from codo.parsers.tool_result.commands.shell import ShellCommandToolResultParser
-from codo.parsers.tool_result.files.edit import EditFileToolResultParser
-from codo.parsers.tool_result.files.glob import GlobToolResultParser
-from codo.parsers.tool_result.files.grep import GrepToolResultParser
-from codo.parsers.tool_result.files.read import ReadFileToolResultParser
-from codo.parsers.tool_result.files.write import WriteFileToolResultParser
-from codo.parsers.tool_result.web.fetch import FetchWebToolResultParser
-from codo.parsers.tool_result.web.search import SearchWebToolResultParser
-from codo.types.messages import ToolErrorMessage, ToolResultMessage
+from codo.core.parsers.tool_result.commands.shell import ShellCommandToolResultParser
+from codo.core.parsers.tool_result.files.edit import EditFileToolResultParser
+from codo.core.parsers.tool_result.files.glob import GlobToolResultParser
+from codo.core.parsers.tool_result.files.grep import GrepToolResultParser
+from codo.core.parsers.tool_result.files.read import ReadFileToolResultParser
+from codo.core.parsers.tool_result.files.write import WriteFileToolResultParser
+from codo.core.parsers.tool_result.web.fetch import FetchWebToolResultParser
+from codo.core.parsers.tool_result.web.search import SearchWebToolResultParser
+from codo.core.types.messages import ToolErrorMessage, ToolResultMessage
 
 
 def test_shell_command_parser_keeps_stdout_successful() -> None:
@@ -24,9 +24,9 @@ def test_shell_command_parser_keeps_stdout_successful() -> None:
     result = ShellCommandToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="ok",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="ok",
     )
 
 
@@ -43,9 +43,9 @@ def test_shell_command_parser_reports_stderr_without_failing() -> None:
     result = ShellCommandToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="warning",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="warning",
     )
 
 
@@ -62,9 +62,9 @@ def test_shell_command_parser_marks_non_zero_exit_code_as_error() -> None:
     result = ShellCommandToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolErrorMessage(
-        content="fatal\n[exit code 2]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="fatal\n[exit code 2]",
     )
 
 
@@ -81,9 +81,9 @@ def test_shell_command_parser_marks_timeout_as_error() -> None:
     result = ShellCommandToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolErrorMessage(
-        content="partial\n[timed out]\n[exit code -1]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="partial\n[timed out]\n[exit code -1]",
     )
 
 
@@ -100,7 +100,6 @@ def test_shell_command_parser_honors_explicit_error_flag() -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )
 
 
@@ -117,9 +116,9 @@ def test_read_tool_parser_formats_successful_slice() -> None:
     result = ReadFileToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="     1\thello\n     2\tworld\n[lines 1-2 of 2]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="     1\thello\n     2\tworld\n[lines 1-2 of 2]",
     )
 
 
@@ -136,9 +135,9 @@ def test_read_tool_parser_marks_empty_file() -> None:
     result = ReadFileToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="[empty file]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="[empty file]",
     )
 
 
@@ -155,9 +154,9 @@ def test_read_tool_parser_marks_offset_past_end() -> None:
     result = ReadFileToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="[no lines returned, file has 5 lines]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="[no lines returned, file has 5 lines]",
     )
 
 
@@ -174,12 +173,12 @@ def test_read_tool_parser_reports_truncated_lines() -> None:
     result = ReadFileToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content=(
+        content=output,
+        id="call_1",
+        display_text=(
             "     1\thello… [line truncated]\n[lines 1-1 of 1]\n"
             "[1 long lines truncated]"
         ),
-        id="call_1",
-        output=output,
     )
 
 
@@ -196,7 +195,6 @@ def test_read_tool_parser_honors_explicit_error_flag() -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )
 
 
@@ -212,9 +210,9 @@ def test_write_tool_parser_reports_created() -> None:
     result = WriteFileToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="Created /abs/new.txt (12 bytes, 2 lines)",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="Created /abs/new.txt (12 bytes, 2 lines)",
     )
 
 
@@ -230,9 +228,9 @@ def test_write_tool_parser_reports_overwritten() -> None:
     result = WriteFileToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="Overwrote /abs/file.txt (5 bytes, 1 lines)",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="Overwrote /abs/file.txt (5 bytes, 1 lines)",
     )
 
 
@@ -249,7 +247,6 @@ def test_write_tool_parser_honors_explicit_error_flag() -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )
 
 
@@ -266,9 +263,9 @@ def test_edit_tool_parser_reports_single_replacement() -> None:
     result = EditFileToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="Edited /abs/file.py (1 replacement, 12 → 13 bytes)",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="Edited /abs/file.py (1 replacement, 12 → 13 bytes)",
     )
 
 
@@ -285,9 +282,9 @@ def test_edit_tool_parser_reports_plural_replacements() -> None:
     result = EditFileToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="Edited /abs/file.py (3 replacements, 30 → 33 bytes)",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="Edited /abs/file.py (3 replacements, 30 → 33 bytes)",
     )
 
 
@@ -306,9 +303,9 @@ def test_edit_tool_parser_appends_diff() -> None:
     result = EditFileToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content=f"Edited /abs/file.py (1 replacement, 5 → 5 bytes)\n{diff}",
+        content=output,
         id="call_1",
-        output=output,
+        display_text=f"Edited /abs/file.py (1 replacement, 5 → 5 bytes)\n{diff}",
     )
 
 
@@ -325,7 +322,6 @@ def test_edit_tool_parser_honors_explicit_error_flag() -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )
 
 
@@ -346,9 +342,9 @@ def test_grep_parser_files_with_matches() -> None:
     result = GrepToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="/abs/a.py\n/abs/b.py\n[2 files matched]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="/abs/a.py\n/abs/b.py\n[2 files matched]",
     )
 
 
@@ -382,9 +378,9 @@ def test_grep_parser_content_mode() -> None:
         "/abs/a.py:3:def foo():\n/abs/b.py:7:def bar():\n[2 matches across 2 files]"
     )
     assert result == ToolResultMessage(
-        content=expected,
+        content=output,
         id="call_1",
-        output=output,
+        display_text=expected,
     )
 
 
@@ -405,9 +401,9 @@ def test_grep_parser_count_mode() -> None:
     result = GrepToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="/abs/a.py:5\n/abs/b.py:3\n[2 files with matches]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="/abs/a.py:5\n/abs/b.py:3\n[2 files with matches]",
     )
 
 
@@ -425,9 +421,9 @@ def test_grep_parser_truncated_output() -> None:
     result = GrepToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="/abs/a.py\n[output truncated, showing first 1 of 42]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="/abs/a.py\n[output truncated, showing first 1 of 42]",
     )
 
 
@@ -445,9 +441,9 @@ def test_grep_parser_timeout() -> None:
     result = GrepToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolErrorMessage(
-        content="[0 matches across 0 files]\n[timed out]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="[0 matches across 0 files]\n[timed out]",
     )
 
 
@@ -464,7 +460,6 @@ def test_grep_parser_explicit_error_flag() -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )
 
 
@@ -486,9 +481,9 @@ def test_glob_parser_formats_matches_with_footer() -> None:
     result = GlobToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="/abs/b.py\n/abs/a.py\n[2 files matched, sorted by mtime]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="/abs/b.py\n/abs/a.py\n[2 files matched, sorted by mtime]",
     )
 
 
@@ -507,9 +502,9 @@ def test_glob_parser_empty_match() -> None:
     result = GlobToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="[no files matched]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="[no files matched]",
     )
 
 
@@ -528,9 +523,9 @@ def test_glob_parser_singular_noun() -> None:
     result = GlobToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="/abs/only.py\n[1 file matched, sorted by mtime]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="/abs/only.py\n[1 file matched, sorted by mtime]",
     )
 
 
@@ -549,9 +544,9 @@ def test_glob_parser_truncated_output() -> None:
     result = GlobToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="/abs/a.py\n[output truncated, showing first 1 of 42]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="/abs/a.py\n[output truncated, showing first 1 of 42]",
     )
 
 
@@ -570,9 +565,9 @@ def test_glob_parser_timeout() -> None:
     result = GlobToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolErrorMessage(
-        content="[no files matched]\n[timed out]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="[no files matched]\n[timed out]",
     )
 
 
@@ -589,7 +584,6 @@ def test_glob_parser_explicit_error_flag() -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )
 
 
@@ -629,9 +623,9 @@ def test_search_web_parser_formats_results_with_footer() -> None:
         '[2 results for "pytorch"]'
     )
     assert result == ToolResultMessage(
-        content=expected_content,
+        content=output,
         id="call_1",
-        output=output,
+        display_text=expected_content,
     )
 
 
@@ -648,9 +642,9 @@ def test_search_web_parser_singular_noun() -> None:
     result = SearchWebToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content=('1. T\n   https://x\n   E\n\n[1 result for "only one"]'),
+        content=output,
         id="call_1",
-        output=output,
+        display_text=('1. T\n   https://x\n   E\n\n[1 result for "only one"]'),
     )
 
 
@@ -661,9 +655,9 @@ def test_search_web_parser_empty_results() -> None:
     result = SearchWebToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="[no results]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="[no results]",
     )
 
 
@@ -674,9 +668,9 @@ def test_search_web_parser_timeout() -> None:
     result = SearchWebToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolErrorMessage(
-        content="[no results]\n[timed out]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="[no results]\n[timed out]",
     )
 
 
@@ -693,7 +687,6 @@ def test_search_web_parser_explicit_error_flag() -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )
 
 
@@ -715,9 +708,9 @@ def test_fetch_web_parser_formats_answer_with_footer() -> None:
     result = FetchWebToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="The page covers X.\n\n[Title — https://x/final]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="The page covers X.\n\n[Title — https://x/final]",
     )
 
 
@@ -736,9 +729,9 @@ def test_fetch_web_parser_appends_truncated_marker() -> None:
     result = FetchWebToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="answer\n\n[T — https://x]\n[content truncated]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="answer\n\n[T — https://x]\n[content truncated]",
     )
 
 
@@ -757,9 +750,9 @@ def test_fetch_web_parser_empty_answer_marker() -> None:
     result = FetchWebToolResultParser.parse(call_id="call_1", output=output)
 
     assert result == ToolResultMessage(
-        content="[no answer]\n\n[https://x]",
+        content=output,
         id="call_1",
-        output=output,
+        display_text="[no answer]\n\n[https://x]",
     )
 
 
@@ -776,5 +769,4 @@ def test_fetch_web_parser_explicit_error_flag() -> None:
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
-        output=output,
     )

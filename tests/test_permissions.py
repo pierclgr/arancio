@@ -2,9 +2,9 @@
 
 import pytest
 
-from codo.permissions.manager import PermissionManager
-from codo.permissions.permission import PermissionCategory, PermissionLevel
-from codo.types.messages import ToolCallMessage
+from codo.core.permissions.manager import PermissionManager
+from codo.core.types.messages import ToolCallMessage, ToolErrorMessage, UserMessage
+from codo.core.types.permissions import PermissionCategory, PermissionLevel
 
 
 def _call(name: str) -> ToolCallMessage:
@@ -68,7 +68,7 @@ def test_validate_auto_true_without_prompt(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr("builtins.input", _boom)
     manager = PermissionManager({PermissionCategory.EXECUTE: PermissionLevel.AUTO})
 
-    assert manager.validate(_call("BashCommandTool")) is True
+    assert manager.validate(_call("BashCommandTool")) == (True, None)
 
 
 @pytest.mark.parametrize("answer", ["y", "Y", " y ", "  Y  "])
@@ -79,18 +79,47 @@ def test_validate_ask_allows_on_yes(
     monkeypatch.setattr("builtins.input", lambda *a, **k: answer)
     manager = PermissionManager({PermissionCategory.WRITE: PermissionLevel.ASK})
 
-    assert manager.validate(_call("WriteFileTool")) is True
+    assert manager.validate(_call("WriteFileTool")) == (True, None)
 
 
-@pytest.mark.parametrize("answer", ["", "n", "N", "no", "yes please", "ok"])
+def test_validate_ask_allows_with_note(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``y, <note>`` allows and wraps the note in a report-then-answer instruction."""
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y, be careful")
+    manager = PermissionManager({PermissionCategory.WRITE: PermissionLevel.ASK})
+
+    allowed, message = manager.validate(_call("WriteFileTool"))
+
+    assert allowed is True
+    assert isinstance(message, UserMessage)
+    assert message.display_text == "be careful"
+    assert "be careful" in message.content
+
+
+def test_validate_ask_allows_with_empty_note(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``y,`` with no note allows the call with no message."""
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y,")
+    manager = PermissionManager({PermissionCategory.WRITE: PermissionLevel.ASK})
+
+    assert manager.validate(_call("WriteFileTool")) == (True, None)
+
+
+@pytest.mark.parametrize(
+    "answer", ["", "n", "no", "yes please", "use the read tool instead"]
+)
 def test_validate_ask_denies_on_non_yes(
     monkeypatch: pytest.MonkeyPatch, answer: str
 ) -> None:
-    """ASK grants deny on any answer other than ``y``."""
+    """ASK grants deny on any non-``y`` answer, returning a tool error."""
     monkeypatch.setattr("builtins.input", lambda *a, **k: answer)
     manager = PermissionManager({PermissionCategory.WRITE: PermissionLevel.ASK})
 
-    assert manager.validate(_call("WriteFileTool")) is False
+    allowed, message = manager.validate(_call("WriteFileTool"))
+
+    assert allowed is False
+    assert isinstance(message, ToolErrorMessage)
+    assert message.id == "call_1"
+    if answer:
+        assert answer in message.content
 
 
 def test_validate_absent_category_denies(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -102,14 +131,22 @@ def test_validate_absent_category_denies(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr("builtins.input", _boom)
     manager = PermissionManager({PermissionCategory.READ: PermissionLevel.ASK})
 
-    assert manager.validate(_call("WriteFileTool")) is False
+    content = "Usage of WriteFileTool is not permitted."
+    assert manager.validate(_call("WriteFileTool")) == (
+        False,
+        ToolErrorMessage(content=content, id="call_1"),
+    )
 
 
 def test_validate_uncategorized_denies() -> None:
     """Calls to tools that map to no category are denied."""
     manager = PermissionManager({PermissionCategory.READ: PermissionLevel.AUTO})
 
-    assert manager.validate(_call("EchoTool")) is False
+    content = "Usage of EchoTool is not permitted."
+    assert manager.validate(_call("EchoTool")) == (
+        False,
+        ToolErrorMessage(content=content, id="call_1"),
+    )
 
 
 def test_add_and_remove() -> None:
@@ -117,10 +154,14 @@ def test_add_and_remove() -> None:
     manager = PermissionManager()
 
     manager.remove_permission(PermissionCategory.WEB)
-    assert manager.validate(_call("SearchWebTool")) is False
+    content = "Usage of SearchWebTool is not permitted."
+    assert manager.validate(_call("SearchWebTool")) == (
+        False,
+        ToolErrorMessage(content=content, id="call_1"),
+    )
 
     manager.add_permission(PermissionCategory.WEB, PermissionLevel.AUTO)
-    assert manager.validate(_call("SearchWebTool")) is True
+    assert manager.validate(_call("SearchWebTool")) == (True, None)
 
 
 def test_add_permission_defaults_to_ask() -> None:

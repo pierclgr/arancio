@@ -1,6 +1,6 @@
 """Tests for the shared tool session registry."""
 
-from codo.tools.session import ToolSession
+from codo.core.tools.session import ToolSession
 
 
 def test_session_records_and_recalls_reads() -> None:
