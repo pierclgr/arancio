@@ -14,7 +14,7 @@ Before writing the file, please follow these steps:
   - `file_path` argument is required and must be an absolute path.
   - `content` argument is required. It is written verbatim as UTF-8; no implicit trailing newline is appended. To produce a POSIX-style file ending in a newline, include `\n` at the end of `content`.
   - Prefer `EditFileTool` over `WriteFileTool` for incremental modifications to an existing file, since `EditFileTool` ships only the diff. Use `WriteFileTool` for new files or full rewrites.
-  - This tool is free to create documentation files (`*.md`, `README*`) at the model's own initiative. The `codo` agent intentionally has no "no auto-create docs" rule because documentation generation is a core part of this agent's behavior.
+  - This tool is free to create documentation files (`*.md`, `README*`) at the model's own initiative. The `arancio` agent intentionally has no "no auto-create docs" rule because documentation generation is a core part of this agent's behavior.
 
 ## **VERY IMPORTANT**
 - *NEVER* attempt to bypass the read-first guard by invoking `BashCommandTool` (e.g. `echo ... > file`, `tee`, `sed -i`). Such bypasses defeat the safety mechanism that prevents blind clobbers of files the model has not seen.

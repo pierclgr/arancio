@@ -4,12 +4,12 @@ from typing import List
 
 import pytest
 
-from codo.core.agents import Agent
-from codo.core.clients.base import BaseClient
-from codo.core.parsers.tool_result.base import BaseToolResultParser
-from codo.core.permissions.manager import PermissionManager
-from codo.core.tools.base import BaseTool
-from codo.core.types.messages import (
+from arancio.core.agents import Agent
+from arancio.core.clients.base import BaseClient
+from arancio.core.parsers.tool_result.base import BaseToolResultParser
+from arancio.core.permissions.manager import PermissionManager
+from arancio.core.tools.base import BaseTool
+from arancio.core.types.messages import (
     AssistantChunkMessage,
     AssistantMessage,
     ErrorMessage,
@@ -20,8 +20,8 @@ from codo.core.types.messages import (
     ToolResultMessage,
     UserMessage,
 )
-from codo.core.types.permissions import PermissionCategory, PermissionLevel
-from codo.core.types.requests import BaseRequest
+from arancio.core.types.permissions import PermissionCategory, PermissionLevel
+from arancio.core.types.requests import BaseRequest
 
 
 class _ReasoningClient(BaseClient):

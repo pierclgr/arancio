@@ -1,8 +1,8 @@
 """Tests for ToolManager: constructing tools from granted categories."""
 
-from codo.core.tools.manager import ToolManager
-from codo.core.tools.web.fetch import FetchWebTool
-from codo.core.types.permissions import PermissionCategory, PermissionLevel
+from arancio.core.tools.manager import ToolManager
+from arancio.core.tools.web.fetch import FetchWebTool
+from arancio.core.types.permissions import PermissionCategory, PermissionLevel
 
 
 def test_create_tools_empty_returns_no_tools() -> None:

@@ -11,23 +11,23 @@ import pytest
 import yaml
 from dynamic_markdown.types.files.base import DynamicMarkdownFile
 
-from codo.core.parsers.tool_result.base import BaseToolResultParser
-from codo.core.tools.base import BaseTool
-from codo.core.tools.commands.powershell import PowershellCommandTool
-from codo.core.tools.files.edit import EditFileTool
-from codo.core.tools.files.glob import GlobTool
-from codo.core.tools.files.grep import GrepTool
-from codo.core.tools.files.read import ReadFileTool
-from codo.core.tools.files.write import WriteFileTool
-from codo.core.tools.session import default_session
-from codo.core.tools.web.fetch import FetchWebTool
-from codo.core.tools.web.search import SearchWebTool
-from codo.core.types.messages import (
+from arancio.core.parsers.tool_result.base import BaseToolResultParser
+from arancio.core.tools.base import BaseTool
+from arancio.core.tools.commands.powershell import PowershellCommandTool
+from arancio.core.tools.files.edit import EditFileTool
+from arancio.core.tools.files.glob import GlobTool
+from arancio.core.tools.files.grep import GrepTool
+from arancio.core.tools.files.read import ReadFileTool
+from arancio.core.tools.files.write import WriteFileTool
+from arancio.core.tools.session import default_session
+from arancio.core.tools.web.fetch import FetchWebTool
+from arancio.core.tools.web.search import SearchWebTool
+from arancio.core.types.messages import (
     AssistantMessage,
     ToolErrorMessage,
     ToolResultMessage,
 )
-from codo.core.types.tools import ToolSchema
+from arancio.core.types.tools import ToolSchema
 
 
 @pytest.fixture(autouse=True)
@@ -114,8 +114,8 @@ def test_tool_exception_routes_through_result_parser() -> None:
     )
 
 
-@patch("codo.core.tools.commands.powershell.subprocess.run")
-@patch("codo.core.tools.commands.powershell.shutil.which")
+@patch("arancio.core.tools.commands.powershell.subprocess.run")
+@patch("arancio.core.tools.commands.powershell.shutil.which")
 def test_powershell_command_prefers_windows_powershell(
     which_mock,
     run_mock,
@@ -166,8 +166,8 @@ def test_powershell_command_prefers_windows_powershell(
     )
 
 
-@patch("codo.core.tools.commands.powershell.subprocess.run")
-@patch("codo.core.tools.commands.powershell.shutil.which")
+@patch("arancio.core.tools.commands.powershell.subprocess.run")
+@patch("arancio.core.tools.commands.powershell.shutil.which")
 def test_powershell_command_falls_back_to_pwsh(which_mock, run_mock) -> None:
     """PowerShell tool falls back to pwsh when powershell.exe is unavailable."""
     which_mock.side_effect = lambda name: "pwsh" if name == "pwsh" else None
@@ -185,8 +185,8 @@ def test_powershell_command_falls_back_to_pwsh(which_mock, run_mock) -> None:
     assert command_args[-1] == "Write-Output ok"
 
 
-@patch("codo.core.tools.commands.powershell.subprocess.run")
-@patch("codo.core.tools.commands.powershell.shutil.which")
+@patch("arancio.core.tools.commands.powershell.subprocess.run")
+@patch("arancio.core.tools.commands.powershell.shutil.which")
 def test_powershell_command_reports_missing_host(which_mock, run_mock) -> None:
     """Missing PowerShell hosts are reported as tool errors."""
     which_mock.return_value = None
@@ -204,8 +204,8 @@ def test_powershell_command_reports_missing_host(which_mock, run_mock) -> None:
     )
 
 
-@patch("codo.core.tools.commands.powershell.subprocess.run")
-@patch("codo.core.tools.commands.powershell.shutil.which")
+@patch("arancio.core.tools.commands.powershell.subprocess.run")
+@patch("arancio.core.tools.commands.powershell.shutil.which")
 def test_powershell_command_reports_timeout(which_mock, run_mock) -> None:
     """Timed-out PowerShell commands return partial output as an error."""
     which_mock.return_value = "powershell.exe"
@@ -236,8 +236,8 @@ def test_powershell_command_reports_timeout(which_mock, run_mock) -> None:
     )
 
 
-@patch("codo.core.tools.commands.powershell.subprocess.run")
-@patch("codo.core.tools.commands.powershell.shutil.which")
+@patch("arancio.core.tools.commands.powershell.subprocess.run")
+@patch("arancio.core.tools.commands.powershell.shutil.which")
 def test_powershell_command_truncates_long_output(which_mock, run_mock) -> None:
     """PowerShell command streams are truncated independently."""
     which_mock.return_value = "powershell.exe"
@@ -1506,7 +1506,7 @@ def test_search_web_tool_happy_path() -> None:
             "Tut excerpt.",
         ),
     ]
-    with patch("codo.core.tools.web.search.DDGS") as mock_ddgs:
+    with patch("arancio.core.tools.web.search.DDGS") as mock_ddgs:
         mock_ddgs.return_value.__enter__.return_value.text.return_value = raw
         result = SearchWebTool().call(call_id="call_1", query="pytorch")
 
@@ -1546,7 +1546,7 @@ def test_search_web_tool_happy_path() -> None:
 
 def test_search_web_tool_clamps_num_results_to_max() -> None:
     """num_results above the cap is clamped before being passed to ddgs."""
-    with patch("codo.core.tools.web.search.DDGS") as mock_ddgs:
+    with patch("arancio.core.tools.web.search.DDGS") as mock_ddgs:
         text = mock_ddgs.return_value.__enter__.return_value.text
         text.return_value = []
         SearchWebTool().call(call_id="call_1", query="x", num_results=50)
@@ -1556,7 +1556,7 @@ def test_search_web_tool_clamps_num_results_to_max() -> None:
 
 def test_search_web_tool_clamps_timeout_to_max() -> None:
     """Timeout above the cap is clamped before being passed to DDGS()."""
-    with patch("codo.core.tools.web.search.DDGS") as mock_ddgs:
+    with patch("arancio.core.tools.web.search.DDGS") as mock_ddgs:
         mock_ddgs.return_value.__enter__.return_value.text.return_value = []
         SearchWebTool().call(call_id="call_1", query="x", timeout=9000)
 
@@ -1565,7 +1565,7 @@ def test_search_web_tool_clamps_timeout_to_max() -> None:
 
 def test_search_web_tool_uses_defaults_when_args_missing() -> None:
     """When num_results/timeout are omitted the class defaults are used."""
-    with patch("codo.core.tools.web.search.DDGS") as mock_ddgs:
+    with patch("arancio.core.tools.web.search.DDGS") as mock_ddgs:
         text = mock_ddgs.return_value.__enter__.return_value.text
         text.return_value = []
         SearchWebTool().call(call_id="call_1", query="x")
@@ -1576,7 +1576,7 @@ def test_search_web_tool_uses_defaults_when_args_missing() -> None:
 
 def test_search_web_tool_empty_results_formats_no_results_footer() -> None:
     """Zero hits produces a ``[no results]`` content body and a success message."""
-    with patch("codo.core.tools.web.search.DDGS") as mock_ddgs:
+    with patch("arancio.core.tools.web.search.DDGS") as mock_ddgs:
         mock_ddgs.return_value.__enter__.return_value.text.return_value = []
         result = SearchWebTool().call(call_id="call_1", query="nothing matches")
 
@@ -1591,7 +1591,7 @@ def test_search_web_tool_timeout_returns_tool_error_message() -> None:
     """``TimeoutException`` surfaces as a ToolErrorMessage with timed_out=True."""
     from ddgs.exceptions import TimeoutException
 
-    with patch("codo.core.tools.web.search.DDGS") as mock_ddgs:
+    with patch("arancio.core.tools.web.search.DDGS") as mock_ddgs:
         mock_ddgs.return_value.__enter__.return_value.text.side_effect = (
             TimeoutException("ddgs timed out")
         )
@@ -1608,7 +1608,7 @@ def test_search_web_tool_arbitrary_exception_wraps_as_error_string() -> None:
     """Non-timeout failures propagate and are wrapped by BaseTool.call."""
     from ddgs.exceptions import DDGSException
 
-    with patch("codo.core.tools.web.search.DDGS") as mock_ddgs:
+    with patch("arancio.core.tools.web.search.DDGS") as mock_ddgs:
         mock_ddgs.return_value.__enter__.return_value.text.side_effect = DDGSException(
             "rate limited"
         )
@@ -1623,7 +1623,7 @@ def test_search_web_tool_arbitrary_exception_wraps_as_error_string() -> None:
 
 def test_search_web_tool_handles_missing_fields_in_raw_hits() -> None:
     """Raw hits missing href/title/body keys default to empty strings."""
-    with patch("codo.core.tools.web.search.DDGS") as mock_ddgs:
+    with patch("arancio.core.tools.web.search.DDGS") as mock_ddgs:
         mock_ddgs.return_value.__enter__.return_value.text.return_value = [{}]
         result = SearchWebTool().call(call_id="call_1", query="x")
 
@@ -1654,8 +1654,8 @@ def test_fetch_web_tool_happy_path() -> None:
     tool, client = _fetch_tool_with_answer("The page covers X.")
 
     with (
-        patch("codo.core.tools.web.fetch.trafilatura") as traf,
-        patch("codo.core.tools.web.fetch.use_config"),
+        patch("arancio.core.tools.web.fetch.trafilatura") as traf,
+        patch("arancio.core.tools.web.fetch.use_config"),
     ):
         traf.fetch_url.return_value = "<html>...</html>"
         traf.extract.return_value = "# Heading\nbody"
@@ -1699,8 +1699,8 @@ def test_fetch_web_tool_fetch_failure_is_error() -> None:
     tool = FetchWebTool(client=MagicMock())
 
     with (
-        patch("codo.core.tools.web.fetch.trafilatura") as traf,
-        patch("codo.core.tools.web.fetch.use_config"),
+        patch("arancio.core.tools.web.fetch.trafilatura") as traf,
+        patch("arancio.core.tools.web.fetch.use_config"),
     ):
         traf.fetch_url.return_value = None
         result = tool.call(call_id="call_1", url="https://x", query="q")
@@ -1714,8 +1714,8 @@ def test_fetch_web_tool_empty_extraction_is_error() -> None:
     tool = FetchWebTool(client=MagicMock())
 
     with (
-        patch("codo.core.tools.web.fetch.trafilatura") as traf,
-        patch("codo.core.tools.web.fetch.use_config"),
+        patch("arancio.core.tools.web.fetch.trafilatura") as traf,
+        patch("arancio.core.tools.web.fetch.use_config"),
     ):
         traf.fetch_url.return_value = "<html></html>"
         traf.extract.return_value = None
@@ -1731,8 +1731,8 @@ def test_fetch_web_tool_truncates_long_content() -> None:
     long_text = "a" * (FetchWebTool._max_content_chars + 10)
 
     with (
-        patch("codo.core.tools.web.fetch.trafilatura") as traf,
-        patch("codo.core.tools.web.fetch.use_config"),
+        patch("arancio.core.tools.web.fetch.trafilatura") as traf,
+        patch("arancio.core.tools.web.fetch.use_config"),
     ):
         traf.fetch_url.return_value = "<html></html>"
         traf.extract.return_value = long_text
@@ -1750,8 +1750,8 @@ def test_fetch_web_tool_clamps_timeout_to_max() -> None:
     tool, _ = _fetch_tool_with_answer("ok")
 
     with (
-        patch("codo.core.tools.web.fetch.trafilatura") as traf,
-        patch("codo.core.tools.web.fetch.use_config") as mock_use_config,
+        patch("arancio.core.tools.web.fetch.trafilatura") as traf,
+        patch("arancio.core.tools.web.fetch.use_config") as mock_use_config,
     ):
         cfg = mock_use_config.return_value
         traf.fetch_url.return_value = "<html></html>"
@@ -1769,8 +1769,8 @@ def test_fetch_web_tool_empty_answer_is_error() -> None:
     tool, _ = _fetch_tool_with_answer("")
 
     with (
-        patch("codo.core.tools.web.fetch.trafilatura") as traf,
-        patch("codo.core.tools.web.fetch.use_config"),
+        patch("arancio.core.tools.web.fetch.trafilatura") as traf,
+        patch("arancio.core.tools.web.fetch.use_config"),
     ):
         traf.fetch_url.return_value = "<html></html>"
         traf.extract.return_value = "body"
@@ -1790,8 +1790,8 @@ def test_fetch_web_tool_llm_failure_is_error() -> None:
     tool = FetchWebTool(client=client)
 
     with (
-        patch("codo.core.tools.web.fetch.trafilatura") as traf,
-        patch("codo.core.tools.web.fetch.use_config"),
+        patch("arancio.core.tools.web.fetch.trafilatura") as traf,
+        patch("arancio.core.tools.web.fetch.use_config"),
     ):
         traf.fetch_url.return_value = "<html></html>"
         traf.extract.return_value = "body"

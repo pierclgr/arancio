@@ -1,4 +1,4 @@
-"""Tests for ``codo.core.clients.litellm.LiteLLMClient``."""
+"""Tests for ``arancio.core.clients.litellm.LiteLLMClient``."""
 
 import json
 from types import SimpleNamespace
@@ -6,9 +6,9 @@ from unittest.mock import Mock
 
 import pytest
 
-import codo.core.clients.litellm as litellm_module
-from codo.core.clients.litellm import LiteLLMClient
-from codo.core.types.messages import (
+import arancio.core.clients.litellm as litellm_module
+from arancio.core.clients.litellm import LiteLLMClient
+from arancio.core.types.messages import (
     AssistantChunkMessage,
     AssistantMessage,
     ReasoningMessage,
@@ -16,8 +16,8 @@ from codo.core.types.messages import (
     ToolResultMessage,
     UserMessage,
 )
-from codo.core.types.requests import BaseRequest
-from codo.core.types.tools import ToolSchema
+from arancio.core.types.requests import BaseRequest
+from arancio.core.types.tools import ToolSchema
 
 
 def _build_response(output: list) -> SimpleNamespace:

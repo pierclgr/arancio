@@ -1,6 +1,6 @@
 """Tests for normalized message types."""
 
-from codo.core.types.messages import UserMessage
+from arancio.core.types.messages import UserMessage
 
 
 def test_user_message_display_text_defaults_to_content() -> None:

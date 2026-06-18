@@ -2,9 +2,9 @@
 
 import pytest
 
-from codo.core.permissions.manager import PermissionManager
-from codo.core.types.messages import ToolCallMessage, ToolErrorMessage, UserMessage
-from codo.core.types.permissions import PermissionCategory, PermissionLevel
+from arancio.core.permissions.manager import PermissionManager
+from arancio.core.types.messages import ToolCallMessage, ToolErrorMessage, UserMessage
+from arancio.core.types.permissions import PermissionCategory, PermissionLevel
 
 
 def _call(name: str) -> ToolCallMessage:
