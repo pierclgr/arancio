@@ -26,7 +26,7 @@ class Agent:
     def __init__(
         self,
         client: BaseClient,
-        permission_manager: PermissionManager | None = None,
+        permission_manager: PermissionManager,
         max_turns: int = 1000,
         retry_delay: float = 1.0,
     ) -> None:
@@ -35,8 +35,7 @@ class Agent:
         Args:
             client: the LLM client used to send requests.
             permission_manager: the permission manager that creates the agent's
-                tools and gates each tool call. Defaults to a fully granted
-                manager (every category at ``ASK``) when omitted.
+                tools and gates each tool call.
             max_turns: the maximum number of loop turns before aborting.
             retry_delay: seconds to wait before retrying a failed turn, so the
                 turn is not retried immediately.
@@ -46,9 +45,6 @@ class Agent:
         self._retry_delay: float = retry_delay
         self._message_history: List[Message] = []
         self._system_prompt_builder: Type[SystemPromptBuilder] = SystemPromptBuilder
-
-        if not permission_manager:
-            permission_manager = PermissionManager()
         self._permission_manager: PermissionManager = permission_manager
 
         self._tools: Dict[str, BaseTool] = {}
@@ -65,7 +61,27 @@ class Agent:
             f"client={self._client!r}, "
             f"permissions={self._permission_manager!r}, "
             f"max_turns={self._max_turns!r}, "
-            f"tools={list(self._tools)!r}"
+            f"tools={list(self._tools.values())!r}"
+            ")"
+        )
+
+    def __str__(self) -> str:
+        """Return a pretty, multi-line representation of the agent.
+
+        Returns:
+            An indented, one-tool-per-line rendering suitable for printing.
+        """
+        if self._tools:
+            tools = "\n".join(f"        {tool!r}," for tool in self._tools.values())
+            tools_block = f"[\n{tools}\n    ]"
+        else:
+            tools_block = "[]"
+        return (
+            f"{type(self).__name__}(\n"
+            f"    client={self._client!r},\n"
+            f"    permissions={self._permission_manager!r},\n"
+            f"    max_turns={self._max_turns!r},\n"
+            f"    tools={tools_block},\n"
             ")"
         )
 
@@ -93,7 +109,7 @@ class Agent:
     def _refresh_tools(self) -> None:
         """Rebuild the tool catalog from the permission manager's grants."""
         self._tools = {
-            tool.name: tool for tool in self._permission_manager.allowed_tools()
+            tool.name: tool for tool in self._permission_manager.get_allowed_tools
         }
 
     def add_permission(

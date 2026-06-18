@@ -91,6 +91,14 @@ class BaseTool(ABC):
             **raw_input_schema,
         }
 
+    def __repr__(self) -> str:
+        """Return a developer-friendly representation of the tool.
+
+        Returns:
+            The tool's class name followed by empty parentheses.
+        """
+        return f"{type(self).__name__}()"
+
     @property
     def name(self) -> str:
         """Return the tool's name, derived from the python class name.

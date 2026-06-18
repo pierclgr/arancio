@@ -26,25 +26,25 @@ class PermissionManager:
 
     def __init__(
         self,
+        tool_manager: ToolManager,
         permissions: dict[PermissionCategory, PermissionLevel] | None = None,
-        tool_manager: ToolManager | None = None,
     ) -> None:
-        """Initialize the manager with optional grants and a tool manager.
+        """Initialize the manager with a tool manager and optional grants.
 
         Args:
+            tool_manager: the tool manager used to create the agent's tools and
+                to resolve which tools are available.
             permissions: initial category-to-level grants. When omitted
                 (``None``) every category is granted at
                 :attr:`PermissionLevel.ASK`; pass an explicit ``{}`` to start
                 with no grants.
-            tool_manager: the tool manager used to create tools; a default
-                :class:`ToolManager` when omitted.
         """
         if not permissions:
             permissions = {
                 category: PermissionLevel.ASK for category in PermissionCategory
             }
         self._permissions: dict[PermissionCategory, PermissionLevel] = permissions
-        self._tool_manager: ToolManager = tool_manager or ToolManager()
+        self._tool_manager: ToolManager = tool_manager
 
     def __repr__(self) -> str:
         """Return a developer-friendly representation of the permission grants.
@@ -122,7 +122,8 @@ class PermissionManager:
             raise ValueError(f"No permission granted for category {category}.")
         self._permissions[category] = level
 
-    def allowed_tools(self) -> list[BaseTool]:
+    @property
+    def get_allowed_tools(self) -> list[BaseTool]:
         """Create the tools the agent may access from the current grants.
 
         Returns:
@@ -152,13 +153,14 @@ class PermissionManager:
             or not-permitted reason when the call is refused, and ``None`` for a
             plain allow.
         """
-        category = PermissionCategory.for_tool(call.name)
-        if category not in self._permissions:
-            message = f"Usage of {call.name} is not permitted."
+        if not self._tool_manager.is_tool_available(call.name, self._permissions):
+            message = f"Tool {call.name} does not exist."
             return False, ToolErrorMessage(
                 content=message,
                 id=call.id,
             )
+
+        category = PermissionCategory.for_tool(call.name)
 
         # automatic case
         if self._permissions[category] is PermissionLevel.AUTO:

@@ -49,6 +49,9 @@ class FetchWebTool(BaseTool):
         """
         super().__init__(session=session)
         self._client = client
+        self._client.thinking_summary = None
+        if hasattr(self._client, "stream"):
+            self._client.stream = False
 
     @property
     def client(self) -> BaseClient:
@@ -67,6 +70,14 @@ class FetchWebTool(BaseTool):
             value: the new client to use for summarization requests.
         """
         self._client = value
+
+    def __repr__(self) -> str:
+        """Return a developer-friendly representation including the client.
+
+        Returns:
+            The tool's class name and the repr of its summarization client.
+        """
+        return f"{type(self).__name__}(client={self._client!r})"
 
     def _call(
         self,

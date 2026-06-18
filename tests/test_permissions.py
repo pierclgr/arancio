@@ -2,9 +2,30 @@
 
 import pytest
 
+from arancio.core.clients.litellm import LiteLLMClient
 from arancio.core.permissions.manager import PermissionManager
+from arancio.core.tools.manager import ToolManager
 from arancio.core.types.messages import ToolCallMessage, ToolErrorMessage, UserMessage
 from arancio.core.types.permissions import PermissionCategory, PermissionLevel
+
+
+def _manager(
+    permissions: dict[PermissionCategory, PermissionLevel] | None = None,
+) -> PermissionManager:
+    """Build a permission manager backed by a real tool manager.
+
+    Args:
+        permissions: optional category-to-level grants forwarded to the
+            manager.
+
+    Returns:
+        A :class:`PermissionManager` whose tool manager carries a summary
+        client.
+    """
+    summary_client = LiteLLMClient(
+        model_id="ollama_chat/deepseek-v4-flash:cloud", stream=False
+    )
+    return PermissionManager(ToolManager(summary_client=summary_client), permissions)
 
 
 def _call(name: str) -> ToolCallMessage:
@@ -28,8 +49,8 @@ def test_for_tool_reverse_lookup() -> None:
     assert PermissionCategory.for_tool("EchoTool") is None
 
 
-def test_allowed_tools_delegates_to_tool_manager() -> None:
-    """allowed_tools returns whatever the tool manager builds from the grants."""
+def test_get_allowed_tools_delegates_to_tool_manager() -> None:
+    """get_allowed_tools returns whatever the tool manager builds from the grants."""
 
     class _RecordingToolManager:
         """Tool manager stub recording the permissions it was asked to build."""
@@ -53,9 +74,9 @@ def test_allowed_tools_delegates_to_tool_manager() -> None:
 
     permissions = {PermissionCategory.READ: PermissionLevel.ASK}
     tool_manager = _RecordingToolManager()
-    manager = PermissionManager(permissions, tool_manager=tool_manager)
+    manager = PermissionManager(tool_manager, permissions)
 
-    assert manager.allowed_tools() == ["sentinel"]
+    assert manager.get_allowed_tools == ["sentinel"]
     assert tool_manager.received == permissions
 
 
@@ -66,7 +87,7 @@ def test_validate_auto_true_without_prompt(monkeypatch: pytest.MonkeyPatch) -> N
         raise AssertionError("input must not be called for AUTO grants")
 
     monkeypatch.setattr("builtins.input", _boom)
-    manager = PermissionManager({PermissionCategory.EXECUTE: PermissionLevel.AUTO})
+    manager = _manager({PermissionCategory.EXECUTE: PermissionLevel.AUTO})
 
     assert manager.validate(_call("BashCommandTool")) == (True, None)
 
@@ -77,7 +98,7 @@ def test_validate_ask_allows_on_yes(
 ) -> None:
     """ASK grants allow only when the trimmed lowercase answer is ``y``."""
     monkeypatch.setattr("builtins.input", lambda *a, **k: answer)
-    manager = PermissionManager({PermissionCategory.WRITE: PermissionLevel.ASK})
+    manager = _manager({PermissionCategory.WRITE: PermissionLevel.ASK})
 
     assert manager.validate(_call("WriteFileTool")) == (True, None)
 
@@ -85,7 +106,7 @@ def test_validate_ask_allows_on_yes(
 def test_validate_ask_allows_with_note(monkeypatch: pytest.MonkeyPatch) -> None:
     """``y, <note>`` allows and wraps the note in a report-then-answer instruction."""
     monkeypatch.setattr("builtins.input", lambda *a, **k: "y, be careful")
-    manager = PermissionManager({PermissionCategory.WRITE: PermissionLevel.ASK})
+    manager = _manager({PermissionCategory.WRITE: PermissionLevel.ASK})
 
     allowed, message = manager.validate(_call("WriteFileTool"))
 
@@ -98,7 +119,7 @@ def test_validate_ask_allows_with_note(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_validate_ask_allows_with_empty_note(monkeypatch: pytest.MonkeyPatch) -> None:
     """``y,`` with no note allows the call with no message."""
     monkeypatch.setattr("builtins.input", lambda *a, **k: "y,")
-    manager = PermissionManager({PermissionCategory.WRITE: PermissionLevel.ASK})
+    manager = _manager({PermissionCategory.WRITE: PermissionLevel.ASK})
 
     assert manager.validate(_call("WriteFileTool")) == (True, None)
 
@@ -111,7 +132,7 @@ def test_validate_ask_denies_on_non_yes(
 ) -> None:
     """ASK grants deny on any non-``y`` answer, returning a tool error."""
     monkeypatch.setattr("builtins.input", lambda *a, **k: answer)
-    manager = PermissionManager({PermissionCategory.WRITE: PermissionLevel.ASK})
+    manager = _manager({PermissionCategory.WRITE: PermissionLevel.ASK})
 
     allowed, message = manager.validate(_call("WriteFileTool"))
 
@@ -129,9 +150,9 @@ def test_validate_absent_category_denies(monkeypatch: pytest.MonkeyPatch) -> Non
         raise AssertionError("input must not be called for ungranted categories")
 
     monkeypatch.setattr("builtins.input", _boom)
-    manager = PermissionManager({PermissionCategory.READ: PermissionLevel.ASK})
+    manager = _manager({PermissionCategory.READ: PermissionLevel.ASK})
 
-    content = "Usage of WriteFileTool is not permitted."
+    content = "Tool WriteFileTool does not exist."
     assert manager.validate(_call("WriteFileTool")) == (
         False,
         ToolErrorMessage(content=content, id="call_1"),
@@ -140,9 +161,9 @@ def test_validate_absent_category_denies(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_validate_uncategorized_denies() -> None:
     """Calls to tools that map to no category are denied."""
-    manager = PermissionManager({PermissionCategory.READ: PermissionLevel.AUTO})
+    manager = _manager({PermissionCategory.READ: PermissionLevel.AUTO})
 
-    content = "Usage of EchoTool is not permitted."
+    content = "Tool EchoTool does not exist."
     assert manager.validate(_call("EchoTool")) == (
         False,
         ToolErrorMessage(content=content, id="call_1"),
@@ -151,10 +172,10 @@ def test_validate_uncategorized_denies() -> None:
 
 def test_add_and_remove() -> None:
     """Removing a grant revokes access and re-adding it restores access."""
-    manager = PermissionManager()
+    manager = _manager()
 
     manager.remove_permission(PermissionCategory.WEB)
-    content = "Usage of SearchWebTool is not permitted."
+    content = "Tool SearchWebTool does not exist."
     assert manager.validate(_call("SearchWebTool")) == (
         False,
         ToolErrorMessage(content=content, id="call_1"),
@@ -166,7 +187,7 @@ def test_add_and_remove() -> None:
 
 def test_add_permission_defaults_to_ask() -> None:
     """add_permission grants at the ASK level when no level is given."""
-    manager = PermissionManager()
+    manager = _manager()
     manager.remove_permission(PermissionCategory.READ)
 
     manager.add_permission(PermissionCategory.READ)
@@ -178,7 +199,7 @@ def test_add_permission_defaults_to_ask() -> None:
 
 def test_set_permission_level_changes_existing_grant() -> None:
     """set_permission_level updates the level of an existing grant in place."""
-    manager = PermissionManager({PermissionCategory.READ: PermissionLevel.ASK})
+    manager = _manager({PermissionCategory.READ: PermissionLevel.ASK})
 
     manager.set_permission_level(PermissionCategory.READ, PermissionLevel.AUTO)
 
@@ -189,7 +210,7 @@ def test_set_permission_level_changes_existing_grant() -> None:
 
 def test_set_permission_level_unknown_category_raises() -> None:
     """set_permission_level raises when the category has no grant."""
-    manager = PermissionManager({PermissionCategory.READ: PermissionLevel.ASK})
+    manager = _manager({PermissionCategory.READ: PermissionLevel.ASK})
 
     with pytest.raises(ValueError):
         manager.set_permission_level(PermissionCategory.WEB, PermissionLevel.AUTO)
@@ -197,7 +218,7 @@ def test_set_permission_level_unknown_category_raises() -> None:
 
 def test_get_category_permission_unknown_category_raises() -> None:
     """get_category_permission raises when the category has no grant."""
-    manager = PermissionManager({PermissionCategory.READ: PermissionLevel.ASK})
+    manager = _manager({PermissionCategory.READ: PermissionLevel.ASK})
 
     with pytest.raises(ValueError):
         manager.get_category_permission(PermissionCategory.WEB)
@@ -205,7 +226,7 @@ def test_get_category_permission_unknown_category_raises() -> None:
 
 def test_repr_lists_granted_categories_and_levels() -> None:
     """The repr maps each granted category to its level, in insertion order."""
-    manager = PermissionManager(
+    manager = _manager(
         {
             PermissionCategory.READ: PermissionLevel.ASK,
             PermissionCategory.WRITE: PermissionLevel.AUTO,
@@ -217,7 +238,7 @@ def test_repr_lists_granted_categories_and_levels() -> None:
 
 def test_no_permissions_arg_grants_all_categories_at_ask() -> None:
     """Omitting permissions grants every category at ASK (the default manager)."""
-    manager = PermissionManager()
+    manager = _manager()
 
     for category in PermissionCategory:
         assert manager.get_category_permission(category) is PermissionLevel.ASK

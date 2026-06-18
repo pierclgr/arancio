@@ -6,9 +6,11 @@ import pytest
 
 from arancio.core.agents import Agent
 from arancio.core.clients.base import BaseClient
+from arancio.core.clients.litellm import LiteLLMClient
 from arancio.core.parsers.tool_result.base import BaseToolResultParser
 from arancio.core.permissions.manager import PermissionManager
 from arancio.core.tools.base import BaseTool
+from arancio.core.tools.manager import ToolManager
 from arancio.core.types.messages import (
     AssistantChunkMessage,
     AssistantMessage,
@@ -305,7 +307,7 @@ class _MultiToolLoopClient(_ReasoningClient):
 class _StubManager:
     """Minimal permission-manager stub exposing only the agent's two hooks.
 
-    Decouples agent-loop tests from the real ToolManager: ``allowed_tools``
+    Decouples agent-loop tests from the real ToolManager: ``get_allowed_tools``
     returns a configured tool list and ``validate`` looks decisions up by call
     id then by tool name, defaulting to ``default``.
     """
@@ -320,7 +322,7 @@ class _StubManager:
         """Initialize the stub with the tools to expose and decision maps.
 
         Args:
-            tools: the tools returned by ``allowed_tools``.
+            tools: the tools returned by ``get_allowed_tools``.
             decisions: per-call-id or per-name allow/deny answers for
                 ``validate``.
             default: decision returned by ``validate`` when no entry matches.
@@ -332,7 +334,8 @@ class _StubManager:
         self._default = default
         self._message = message
 
-    def allowed_tools(self) -> List[BaseTool]:
+    @property
+    def get_allowed_tools(self) -> List[BaseTool]:
         """Return the configured tools the agent may access.
 
         Returns:
@@ -371,10 +374,52 @@ class _StubManager:
         return "_StubManager()"
 
 
+def _summary_client() -> LiteLLMClient:
+    """Build a summarization client for injected tools in tests.
+
+    Returns:
+        A non-streaming :class:`LiteLLMClient`.
+    """
+    return LiteLLMClient(model_id="ollama_chat/deepseek-v4-flash:cloud", stream=False)
+
+
+def _agent(**kwargs) -> Agent:
+    """Build an agent, defaulting ``permission_manager`` for tests.
+
+    Args:
+        **kwargs: keyword arguments forwarded to :class:`Agent`.
+
+    Returns:
+        An ``Agent`` with a default fully-granted ``permission_manager`` when
+        none is given.
+    """
+    kwargs.setdefault(
+        "permission_manager",
+        PermissionManager(ToolManager(summary_client=_summary_client())),
+    )
+    return Agent(**kwargs)
+
+
+def _permission_manager(
+    permissions: dict[PermissionCategory, PermissionLevel] | None = None,
+) -> PermissionManager:
+    """Build a real permission manager backed by a tool manager for tests.
+
+    Args:
+        permissions: optional category-to-level grants forwarded to the
+            manager.
+
+    Returns:
+        A :class:`PermissionManager` whose tool manager carries a summary
+        client.
+    """
+    return PermissionManager(ToolManager(summary_client=_summary_client()), permissions)
+
+
 def test_agent_stores_and_returns_reasoning_messages() -> None:
     """Reasoning messages stay in history and are yielded to the caller."""
     client = _ReasoningClient()
-    agent = Agent(client=client, permission_manager=_StubManager())
+    agent = _agent(client=client, permission_manager=_StubManager())
 
     response = list(agent.run(UserMessage(content="hello")))
 
@@ -396,7 +441,7 @@ def test_agent_stores_and_returns_reasoning_messages() -> None:
 def test_agent_yields_chunks_without_storing_them() -> None:
     """Streaming chunks are yielded but omitted from provider history."""
     client = _StreamingClient()
-    agent = Agent(client=client, permission_manager=_StubManager())
+    agent = _agent(client=client, permission_manager=_StubManager())
 
     response = list(agent.run(UserMessage(content="hello")))
 
@@ -411,7 +456,7 @@ def test_agent_yields_chunks_without_storing_them() -> None:
 def test_agent_returns_tool_call_result_and_final_response() -> None:
     """Agent run yields all messages produced during the turn."""
     client = _ToolLoopClient()
-    agent = Agent(client=client, permission_manager=_StubManager(tools=[EchoTool()]))
+    agent = _agent(client=client, permission_manager=_StubManager(tools=[EchoTool()]))
 
     response = list(agent.run(UserMessage(content="hello")))
 
@@ -430,7 +475,7 @@ def test_agent_returns_tool_call_result_and_final_response() -> None:
 def test_agent_yields_error_message_for_unknown_tool() -> None:
     """Unknown tool calls yield tool errors to the consumer."""
     client = _UnknownToolClient()
-    agent = Agent(client=client, permission_manager=_StubManager())
+    agent = _agent(client=client, permission_manager=_StubManager())
 
     response = list(agent.run(UserMessage(content="hello")))
 
@@ -459,7 +504,9 @@ def test_agent_yields_error_message_for_unknown_tool() -> None:
 def test_agent_yields_error_message_for_failing_tool() -> None:
     """Tool exceptions yield tool errors to the consumer."""
     client = _FailingToolClient()
-    agent = Agent(client=client, permission_manager=_StubManager(tools=[FailingTool()]))
+    agent = _agent(
+        client=client, permission_manager=_StubManager(tools=[FailingTool()])
+    )
 
     response = list(agent.run(UserMessage(content="hello")))
 
@@ -488,7 +535,7 @@ def test_agent_yields_error_message_for_failing_tool() -> None:
 def test_agent_yields_error_message_for_loop_exception() -> None:
     """Agent-loop exceptions are yielded as error messages."""
     client = _FailingClient()
-    agent = Agent(client=client, permission_manager=_StubManager(), retry_delay=0)
+    agent = _agent(client=client, permission_manager=_StubManager(), retry_delay=0)
 
     response = list(agent.run(UserMessage(content="hello")))
 
@@ -502,7 +549,7 @@ def test_agent_yields_error_message_for_loop_exception() -> None:
 def test_agent_yields_error_but_does_not_retry_after_finalized() -> None:
     """Exceptions after a finalized message surface as errors but end the turn."""
     client = _PostFinalizeFailingClient()
-    agent = Agent(client=client, permission_manager=_StubManager())
+    agent = _agent(client=client, permission_manager=_StubManager())
 
     response = list(agent.run(UserMessage(content="hello")))
 
@@ -519,7 +566,7 @@ def test_agent_yields_error_but_does_not_retry_after_finalized() -> None:
 
 def test_agent_yields_error_message_when_max_turns_exceeded() -> None:
     """Max turn exhaustion yields an error message, then the run ends."""
-    agent = Agent(
+    agent = _agent(
         client=_ToolLoopClient(),
         max_turns=1,
         permission_manager=_StubManager(tools=[EchoTool()]),
@@ -545,7 +592,7 @@ def test_agent_yields_error_message_when_max_turns_exceeded() -> None:
 def test_agent_yields_tool_result_before_next_model_request() -> None:
     """Tool results are yielded before the follow-up model request."""
     client = _ToolLoopClient()
-    agent = Agent(client=client, permission_manager=_StubManager(tools=[EchoTool()]))
+    agent = _agent(client=client, permission_manager=_StubManager(tools=[EchoTool()]))
 
     stream = agent.run(UserMessage(content="hello"))
 
@@ -570,7 +617,7 @@ def test_agent_yields_tool_result_before_next_model_request() -> None:
 
 def test_agent_repr_includes_configuration_without_history_contents() -> None:
     """Agent repr exposes debug state without dumping conversation content."""
-    agent = Agent(
+    agent = _agent(
         client=_ReasoningClient(), max_turns=3, permission_manager=_StubManager()
     )
     agent._add_message_to_history(UserMessage(content="secret"))
@@ -591,7 +638,7 @@ def test_agent_denied_tool_yields_error_and_skips_execution() -> None:
     """A denied tool call yields a tool error and does not execute."""
     client = _ToolLoopClient()
     manager = _StubManager(tools=[EchoTool()], decisions={"EchoTool": False})
-    agent = Agent(client=client, permission_manager=manager)
+    agent = _agent(client=client, permission_manager=manager)
 
     response = list(agent.run(UserMessage(content="hello")))
 
@@ -616,7 +663,7 @@ def test_agent_allowed_tool_with_note_yields_result_then_note() -> None:
     manager = _StubManager(
         tools=[EchoTool()], decisions={"EchoTool": True}, message=note
     )
-    agent = Agent(client=client, permission_manager=manager)
+    agent = _agent(client=client, permission_manager=manager)
 
     response = list(agent.run(UserMessage(content="hello")))
 
@@ -641,7 +688,7 @@ def test_agent_allowed_auto_tool_executes() -> None:
     """An allowed tool call executes exactly as without a manager."""
     client = _ToolLoopClient()
     manager = _StubManager(tools=[EchoTool()], decisions={"EchoTool": True})
-    agent = Agent(client=client, permission_manager=manager)
+    agent = _agent(client=client, permission_manager=manager)
 
     response = list(agent.run(UserMessage(content="hello")))
 
@@ -660,7 +707,7 @@ def test_agent_allowed_auto_tool_executes() -> None:
 def test_agent_exposes_only_manager_tools() -> None:
     """The agent catalog is exactly what the manager builds; nothing else."""
     manager = _StubManager(tools=[])
-    agent = Agent(client=_ReasoningClient(), permission_manager=manager)
+    agent = _agent(client=_ReasoningClient(), permission_manager=manager)
 
     assert agent._tools == {}
     assert agent._tool_schemas == []
@@ -670,7 +717,7 @@ def test_agent_mixed_calls_allowed_and_denied_keep_history_coherent() -> None:
     """Mixed allowed/denied calls each yield one id-matched result in order."""
     client = _MultiToolLoopClient()
     manager = _StubManager(tools=[EchoTool()], decisions={"a": True, "b": False})
-    agent = Agent(client=client, permission_manager=manager)
+    agent = _agent(client=client, permission_manager=manager)
 
     response = list(agent.run(UserMessage(content="hello")))
 
@@ -698,9 +745,12 @@ def test_agent_mixed_calls_allowed_and_denied_keep_history_coherent() -> None:
     assert sorted(result.id for result in results) == ["a", "b"]
 
 
-def test_agent_defaults_to_full_permission_manager() -> None:
-    """Omitting the permission manager grants every category, building all tools."""
-    agent = Agent(client=_ReasoningClient())
+def test_agent_full_permission_manager_builds_all_tools() -> None:
+    """A fully-granted permission manager builds every tool."""
+    agent = _agent(
+        client=_ReasoningClient(),
+        permission_manager=_permission_manager(),
+    )
 
     assert set(agent._tools) == {
         "ReadFileTool",
@@ -717,9 +767,9 @@ def test_agent_defaults_to_full_permission_manager() -> None:
 
 def test_agent_add_permission_rebuilds_catalog() -> None:
     """Granting a category through the agent rebuilds its tool catalog."""
-    manager = PermissionManager()
+    manager = _permission_manager()
     manager.remove_permission(PermissionCategory.READ)
-    agent = Agent(client=_ReasoningClient(), permission_manager=manager)
+    agent = _agent(client=_ReasoningClient(), permission_manager=manager)
     assert "ReadFileTool" not in agent._tools
 
     agent.add_permission(PermissionCategory.READ)
@@ -729,9 +779,9 @@ def test_agent_add_permission_rebuilds_catalog() -> None:
 
 def test_agent_remove_permission_rebuilds_catalog() -> None:
     """Revoking a category through the agent drops its tools."""
-    agent = Agent(
+    agent = _agent(
         client=_ReasoningClient(),
-        permission_manager=PermissionManager(
+        permission_manager=_permission_manager(
             {PermissionCategory.READ: PermissionLevel.ASK}
         ),
     )
@@ -744,8 +794,8 @@ def test_agent_remove_permission_rebuilds_catalog() -> None:
 
 def test_agent_set_permission_level_updates_grant_keeping_catalog() -> None:
     """Changing a level via the agent updates the grant, not the catalog."""
-    manager = PermissionManager({PermissionCategory.READ: PermissionLevel.ASK})
-    agent = Agent(client=_ReasoningClient(), permission_manager=manager)
+    manager = _permission_manager({PermissionCategory.READ: PermissionLevel.ASK})
+    agent = _agent(client=_ReasoningClient(), permission_manager=manager)
     before = set(agent._tools)
 
     agent.set_permission_level(PermissionCategory.READ, PermissionLevel.AUTO)
@@ -754,3 +804,23 @@ def test_agent_set_permission_level_updates_grant_keeping_catalog() -> None:
         manager.get_category_permission(PermissionCategory.READ) is PermissionLevel.AUTO
     )
     assert set(agent._tools) == before
+
+
+def test_agent_repr_renders_tools_via_their_repr() -> None:
+    """The agent repr renders each tool through its own repr, not just names."""
+    agent = _agent(
+        client=_ReasoningClient(), permission_manager=_StubManager(tools=[EchoTool()])
+    )
+
+    assert "tools=[EchoTool()]" in repr(agent)
+
+
+def test_agent_str_pretty_prints_one_tool_per_line() -> None:
+    """Str(agent) is multi-line and renders each tool via its repr."""
+    agent = _agent(
+        client=_ReasoningClient(), permission_manager=_StubManager(tools=[EchoTool()])
+    )
+
+    text = str(agent)
+    assert text.startswith("Agent(\n")
+    assert "\n        EchoTool(),\n" in text

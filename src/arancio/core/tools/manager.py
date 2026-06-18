@@ -1,6 +1,6 @@
 """Tool construction driven by a permission list."""
 
-from arancio.core.clients.litellm import LiteLLMClient
+from arancio.core.clients.base import BaseClient
 from arancio.core.tools.base import BaseTool
 from arancio.core.tools.web.fetch import FetchWebTool
 from arancio.core.types.permissions import PermissionCategory, PermissionLevel
@@ -12,21 +12,58 @@ class ToolManager:
     Reads each category's tool classes from :class:`PermissionCategory` (the
     enum value is the frozen set of classes) and instantiates them. Every tool
     builds with no required arguments except :class:`FetchWebTool`, which
-    receives a default summarization client owned by this manager.
+    receives the summarization client this manager holds and injects.
 
     Attributes:
-        _fetch_client: default summarization client passed to
-            :class:`FetchWebTool` at construction.
+        _summary_client: the client injected into :class:`FetchWebTool`.
     """
 
-    def __init__(self) -> None:
-        """Initialize the manager and its default fetch summarization client."""
-        self._fetch_client = LiteLLMClient(
-            model_id="ollama_chat/deepseek-v4-flash:cloud",
-            thinking_effort="low",
-            stream=False,
+    def __init__(self, summary_client: BaseClient) -> None:
+        """Initialize the manager with the summarization client to inject.
+
+        Args:
+            summary_client: the client injected into :class:`FetchWebTool`;
+                held by reference so its settings can be changed in place at
+                runtime and seen by the tool.
+        """
+        self._summary_client = summary_client
+
+    @staticmethod
+    def available_tools(
+        permissions: dict[PermissionCategory, PermissionLevel],
+    ) -> list[type[BaseTool]]:
+        """Return the granted categories' tool classes without instantiating them.
+
+        Args:
+            permissions: mapping of granted category to level; only the
+                categories (keys) determine which tools are allowed.
+
+        Returns:
+            One class per tool across the granted categories, not instantiated.
+        """
+        return [tool_cls for category in permissions for tool_cls in category.value]
+
+    @classmethod
+    def is_tool_available(
+        cls,
+        tool_name: str,
+        permissions: dict[PermissionCategory, PermissionLevel],
+    ) -> bool:
+        """Return whether a tool is among those available for the given grants.
+
+        Args:
+            tool_name: the tool's class name (``BaseTool.name``).
+            permissions: mapping of granted category to level; only the
+                categories (keys) determine which tools are available.
+
+        Returns:
+            ``True`` when the tool's class is among the available tools for the
+            given grants, ``False`` otherwise.
+        """
+        return any(
+            tool_cls.__name__ == tool_name
+            for tool_cls in cls.available_tools(permissions)
         )
-        self._fetch_client.thinking_summary = None
 
     def create_tools(
         self, permissions: dict[PermissionCategory, PermissionLevel]
@@ -40,12 +77,9 @@ class ToolManager:
         Returns:
             One instance per tool class across the granted categories.
         """
-        tools: list[BaseTool] = []
-        for category in permissions:
-            for tool_cls in category.value:
-                tools.append(
-                    tool_cls(client=self._fetch_client)
-                    if tool_cls is FetchWebTool
-                    else tool_cls()
-                )
-        return tools
+        return [
+            FetchWebTool(client=self._summary_client)
+            if tool_cls is FetchWebTool
+            else tool_cls()
+            for tool_cls in self.available_tools(permissions)
+        ]
