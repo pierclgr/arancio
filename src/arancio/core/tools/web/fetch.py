@@ -49,9 +49,6 @@ class FetchWebTool(BaseTool):
         """
         super().__init__(session=session)
         self._client = client
-        self._client.thinking_summary = None
-        if hasattr(self._client, "stream"):
-            self._client.stream = False
 
     @property
     def client(self) -> BaseClient:
