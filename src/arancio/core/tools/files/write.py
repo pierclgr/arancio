@@ -34,9 +34,10 @@ class WriteFileTool(BaseTool):
             ``action`` (``"created"`` or ``"overwritten"``) and
             ``total_lines`` (int, line count of ``content``).
 
+        Missing parent directories are created automatically.
+
         Raises:
             ValueError: when ``file_path`` is not absolute.
-            FileNotFoundError: when the parent directory does not exist.
             IsADirectoryError: when ``file_path`` points to a directory.
             PermissionError: when ``file_path`` exists but was not read
                 this session, or when its mtime has drifted since the
@@ -48,8 +49,7 @@ class WriteFileTool(BaseTool):
         path = Path(file_path)
         if path.exists() and path.is_dir():
             raise IsADirectoryError(f"Path is not a regular file: {file_path}")
-        if not path.parent.exists():
-            raise FileNotFoundError(f"Parent directory not found: {path.parent}")
+        path.parent.mkdir(parents=True, exist_ok=True)
 
         canonical = str(path.resolve()) if path.exists() else str(path.absolute())
 

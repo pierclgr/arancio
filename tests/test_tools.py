@@ -521,9 +521,9 @@ def test_write_tool_rejects_relative_paths() -> None:
     )
 
 
-def test_write_tool_reports_missing_parent_dir(tmp_path: Path) -> None:
-    """Missing parent directories surface as tool errors via the wrapper."""
-    target = tmp_path / "missing_dir" / "file.txt"
+def test_write_tool_creates_missing_parent_dirs(tmp_path: Path) -> None:
+    """Missing parent directories are created automatically."""
+    target = tmp_path / "missing_dir" / "nested" / "file.txt"
 
     result = WriteFileTool().call(
         call_id="call_1",
@@ -531,13 +531,18 @@ def test_write_tool_reports_missing_parent_dir(tmp_path: Path) -> None:
         content="x",
     )
 
-    output = (
-        f"Error while executing WriteFileTool: "
-        f"Parent directory not found: {target.parent}"
-    )
-    assert result == ToolErrorMessage(
+    assert target.read_text() == "x"
+    canonical = str(target.resolve())
+    output = {
+        "file_path": canonical,
+        "bytes_written": 1,
+        "action": "created",
+        "total_lines": 1,
+    }
+    assert result == ToolResultMessage(
         content=output,
         id="call_1",
+        display_text=f"Created {canonical} (1 bytes, 1 lines)",
     )
 
 

@@ -4,7 +4,7 @@ Creates a new file or overwrites an existing one on the local filesystem with th
 Before writing the file, please follow these steps:
 1. Path Verification:
    - `file_path` *MUST* be an absolute path. Relative paths are rejected, since the working directory is not persistent across calls.
-   - The parent directory *MUST* already exist; this tool does not create intermediate directories. If unsure, use `BashCommandTool` with `mkdir -p` first.
+   - Missing parent directories are created automatically; you do not need to `mkdir -p` first.
 2. Read-First Verification (overwriting existing files):
    - If `file_path` points to a file that already exists, you *MUST* have called `ReadFileTool` on the same path in this session before invoking `WriteFileTool`.
    - If the file was modified on disk after your last `ReadFileTool` call (for example by another process or by a `BashCommandTool` invocation), you *MUST* re-read it before overwriting; the tool rejects writes whose recorded read mtime has drifted.
