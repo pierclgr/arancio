@@ -1,5 +1,8 @@
 """Central permission registry filtering and gating the agent's tool use."""
 
+from arancio.core.controllers.base import Controller
+from arancio.core.controllers.requests import PermissionRequest
+from arancio.core.controllers.responses import Decision
 from arancio.core.tools.base import BaseTool
 from arancio.core.tools.manager import ToolManager
 from arancio.core.types.messages import (
@@ -22,18 +25,22 @@ class PermissionManager:
     Attributes:
         _permissions: mapping of granted category to its permission level.
         _tool_manager: the tool manager that creates tools from the grants.
+        _controller: the controller used to ask the user about ``ask`` grants.
     """
 
     def __init__(
         self,
         tool_manager: ToolManager,
+        controller: Controller,
         permissions: dict[PermissionCategory, PermissionLevel] | None = None,
     ) -> None:
-        """Initialize the manager with a tool manager and optional grants.
+        """Initialize the manager with a tool manager, controller and grants.
 
         Args:
             tool_manager: the tool manager used to create the agent's tools and
                 to resolve which tools are available.
+            controller: the controller through which the manager asks the user
+                to approve or deny ``ask`` grants.
             permissions: initial category-to-level grants. When omitted
                 (``None``) every category is granted at
                 :attr:`PermissionLevel.ASK`; pass an explicit ``{}`` to start
@@ -45,6 +52,7 @@ class PermissionManager:
             }
         self._permissions: dict[PermissionCategory, PermissionLevel] = permissions
         self._tool_manager: ToolManager = tool_manager
+        self._controller: Controller = controller
 
     def __repr__(self) -> str:
         """Return a developer-friendly representation of the permission grants.
@@ -135,12 +143,12 @@ class PermissionManager:
     def validate(self, call: ToolCallMessage) -> tuple[bool, Message | None]:
         """Decide whether a requested tool call may execute.
 
-        Allows ``auto`` grants without prompting and prompts the user for
-        ``ask`` grants. A call whose category has no grant (or maps to no
-        category) is denied with a not-permitted error. At the ``ask`` prompt
-        the user types ``y`` to allow, ``y, <note>`` to allow and pass a note
-        back to the model, or any other text to deny (that text becomes the
-        denial reason).
+        Allows ``auto`` grants without asking and asks the user through the
+        controller for ``ask`` grants. A call whose category has no grant (or
+        maps to no category) is denied with a not-permitted error. The
+        controller's :class:`~arancio.core.controllers.responses.PermissionResponse`
+        either allows the call (optionally with a note for the model) or denies
+        it (optionally with a reason for the model).
 
         Args:
             call: the tool call the agent wants to execute.
@@ -166,28 +174,23 @@ class PermissionManager:
         if self._permissions[category] is PermissionLevel.AUTO:
             return True, None
 
-        # ask case
-        answer = input(
-            f"Agent wants to use {call.name} with arguments {call.arguments}. "
-            f"Type 'y' to allow, 'y, message' to allow with a message, "
-            f"or type a reason to deny: "
-        ).strip()
-        if answer.lower() == "y":
-            return True, None
-        if answer.lower().startswith("y,"):
-            user_message = answer[2:].strip()
-            if user_message:
+        # ask case: delegate to the controller and map its response
+        response = self._controller.request(PermissionRequest(call))
+        if response.decision is Decision.ALLOW:
+            if response.message:
                 instruction = (
                     f"While running tool {call.id}: {call.name}, user also "
-                    f"noted: {user_message}. First report tool calling result, "
+                    f"noted: {response.message}. First report tool calling result, "
                     f"then answer user note."
                 )
-                return True, UserMessage(content=instruction, display_text=user_message)
+                return True, UserMessage(
+                    content=instruction, display_text=response.message
+                )
             return True, None
 
         # denied case
         content = f"Tool call {call.name} denied by user."
-        if answer:
-            content += f" Additional information from user: {answer}"
+        if response.message:
+            content += f" Additional information from user: {response.message}"
 
         return False, ToolErrorMessage(content=content, id=call.id)

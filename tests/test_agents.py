@@ -7,6 +7,12 @@ import pytest
 from arancio.core.agents import Agent
 from arancio.core.clients.base import BaseClient
 from arancio.core.clients.litellm import LiteLLMClient
+from arancio.core.controllers.requests import BaseControllerRequest
+from arancio.core.controllers.responses import (
+    BaseControllerResponse,
+    Decision,
+    PermissionResponse,
+)
 from arancio.core.parsers.tool_result.base import BaseToolResultParser
 from arancio.core.permissions.manager import PermissionManager
 from arancio.core.tools.base import BaseTool
@@ -374,6 +380,21 @@ class _StubManager:
         return "_StubManager()"
 
 
+class _FakeController:
+    """Controller stub approving every request (never asked in these tests)."""
+
+    def request(self, request: BaseControllerRequest) -> BaseControllerResponse:
+        """Approve any request.
+
+        Args:
+            request: the request to approve.
+
+        Returns:
+            An ALLOW permission response.
+        """
+        return PermissionResponse(decision=Decision.ALLOW)
+
+
 def _summary_client() -> LiteLLMClient:
     """Build a summarization client for injected tools in tests.
 
@@ -395,7 +416,9 @@ def _agent(**kwargs) -> Agent:
     """
     kwargs.setdefault(
         "permission_manager",
-        PermissionManager(ToolManager(web_summary_client=_summary_client())),
+        PermissionManager(
+            ToolManager(web_summary_client=_summary_client()), _FakeController()
+        ),
     )
     return Agent(**kwargs)
 
@@ -414,7 +437,9 @@ def _permission_manager(
         client.
     """
     return PermissionManager(
-        ToolManager(web_summary_client=_summary_client()), permissions
+        ToolManager(web_summary_client=_summary_client()),
+        _FakeController(),
+        permissions,
     )
 
 

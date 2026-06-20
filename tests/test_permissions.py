@@ -3,20 +3,64 @@
 import pytest
 
 from arancio.core.clients.litellm import LiteLLMClient
+from arancio.core.controllers.requests import BaseControllerRequest, PermissionRequest
+from arancio.core.controllers.responses import (
+    BaseControllerResponse,
+    Decision,
+    PermissionResponse,
+)
 from arancio.core.permissions.manager import PermissionManager
 from arancio.core.tools.manager import ToolManager
 from arancio.core.types.messages import ToolCallMessage, ToolErrorMessage, UserMessage
 from arancio.core.types.permissions import PermissionCategory, PermissionLevel
 
 
+class _FakeController:
+    """Controller stub returning a preset response and recording requests.
+
+    Attributes:
+        requests: the requests passed to :meth:`request`, in order.
+    """
+
+    def __init__(self, response: PermissionResponse | None = None) -> None:
+        """Store the canned response (``None`` means ``request`` must not run).
+
+        Args:
+            response: the response to return; when ``None`` any call to
+                :meth:`request` fails the test.
+        """
+        self._response = response
+        self.requests: list[BaseControllerRequest] = []
+
+    def request(self, request: BaseControllerRequest) -> BaseControllerResponse:
+        """Record the request and return the canned response.
+
+        Args:
+            request: the request to record.
+
+        Returns:
+            The canned response supplied at construction.
+
+        Raises:
+            AssertionError: when no response was configured.
+        """
+        self.requests.append(request)
+        if self._response is None:
+            raise AssertionError("controller.request must not be called")
+        return self._response
+
+
 def _manager(
     permissions: dict[PermissionCategory, PermissionLevel] | None = None,
+    controller: _FakeController | None = None,
 ) -> PermissionManager:
     """Build a permission manager backed by a real tool manager.
 
     Args:
         permissions: optional category-to-level grants forwarded to the
             manager.
+        controller: optional controller stub; defaults to one that fails if
+            asked (so AUTO/absent paths assert no prompt happens).
 
     Returns:
         A :class:`PermissionManager` whose tool manager carries a summary
@@ -26,7 +70,9 @@ def _manager(
         model_id="ollama_chat/deepseek-v4-flash:cloud", stream=False
     )
     return PermissionManager(
-        ToolManager(web_summary_client=summary_client), permissions
+        ToolManager(web_summary_client=summary_client),
+        controller or _FakeController(),
+        permissions,
     )
 
 
@@ -76,39 +122,35 @@ def test_get_allowed_tools_delegates_to_tool_manager() -> None:
 
     permissions = {PermissionCategory.READ: PermissionLevel.ASK}
     tool_manager = _RecordingToolManager()
-    manager = PermissionManager(tool_manager, permissions)
+    manager = PermissionManager(tool_manager, _FakeController(), permissions)
 
     assert manager.get_allowed_tools == ["sentinel"]
     assert tool_manager.received == permissions
 
 
-def test_validate_auto_true_without_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AUTO grants allow the call and never prompt the user."""
-
-    def _boom(*args: object, **kwargs: object) -> str:
-        raise AssertionError("input must not be called for AUTO grants")
-
-    monkeypatch.setattr("builtins.input", _boom)
+def test_validate_auto_true_without_asking() -> None:
+    """AUTO grants allow the call and never ask the controller."""
     manager = _manager({PermissionCategory.EXECUTE: PermissionLevel.AUTO})
 
     assert manager.validate(_call("BashCommandTool")) == (True, None)
 
 
-@pytest.mark.parametrize("answer", ["y", "Y", " y ", "  Y  "])
-def test_validate_ask_allows_on_yes(
-    monkeypatch: pytest.MonkeyPatch, answer: str
-) -> None:
-    """ASK grants allow only when the trimmed lowercase answer is ``y``."""
-    monkeypatch.setattr("builtins.input", lambda *a, **k: answer)
-    manager = _manager({PermissionCategory.WRITE: PermissionLevel.ASK})
+def test_validate_ask_allows_on_allow_decision() -> None:
+    """An ALLOW response with no message allows the call with no message."""
+    controller = _FakeController(PermissionResponse(decision=Decision.ALLOW))
+    manager = _manager({PermissionCategory.WRITE: PermissionLevel.ASK}, controller)
 
     assert manager.validate(_call("WriteFileTool")) == (True, None)
+    assert isinstance(controller.requests[0], PermissionRequest)
+    assert controller.requests[0].call.name == "WriteFileTool"
 
 
-def test_validate_ask_allows_with_note(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``y, <note>`` allows and wraps the note in a report-then-answer instruction."""
-    monkeypatch.setattr("builtins.input", lambda *a, **k: "y, be careful")
-    manager = _manager({PermissionCategory.WRITE: PermissionLevel.ASK})
+def test_validate_ask_allows_with_note() -> None:
+    """An ALLOW response with a message wraps it in a report-then-answer note."""
+    controller = _FakeController(
+        PermissionResponse(decision=Decision.ALLOW, message="be careful")
+    )
+    manager = _manager({PermissionCategory.WRITE: PermissionLevel.ASK}, controller)
 
     allowed, message = manager.validate(_call("WriteFileTool"))
 
@@ -118,40 +160,46 @@ def test_validate_ask_allows_with_note(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "be careful" in message.content
 
 
-def test_validate_ask_allows_with_empty_note(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``y,`` with no note allows the call with no message."""
-    monkeypatch.setattr("builtins.input", lambda *a, **k: "y,")
-    manager = _manager({PermissionCategory.WRITE: PermissionLevel.ASK})
+@pytest.mark.parametrize("note", [None, ""])
+def test_validate_ask_allows_with_empty_note(note: str | None) -> None:
+    """An ALLOW response with no/empty message allows with no message."""
+    controller = _FakeController(
+        PermissionResponse(decision=Decision.ALLOW, message=note)
+    )
+    manager = _manager({PermissionCategory.WRITE: PermissionLevel.ASK}, controller)
 
     assert manager.validate(_call("WriteFileTool")) == (True, None)
 
 
-@pytest.mark.parametrize(
-    "answer", ["", "n", "no", "yes please", "use the read tool instead"]
-)
-def test_validate_ask_denies_on_non_yes(
-    monkeypatch: pytest.MonkeyPatch, answer: str
-) -> None:
-    """ASK grants deny on any non-``y`` answer, returning a tool error."""
-    monkeypatch.setattr("builtins.input", lambda *a, **k: answer)
-    manager = _manager({PermissionCategory.WRITE: PermissionLevel.ASK})
+def test_validate_ask_denies_without_reason() -> None:
+    """A DENY response with no message returns a bare denial tool error."""
+    controller = _FakeController(PermissionResponse(decision=Decision.DENY))
+    manager = _manager({PermissionCategory.WRITE: PermissionLevel.ASK}, controller)
+
+    content = "Tool call WriteFileTool denied by user."
+    assert manager.validate(_call("WriteFileTool")) == (
+        False,
+        ToolErrorMessage(content=content, id="call_1"),
+    )
+
+
+def test_validate_ask_denies_with_reason() -> None:
+    """A DENY response with a message appends it to the denial as the reason."""
+    controller = _FakeController(
+        PermissionResponse(decision=Decision.DENY, message="use the read tool instead")
+    )
+    manager = _manager({PermissionCategory.WRITE: PermissionLevel.ASK}, controller)
 
     allowed, message = manager.validate(_call("WriteFileTool"))
 
     assert allowed is False
     assert isinstance(message, ToolErrorMessage)
     assert message.id == "call_1"
-    if answer:
-        assert answer in message.content
+    assert "use the read tool instead" in message.content
 
 
-def test_validate_absent_category_denies(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Calls to ungranted categories are denied without prompting."""
-
-    def _boom(*args: object, **kwargs: object) -> str:
-        raise AssertionError("input must not be called for ungranted categories")
-
-    monkeypatch.setattr("builtins.input", _boom)
+def test_validate_absent_category_denies() -> None:
+    """Calls to ungranted categories are denied without asking the controller."""
     manager = _manager({PermissionCategory.READ: PermissionLevel.ASK})
 
     content = "Tool WriteFileTool does not exist."

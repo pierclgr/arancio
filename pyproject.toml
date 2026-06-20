@@ -11,8 +11,12 @@ dependencies = [
     "litellm>=1.83.14",
     "pyyaml>=6.0.3",
     "requests>=2.33.1",
+    "textual>=5.0.0",
     "trafilatura>=2.0.0",
 ]
+
+[project.scripts]
+arancio = "arancio.ui.__main__:main"
 
 [dependency-groups]
 dev = [
