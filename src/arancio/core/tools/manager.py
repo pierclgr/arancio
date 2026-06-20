@@ -15,18 +15,18 @@ class ToolManager:
     receives the summarization client this manager holds and injects.
 
     Attributes:
-        _summary_client: the client injected into :class:`FetchWebTool`.
+        _web_summary_client: the client injected into :class:`FetchWebTool`.
     """
 
-    def __init__(self, summary_client: BaseClient) -> None:
+    def __init__(self, web_summary_client: BaseClient) -> None:
         """Initialize the manager with the summarization client to inject.
 
         Args:
-            summary_client: the client injected into :class:`FetchWebTool`;
+            web_summary_client: the client injected into :class:`FetchWebTool`;
                 held by reference so its settings can be changed in place at
                 runtime and seen by the tool.
         """
-        self._summary_client = summary_client
+        self._web_summary_client = web_summary_client
 
     @staticmethod
     def available_tools(
@@ -78,7 +78,7 @@ class ToolManager:
             One instance per tool class across the granted categories.
         """
         return [
-            FetchWebTool(client=self._summary_client)
+            FetchWebTool(client=self._web_summary_client)
             if tool_cls is FetchWebTool
             else tool_cls()
             for tool_cls in self.available_tools(permissions)

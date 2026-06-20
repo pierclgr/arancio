@@ -25,7 +25,9 @@ def _manager(
     summary_client = LiteLLMClient(
         model_id="ollama_chat/deepseek-v4-flash:cloud", stream=False
     )
-    return PermissionManager(ToolManager(summary_client=summary_client), permissions)
+    return PermissionManager(
+        ToolManager(web_summary_client=summary_client), permissions
+    )
 
 
 def _call(name: str) -> ToolCallMessage:

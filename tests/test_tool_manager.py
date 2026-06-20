@@ -17,12 +17,12 @@ def _summary_client() -> LiteLLMClient:
 
 def test_create_tools_empty_returns_no_tools() -> None:
     """No grants yields no tools."""
-    assert ToolManager(summary_client=_summary_client()).create_tools({}) == []
+    assert ToolManager(web_summary_client=_summary_client()).create_tools({}) == []
 
 
 def test_create_tools_constructs_granted_category_tools() -> None:
     """A granted category builds exactly its tool classes."""
-    tools = ToolManager(summary_client=_summary_client()).create_tools(
+    tools = ToolManager(web_summary_client=_summary_client()).create_tools(
         {PermissionCategory.READ: PermissionLevel.ASK}
     )
 
@@ -31,7 +31,7 @@ def test_create_tools_constructs_granted_category_tools() -> None:
 
 def test_create_tools_multiple_categories_unions_tools() -> None:
     """Multiple categories build the union of their tools."""
-    tools = ToolManager(summary_client=_summary_client()).create_tools(
+    tools = ToolManager(web_summary_client=_summary_client()).create_tools(
         {
             PermissionCategory.READ: PermissionLevel.ASK,
             PermissionCategory.EXECUTE: PermissionLevel.AUTO,
@@ -50,7 +50,7 @@ def test_create_tools_multiple_categories_unions_tools() -> None:
 def test_create_tools_web_injects_summary_client_by_reference() -> None:
     """WEB builds SearchWebTool and FetchWebTool, injecting the summary client."""
     summary_client = _summary_client()
-    tools = ToolManager(summary_client=summary_client).create_tools(
+    tools = ToolManager(web_summary_client=summary_client).create_tools(
         {PermissionCategory.WEB: PermissionLevel.ASK}
     )
 
@@ -89,7 +89,7 @@ def test_tool_repr_default_and_fetch_override() -> None:
     summary_client = _summary_client()
     tools = {
         tool.name: tool
-        for tool in ToolManager(summary_client=summary_client).create_tools(
+        for tool in ToolManager(web_summary_client=summary_client).create_tools(
             {
                 PermissionCategory.READ: PermissionLevel.ASK,
                 PermissionCategory.WEB: PermissionLevel.ASK,

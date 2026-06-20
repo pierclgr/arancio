@@ -395,7 +395,7 @@ def _agent(**kwargs) -> Agent:
     """
     kwargs.setdefault(
         "permission_manager",
-        PermissionManager(ToolManager(summary_client=_summary_client())),
+        PermissionManager(ToolManager(web_summary_client=_summary_client())),
     )
     return Agent(**kwargs)
 
@@ -413,7 +413,9 @@ def _permission_manager(
         A :class:`PermissionManager` whose tool manager carries a summary
         client.
     """
-    return PermissionManager(ToolManager(summary_client=_summary_client()), permissions)
+    return PermissionManager(
+        ToolManager(web_summary_client=_summary_client()), permissions
+    )
 
 
 def test_agent_stores_and_returns_reasoning_messages() -> None:
