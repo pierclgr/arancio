@@ -7,6 +7,7 @@ from arancio.core.clients.litellm import LiteLLMClient
 from arancio.core.permissions.manager import PermissionManager
 from arancio.core.tools.manager import ToolManager
 from arancio.core.types.permissions import PermissionCategory, PermissionLevel
+from arancio.storage.manager import StorageManager
 from arancio.ui.app import App
 from arancio.ui.controller import UIController
 
@@ -20,6 +21,8 @@ def main() -> None:
     permission manager, which needs the controller); its ``app`` is assigned once the
     app exists.
     """
+    StorageManager().bind_litellm_login_dir()
+
     model_id = os.environ.get("ARANCIO_MODEL", DEFAULT_MODEL_ID)
     controller = UIController()
     client = LiteLLMClient(model_id=model_id, stream=True)

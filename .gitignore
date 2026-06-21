@@ -9,6 +9,7 @@ __pycache__/
 # coding agents
 .claude/
 .codex
+.serena/
 
 # manual tests
 smoke_test/
