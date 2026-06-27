@@ -254,6 +254,22 @@ class _FailingClient(_ReasoningClient):
         return [AssistantMessage(content="done")]
 
 
+class _AlwaysFailingClient(_ReasoningClient):
+    """Client raising on every request, so every turn retries."""
+
+    def send_request(self, request: BaseRequest) -> List[Message]:
+        """Raise on every request to force a retry on each turn.
+
+        Args:
+            request: the request built by the agent.
+
+        Raises:
+            RuntimeError: on every request.
+        """
+        self.requests.append(request)
+        raise RuntimeError("always down")
+
+
 class _PostFinalizeFailingClient(_ReasoningClient):
     """Client yielding a finalized message then raising during iteration.
 
@@ -571,6 +587,24 @@ def test_agent_yields_error_message_for_loop_exception() -> None:
         AssistantMessage(content="done"),
     ]
     assert all(not isinstance(msg, ErrorMessage) for msg in agent._message_history)
+
+
+def test_agent_retry_wait_grows_by_multiplier(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each failed-turn retry waits the previous wait times the multiplier."""
+    waits: list[float] = []
+    monkeypatch.setattr("time.sleep", waits.append)
+
+    agent = _agent(
+        client=_AlwaysFailingClient(),
+        permission_manager=_StubManager(),
+        max_turns=3,
+        retry_delay=1.0,
+        retry_delay_multiplier=2.0,
+    )
+
+    list(agent.run(UserMessage(content="hello")))
+
+    assert waits == [1.0, 2.0, 4.0]
 
 
 def test_agent_yields_error_but_does_not_retry_after_finalized() -> None:

@@ -14,5 +14,8 @@ TOOLS_HARNESS_PATH = HARNESS_DIR_ROOT_PATH / "tools"
 ARANCIO_LITELLM_DIR = ARANCIO_DEFAULT_DIR / "litellm"
 LITELLM_CONFIG_DIR = Path.home() / ".config" / "litellm"
 
+# settings persisted under the working directory root
+ARANCIO_SETTINGS_FILE = ARANCIO_DEFAULT_DIR / "settings.yml"
+
 TOOL_DESCRIPTION_FILENAME = "description.md"
 TOOL_INPUT_SCHEMA_FILENAME = "input_schema.yml"

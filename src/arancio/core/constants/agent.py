@@ -1,0 +1,5 @@
+"""Agent loop constants."""
+
+AGENT_DEFAULT_MAX_TURNS: int = 3
+AGENT_DEFAULT_TURN_WAIT_TIME: float = 3.0
+AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER: float = 2.0

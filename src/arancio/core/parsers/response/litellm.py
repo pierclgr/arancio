@@ -134,8 +134,7 @@ class LiteLLMResponseParser(Parser):
             )
             return AssistantMessage(content=text)
         if item_type == "function_call":
-            arguments_raw = item.get("arguments")
-            arguments = json.loads(arguments_raw) if arguments_raw else {}
+            arguments = cls._parse_arguments(item.get("arguments"))
             name = item["name"]
             return ToolCallMessage(
                 id=item["call_id"],
@@ -144,6 +143,33 @@ class LiteLLMResponseParser(Parser):
                 content=f"{name}({json.dumps(arguments)})",
             )
         return None
+
+    @staticmethod
+    def _parse_arguments(arguments_raw: str | None) -> dict[str, Any]:
+        """Decode a function-call ``arguments`` JSON string leniently.
+
+        Models bridged from chat completions to the Responses API (for
+        example ``ollama_chat/*``) can emit the full arguments object more
+        than once across stream chunks, which LiteLLM's bridge concatenates
+        into the finalized item, so ``arguments`` is a valid JSON object
+        followed by trailing duplicate data. ``json.loads`` rejects that
+        with ``Extra data``; ``raw_decode`` returns the leading object and
+        ignores the rest. Because parallel tool calls each arrive as their
+        own output item, trailing data inside one item can only be a repeat
+        of the same call, so taking the leading object is not lossy.
+
+        Args:
+            arguments_raw: the raw ``arguments`` string from a
+                ``function_call`` output item, or ``None``.
+
+        Returns:
+            The decoded arguments mapping, empty when there is nothing to
+            decode.
+        """
+        if not arguments_raw:
+            return {}
+        decoded, _ = json.JSONDecoder().raw_decode(arguments_raw.strip())
+        return decoded
 
     @staticmethod
     def _render_reasoning_summary(item: dict[str, Any]) -> str:

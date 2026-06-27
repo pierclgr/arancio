@@ -359,6 +359,45 @@ def test_parse_response_skips_unknown_output_item_types(
     assert result == [AssistantMessage(content="ok")]
 
 
+def test_parse_response_decodes_duplicated_tool_call_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tool-call arguments with trailing duplicate data decode cleanly.
+
+    Models bridged from chat completions to the Responses API (e.g. ``ollama_chat/*``)
+    can repeat the full arguments object across stream chunks, so the finalized
+    ``arguments`` string is a valid JSON object followed by a duplicate. The parser must
+    take the leading object instead of raising ``JSONDecodeError: Extra data``.
+    """
+    args = {"url": "https://example.com/a", "query": "summarize"}
+    duplicated = json.dumps(args) + json.dumps(args)
+    output = [
+        {
+            "type": "function_call",
+            "call_id": "call-1",
+            "name": "FetchWebTool",
+            "arguments": duplicated,
+        }
+    ]
+    _patch_responses(monkeypatch, output)
+
+    request = BaseRequest(
+        model_id="ollama_chat/glm-5.2:cloud",
+        message_list=[UserMessage(content="fetch it")],
+    )
+
+    result = list(LiteLLMClient().send_request(request))
+
+    assert result == [
+        ToolCallMessage(
+            id="call-1",
+            name="FetchWebTool",
+            arguments=args,
+            content=f"FetchWebTool({json.dumps(args)})",
+        ),
+    ]
+
+
 def test_parse_response_handles_pydantic_style_output_items(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

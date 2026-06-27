@@ -6,6 +6,11 @@ from typing import Dict, List, Type
 
 from arancio.core.builders.system_prompt import SystemPromptBuilder
 from arancio.core.clients.base import BaseClient
+from arancio.core.constants.agent import (
+    AGENT_DEFAULT_MAX_TURNS,
+    AGENT_DEFAULT_TURN_WAIT_TIME,
+    AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
+)
 from arancio.core.permissions.manager import PermissionManager
 from arancio.core.tools.base import BaseTool
 from arancio.core.types.messages import (
@@ -27,8 +32,9 @@ class Agent:
         self,
         client: BaseClient,
         permission_manager: PermissionManager,
-        max_turns: int = 1000,
-        retry_delay: float = 1.0,
+        max_turns: int = AGENT_DEFAULT_MAX_TURNS,
+        retry_delay: float = AGENT_DEFAULT_TURN_WAIT_TIME,
+        retry_delay_multiplier: float = AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
     ) -> None:
         """Initialize the agent with a client and permission manager.
 
@@ -39,10 +45,13 @@ class Agent:
             max_turns: the maximum number of loop turns before aborting.
             retry_delay: seconds to wait before retrying a failed turn, so the
                 turn is not retried immediately.
+            retry_delay_multiplier: factor the retry wait grows by on each
+                consecutive failed-turn retry (exponential backoff).
         """
         self._client: BaseClient = client
         self._max_turns: int = max_turns
         self._retry_delay: float = retry_delay
+        self._retry_delay_multiplier: float = retry_delay_multiplier
         self._message_history: List[Message] = []
         self._system_prompt_builder: Type[SystemPromptBuilder] = SystemPromptBuilder
         self._permission_manager: PermissionManager = permission_manager
@@ -98,6 +107,60 @@ class Agent:
         """
         return self._system_prompt_builder.build()
 
+    @property
+    def max_turns(self) -> int:
+        """Return the maximum number of loop turns per run.
+
+        Returns:
+            The maximum number of turns before the run aborts.
+        """
+        return self._max_turns
+
+    @max_turns.setter
+    def max_turns(self, value: int) -> None:
+        """Set the maximum number of loop turns per run.
+
+        Args:
+            value: the new maximum number of turns.
+        """
+        self._max_turns = value
+
+    @property
+    def retry_delay(self) -> float:
+        """Return the base wait before retrying a failed turn.
+
+        Returns:
+            The base retry wait in seconds.
+        """
+        return self._retry_delay
+
+    @retry_delay.setter
+    def retry_delay(self, value: float) -> None:
+        """Set the base wait before retrying a failed turn.
+
+        Args:
+            value: the new base retry wait in seconds.
+        """
+        self._retry_delay = value
+
+    @property
+    def retry_delay_multiplier(self) -> float:
+        """Return the factor the retry wait grows by on each consecutive retry.
+
+        Returns:
+            The exponential-backoff multiplier.
+        """
+        return self._retry_delay_multiplier
+
+    @retry_delay_multiplier.setter
+    def retry_delay_multiplier(self, value: float) -> None:
+        """Set the factor the retry wait grows by on each consecutive retry.
+
+        Args:
+            value: the new exponential-backoff multiplier.
+        """
+        self._retry_delay_multiplier = value
+
     def add_tool(self, tool: BaseTool):
         """Append a tool to the agent's tool catalog.
 
@@ -148,6 +211,18 @@ class Agent:
         self._permission_manager.set_permission_level(category, level)
         self._refresh_tools()
 
+    def set_permissions(
+        self, permissions: dict[PermissionCategory, PermissionLevel]
+    ) -> None:
+        """Replace all permission grants and rebuild the tool catalog.
+
+        Args:
+            permissions: the new category-to-level grants, replacing the
+                current ones wholesale.
+        """
+        self._permission_manager.set_permissions(permissions)
+        self._refresh_tools()
+
     def _add_message_to_history(self, message: Message) -> None:
         """Append a single message to the conversation history.
 
@@ -190,6 +265,9 @@ class Agent:
             tool calls and tool results.
         """
         self._add_message_to_history(message=message)
+
+        # backoff wait that grows by the multiplier on each consecutive retry
+        retry_wait = self._retry_delay
 
         for _ in range(self._max_turns):
             tool_calls: List[ToolCallMessage] = []
@@ -244,7 +322,9 @@ class Agent:
                 yield ErrorMessage(content=f"Error while executing user request: {e}")
                 if received_finalized:
                     return
-                # wait before retrying so the turn is not retried immediately
-                time.sleep(self._retry_delay)
+                # wait before retrying so the turn is not retried immediately;
+                # the wait grows by the multiplier on each consecutive retry
+                time.sleep(retry_wait)
+                retry_wait *= self._retry_delay_multiplier
 
         yield ErrorMessage(content="Max turns exceeded")

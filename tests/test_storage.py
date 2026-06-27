@@ -2,6 +2,11 @@
 
 from pathlib import Path
 
+import pytest
+import yaml
+
+import arancio.storage.manager as storage_mod
+from arancio.settings.settings import Settings
 from arancio.storage.manager import StorageManager
 
 
@@ -61,3 +66,43 @@ def test_bind_litellm_login_dir_noop_when_already_symlink(tmp_path: Path) -> Non
     assert result == target
     assert config_dir.is_symlink()
     assert config_dir.resolve() == target.resolve()
+
+
+def test_load_settings_creates_default_file_when_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``load_settings`` writes and returns the defaults when no file exists."""
+    settings_file = tmp_path / "settings.yml"
+    monkeypatch.setattr(storage_mod, "ARANCIO_SETTINGS_FILE", settings_file)
+
+    loaded = StorageManager().load_settings()
+
+    assert settings_file.exists()
+    assert loaded == Settings.default()
+
+
+def test_load_settings_reads_back_saved_settings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``load_settings`` returns the settings previously persisted to disk."""
+    monkeypatch.setattr(storage_mod, "ARANCIO_SETTINGS_FILE", tmp_path / "settings.yml")
+    settings = Settings.default()
+    settings.model_id = "openai/gpt-4o"
+
+    StorageManager().save_settings(settings)
+
+    assert StorageManager().load_settings() == settings
+
+
+def test_save_settings_writes_serialized_yaml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``save_settings`` writes the serialized settings as YAML and returns its path."""
+    settings_file = tmp_path / "settings.yml"
+    monkeypatch.setattr(storage_mod, "ARANCIO_SETTINGS_FILE", settings_file)
+    settings = Settings.default()
+
+    path = StorageManager().save_settings(settings)
+
+    assert path == settings_file
+    assert yaml.safe_load(settings_file.read_text()) == settings.to_dict()

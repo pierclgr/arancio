@@ -130,6 +130,16 @@ class PermissionManager:
             raise ValueError(f"No permission granted for category {category}.")
         self._permissions[category] = level
 
+    def set_permissions(
+        self, permissions: dict[PermissionCategory, PermissionLevel]
+    ) -> None:
+        """Replace all grants with the given category-to-level mapping.
+
+        Args:
+            permissions: the new grants, replacing the current ones wholesale.
+        """
+        self._permissions = permissions
+
     @property
     def get_allowed_tools(self) -> list[BaseTool]:
         """Create the tools the agent may access from the current grants.
