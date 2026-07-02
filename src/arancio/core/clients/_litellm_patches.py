@@ -19,6 +19,9 @@ from litellm.types.llms.openai import (
 # marker so the patch is applied at most once per process
 _MIXED_CHUNK_PATCH_FLAG = "_arancio_mixed_chunk_patched"
 
+# marker so the patch is applied at most once per process
+_FIRST_CHUNK_PATCH_FLAG = "_arancio_first_chunk_patched"
+
 
 def _delta_has_text_and_reasoning(chunk) -> bool:
     """Return whether a chat chunk carries both reasoning and text.
@@ -106,7 +109,69 @@ def _patch_mixed_reasoning_text_chunk() -> None:
     setattr(cls, _MIXED_CHUNK_PATCH_FLAG, True)
 
 
+def _patch_sync_first_chunk_drop() -> None:
+    """Stop LiteLLM's sync Responses iterator dropping the first chunk.
+
+    LiteLLM's chat-to-Responses bridge
+    (``LiteLLMCompletionStreamingIterator``) drives the synchronous
+    ``litellm.responses`` path through ``__next__``. On the first
+    content-bearing chunk, ``_ensure_output_item_for_chunk`` queues an
+    ``output_item.added`` (and, for messages, ``content_part.added``)
+    event, and ``__next__`` returns that queued event *before* transforming
+    the chunk into a delta, discarding the chunk without ever emitting its
+    text or reasoning; the start of the streamed answer is silently lost.
+    The async ``__anext__`` does not have this bug: it transforms the chunk
+    and appends the delta to the pending buffer before draining it.
+
+    This wraps ``_ensure_output_item_for_chunk`` to mirror the async
+    ordering: on the first-content-chunk transition it also transforms that
+    chunk and appends its delta to ``_pending_response_events``, so the
+    delta survives the queued ``output_item.added`` and reaches the
+    consumer. It acts only for text/reasoning chunks; tool-call chunks are
+    left untouched (their deltas stream through ``_pending_tool_events``,
+    not ``_pending_response_events``, so appending would misroute them).
+    Later chunks hit the ``sent_output_item_added_event`` guard and are
+    left to the original transform, so nothing is double-emitted.
+
+    Unlike the mixed-chunk patch there is no per-chunk guard that goes
+    quiet once upstream fixes the bug, so re-verify and delete this patch
+    when upgrading LiteLLM: against a fixed iterator it would double-emit
+    the first delta.
+    """
+    cls = LiteLLMCompletionStreamingIterator
+    if getattr(cls, _FIRST_CHUNK_PATCH_FLAG, False):
+        return
+
+    original = cls._ensure_output_item_for_chunk
+
+    def _patched(self, chunk) -> None:
+        """Buffer the first content chunk's delta before it is dropped.
+
+        Args:
+            self: the streaming-iterator instance.
+            chunk: the chat-completions chunk being processed.
+        """
+        was_sent = self.sent_output_item_added_event
+        original(self, chunk)
+        # only act on the first-content-chunk transition
+        if was_sent or not self.sent_output_item_added_event:
+            return
+        delta = chunk.choices[0].delta if getattr(chunk, "choices", None) else None
+        has_text = bool(getattr(delta, "content", None))
+        has_reasoning = bool(getattr(delta, "reasoning_content", None))
+        # leave tool-first chunks to the original transform/tool queue
+        if not (has_text or has_reasoning):
+            return
+        delta_event = self._transform_chat_completion_chunk_to_response_api_chunk(chunk)
+        if delta_event:
+            self._pending_response_events.append(delta_event)
+
+    cls._ensure_output_item_for_chunk = _patched
+    setattr(cls, _FIRST_CHUNK_PATCH_FLAG, True)
+
+
 def apply() -> None:
     """Apply all LiteLLM runtime patches (idempotent)."""
     _ = litellm  # ensure litellm is imported before patching its internals
     _patch_mixed_reasoning_text_chunk()
+    _patch_sync_first_chunk_drop()
