@@ -1,5 +1,9 @@
 """Agent loop constants."""
 
-AGENT_DEFAULT_MAX_TURNS: int = 3
+# None means unlimited: the loop runs until the model stops requesting
+# tools; set an int only to cap unattended runs
+AGENT_DEFAULT_MAX_TURNS: int | None = None
+# consecutive failed turns before the run aborts
+AGENT_DEFAULT_MAX_RETRIES: int = 5
 AGENT_DEFAULT_TURN_WAIT_TIME: float = 3.0
 AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER: float = 2.0

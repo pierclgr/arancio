@@ -1,6 +1,7 @@
 """Tests for the Settings data holder and its YAML-serializable form."""
 
 from arancio.core.constants.agent import (
+    AGENT_DEFAULT_MAX_RETRIES,
     AGENT_DEFAULT_MAX_TURNS,
     AGENT_DEFAULT_TURN_WAIT_TIME,
     AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
@@ -25,6 +26,7 @@ def test_default_values():
     assert settings.thinking_effort == LITELLM_DEFAULT_THINKING_EFFORT
     assert settings.thinking_summary == LITELLM_DEFAULT_THINKING_SUMMARY
     assert settings.max_turns == AGENT_DEFAULT_MAX_TURNS
+    assert settings.max_retries == AGENT_DEFAULT_MAX_RETRIES
     assert settings.turn_wait_time == AGENT_DEFAULT_TURN_WAIT_TIME
     assert settings.turn_wait_time_multiplier == AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER
 
@@ -41,6 +43,7 @@ def test_to_dict_uses_plain_types():
     }
     assert data["model_id"] is None
     assert data["max_turns"] == AGENT_DEFAULT_MAX_TURNS
+    assert data["max_retries"] == AGENT_DEFAULT_MAX_RETRIES
 
 
 def test_to_from_dict_roundtrip():
@@ -55,6 +58,7 @@ def test_to_from_dict_roundtrip():
         thinking_effort="high",
         thinking_summary=None,
         max_turns=7,
+        max_retries=4,
         turn_wait_time=1.5,
         turn_wait_time_multiplier=3.0,
     )

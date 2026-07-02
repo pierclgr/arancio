@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from arancio.core.constants.agent import (
+    AGENT_DEFAULT_MAX_RETRIES,
     AGENT_DEFAULT_MAX_TURNS,
     AGENT_DEFAULT_TURN_WAIT_TIME,
     AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
@@ -32,7 +33,10 @@ class Settings:
         thinking_effort: the model's reasoning effort.
         thinking_summary: the model's reasoning summary mode, or ``None`` to
             disable summaries (e.g. for Ollama models).
-        max_turns: the maximum number of agent turns per run.
+        max_turns: the maximum number of agent turns per run, or ``None``
+            for no limit.
+        max_retries: the maximum number of consecutive failed agent turns
+            per run.
         turn_wait_time: the base wait, in seconds, before retrying a failed turn.
         turn_wait_time_multiplier: the factor the wait grows by on each
             consecutive retry.
@@ -43,7 +47,8 @@ class Settings:
     summary_model_id: str | None
     thinking_effort: str
     thinking_summary: str | None
-    max_turns: int
+    max_turns: int | None
+    max_retries: int
     turn_wait_time: float
     turn_wait_time_multiplier: float
 
@@ -65,6 +70,7 @@ class Settings:
             thinking_effort=LITELLM_DEFAULT_THINKING_EFFORT,
             thinking_summary=LITELLM_DEFAULT_THINKING_SUMMARY,
             max_turns=AGENT_DEFAULT_MAX_TURNS,
+            max_retries=AGENT_DEFAULT_MAX_RETRIES,
             turn_wait_time=AGENT_DEFAULT_TURN_WAIT_TIME,
             turn_wait_time_multiplier=AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
         )
@@ -88,6 +94,7 @@ class Settings:
             "thinking_effort": self.thinking_effort,
             "thinking_summary": self.thinking_summary,
             "max_turns": self.max_turns,
+            "max_retries": self.max_retries,
             "turn_wait_time": self.turn_wait_time,
             "turn_wait_time_multiplier": self.turn_wait_time_multiplier,
         }
@@ -114,6 +121,7 @@ class Settings:
             thinking_effort=data["thinking_effort"],
             thinking_summary=data["thinking_summary"],
             max_turns=data["max_turns"],
+            max_retries=data["max_retries"],
             turn_wait_time=data["turn_wait_time"],
             turn_wait_time_multiplier=data["turn_wait_time_multiplier"],
         )

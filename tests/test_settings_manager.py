@@ -58,6 +58,7 @@ def _custom_settings():
         thinking_effort="high",
         thinking_summary=None,
         max_turns=9,
+        max_retries=3,
         turn_wait_time=5.0,
         turn_wait_time_multiplier=4.0,
     )
@@ -78,6 +79,7 @@ def test_apply_pushes_settings_into_live_objects():
     assert summary_client.thinking_effort is None
     assert summary_client.thinking_summary is None
     assert agent.max_turns == 9
+    assert agent.max_retries == 3
     assert agent.retry_delay == 5.0
     assert agent.retry_delay_multiplier == 4.0
     # only READ granted: the catalog rebuilds to the read tools alone

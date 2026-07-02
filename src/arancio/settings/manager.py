@@ -93,6 +93,7 @@ class SettingsManager:
         self._client.thinking_summary = settings.thinking_summary
         self._summary_client.model_id = settings.summary_model_id
         self._agent.max_turns = settings.max_turns
+        self._agent.max_retries = settings.max_retries
         self._agent.retry_delay = settings.turn_wait_time
         self._agent.retry_delay_multiplier = settings.turn_wait_time_multiplier
         self._agent.set_permissions(settings.permissions)

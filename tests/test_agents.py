@@ -270,6 +270,38 @@ class _AlwaysFailingClient(_ReasoningClient):
         raise RuntimeError("always down")
 
 
+class _IntermittentFailingClient(_ReasoningClient):
+    """Client alternating one failed request with one successful turn."""
+
+    def send_request(self, request: BaseRequest) -> List[Message]:
+        """Raise on odd requests, answer with a tool call then a final reply.
+
+        Args:
+            request: the request built by the agent.
+
+        Returns:
+            A tool call on the second request, a final assistant message on
+            the fourth.
+
+        Raises:
+            RuntimeError: on every odd-numbered request.
+        """
+        self.requests.append(request)
+        turn = len(self.requests)
+        if turn % 2 == 1:
+            raise RuntimeError("intermittent")
+        if turn == 2:
+            return [
+                ToolCallMessage(
+                    content='EchoTool({"text": "hello"})',
+                    id="call_1",
+                    name="EchoTool",
+                    arguments={"text": "hello"},
+                )
+            ]
+        return [AssistantMessage(content="done")]
+
+
 class _PostFinalizeFailingClient(_ReasoningClient):
     """Client yielding a finalized message then raising during iteration.
 
@@ -293,6 +325,43 @@ class _PostFinalizeFailingClient(_ReasoningClient):
         self.requests.append(request)
         yield AssistantMessage(content="visible")
         raise RuntimeError("post-stream logging blew up")
+
+
+class _LongToolLoopClient(_ReasoningClient):
+    """Client requesting a tool call on every turn until the given count."""
+
+    def __init__(self, tool_turns: int) -> None:
+        """Initialize the client with the number of tool-calling turns.
+
+        Args:
+            tool_turns: how many consecutive requests answer with a tool call
+                before the final text-only reply.
+        """
+        super().__init__()
+        self._tool_turns = tool_turns
+
+    def send_request(self, request: BaseRequest) -> List[Message]:
+        """Return one tool call per request until exhausted, then finish.
+
+        Args:
+            request: the request built by the agent.
+
+        Returns:
+            A tool-call batch for each of the first ``tool_turns`` requests,
+            then a final assistant batch.
+        """
+        self.requests.append(request)
+        turn = len(self.requests)
+        if turn <= self._tool_turns:
+            return [
+                ToolCallMessage(
+                    content=f'EchoTool({{"text": "step {turn}"}})',
+                    id=f"call_{turn}",
+                    name="EchoTool",
+                    arguments={"text": f"step {turn}"},
+                )
+            ]
+        return [AssistantMessage(content="done")]
 
 
 class _MultiToolLoopClient(_ReasoningClient):
@@ -597,7 +666,7 @@ def test_agent_retry_wait_grows_by_multiplier(monkeypatch: pytest.MonkeyPatch) -
     agent = _agent(
         client=_AlwaysFailingClient(),
         permission_manager=_StubManager(),
-        max_turns=3,
+        max_retries=4,
         retry_delay=1.0,
         retry_delay_multiplier=2.0,
     )
@@ -623,6 +692,61 @@ def test_agent_yields_error_but_does_not_retry_after_finalized() -> None:
     assert len(client.requests) == 1
     assert AssistantMessage(content="visible") in agent._message_history
     assert all(not isinstance(msg, ErrorMessage) for msg in agent._message_history)
+
+
+def test_agent_unlimited_by_default_completes_long_tool_runs() -> None:
+    """With the default (no limit) the loop runs until the model stops.
+
+    Regression for the default budget being a small number: a legitimate
+    multi-step task must never abort with "Max turns exceeded" unless the
+    caller explicitly sets a limit.
+    """
+    client = _LongToolLoopClient(tool_turns=50)
+    agent = _agent(client=client, permission_manager=_StubManager(tools=[EchoTool()]))
+    assert agent.max_turns is None
+
+    response = list(agent.run(UserMessage(content="hello")))
+
+    assert response[-1] == AssistantMessage(content="done")
+    assert all(not isinstance(msg, ErrorMessage) for msg in response)
+    assert len(client.requests) == 51
+
+
+def test_agent_yields_error_message_when_max_retries_exceeded() -> None:
+    """Reaching max_retries consecutive failed turns aborts the run."""
+    client = _AlwaysFailingClient()
+    agent = _agent(
+        client=client,
+        max_retries=2,
+        permission_manager=_StubManager(),
+        retry_delay=0,
+    )
+
+    response = list(agent.run(UserMessage(content="hello")))
+
+    assert response == [
+        ErrorMessage(content="Error while executing user request: always down"),
+        ErrorMessage(content="Error while executing user request: always down"),
+        ErrorMessage(content="Max retries exceeded"),
+    ]
+    assert len(client.requests) == 2
+
+
+def test_agent_successful_turn_resets_consecutive_error_count() -> None:
+    """A successful turn between failures resets the max_retries error budget."""
+    client = _IntermittentFailingClient()
+    agent = _agent(
+        client=client,
+        max_retries=2,
+        permission_manager=_StubManager(tools=[EchoTool()]),
+        retry_delay=0,
+    )
+
+    response = list(agent.run(UserMessage(content="hello")))
+
+    assert response[-1] == AssistantMessage(content="done")
+    assert ErrorMessage(content="Max retries exceeded") not in response
+    assert len(client.requests) == 4
 
 
 def test_agent_yields_error_message_when_max_turns_exceeded() -> None:
@@ -690,6 +814,7 @@ def test_agent_repr_includes_configuration_without_history_contents() -> None:
         "), "
         "permissions=_StubManager(), "
         "max_turns=3, "
+        "max_retries=5, "
         "tools=[]"
         ")"
     )
