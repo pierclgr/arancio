@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from textual.widgets import Input, Markdown
 
 from arancio.core.types.messages import (
+    AssistantChunkMessage,
     AssistantMessage,
     Message,
     ReasoningMessage,
@@ -43,19 +44,25 @@ class _ScriptedAgent:
 
 
 class _SyncApp(App):
-    """App whose agent loop runs inline (thread workers do not run under run_test)."""
+    """App running its agent loop as an async worker, not a thread worker."""
 
     def _run_agent(self, text: str) -> None:
-        """Run the agent loop synchronously (no worker thread).
+        """Drive the agent loop via an async worker instead of a thread.
 
         Args:
             text: the user message that starts the turn.
         """
-        try:
-            for message in self._agent.run(UserMessage(content=text)):
-                self._handle_message(message)
-        finally:
-            self._set_busy(False)
+
+        async def _drive() -> None:
+            """Iterate the agent run, awaiting each rendered message."""
+            try:
+                for message in self._agent.run(UserMessage(content=text)):
+                    await self._handle_message(message)
+            finally:
+                await self._end_stream()
+                self._set_busy(False)
+
+        self.run_worker(_drive())
 
 
 def _app() -> App:
@@ -109,9 +116,32 @@ def test_finalized_assistant_message_renders_markdown() -> None:
     async def _run() -> None:
         app = _app()
         async with app.run_test() as pilot:
-            app._handle_message(AssistantMessage(content="# hi"))
+            await app._handle_message(AssistantMessage(content="# hi"))
             await pilot.pause()
             assert len(app.query(Markdown)) == 1
+
+    asyncio.run(_run())
+
+
+def test_streamed_chunks_accumulate_into_one_widget() -> None:
+    """Streamed chunks render into a single markdown widget without dropping text.
+
+    Regression for the first streamed word being dropped and for the per-chunk
+    render storm: deltas are written to a coalescing ``MarkdownStream`` and the
+    finalized echo is suppressed.
+    """
+
+    async def _run() -> None:
+        app = _app()
+        async with app.run_test() as pilot:
+            for delta in ("Async", " turn", " one"):
+                await app._handle_message(AssistantChunkMessage(content=delta))
+            await pilot.pause()
+            await app._handle_message(AssistantMessage(content="Async turn one"))
+            await pilot.pause()
+            widgets = app.query("#log Markdown")
+            assert len(widgets) == 1
+            assert widgets.first().source == "Async turn one"
 
     asyncio.run(_run())
 
@@ -122,7 +152,7 @@ def test_finalized_reasoning_message_renders_dimmed_markdown() -> None:
     async def _run() -> None:
         app = _app()
         async with app.run_test() as pilot:
-            app._handle_message(ReasoningMessage(content="thinking", item={}))
+            await app._handle_message(ReasoningMessage(content="thinking", item={}))
             await pilot.pause()
             widgets = app.query(".reasoning")
             assert len(widgets) == 1
@@ -212,7 +242,7 @@ def test_reset_stream_clears_cross_turn_state() -> None:
         async with app.run_test() as pilot:
             app._suppress.add(AssistantMessage)
             app._reset_stream()
-            app._handle_message(AssistantMessage(content="reply"))
+            await app._handle_message(AssistantMessage(content="reply"))
             await pilot.pause()
             assert len(app.query(Markdown)) == 1
 
