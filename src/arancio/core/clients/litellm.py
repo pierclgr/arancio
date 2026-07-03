@@ -8,6 +8,7 @@ import litellm
 
 from arancio.core.builders.payload.litellm import LiteLLMPayloadBuilder
 from arancio.core.builders.request.litellm import LiteLLMRequestBuilder
+from arancio.core.clients import _litellm_patches
 from arancio.core.clients.base import BaseClient
 from arancio.core.constants.litellm import (
     LITELLM_DEFAULT_THINKING_EFFORT,
@@ -25,6 +26,10 @@ warnings.filterwarnings(
     message="Pydantic serializer warnings:",
     category=UserWarning,
 )
+
+# patch known bugs in the pinned LiteLLM version (see _litellm_patches);
+# applied once at import, before any client sends a request
+_litellm_patches.apply()
 
 
 class LiteLLMClient(BaseClient):

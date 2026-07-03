@@ -6,6 +6,7 @@ from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.widget import Widget
 from textual.widgets import Input, Markdown, Static
+from textual.widgets.markdown import MarkdownStream
 
 from arancio.core.agents import Agent
 from arancio.core.types.messages import (
@@ -62,7 +63,7 @@ class App(TextualApp):
         self._busy = False
         self._streaming_kind: type | None = None
         self._stream_widget: Markdown | None = None
-        self._stream_buffer = ""
+        self._stream: MarkdownStream | None = None
         self._suppress: set[type] = set()
 
     def compose(self) -> ComposeResult:
@@ -77,8 +78,11 @@ class App(TextualApp):
         yield Static(self._toolbar_text(), id="toolbar")
 
     def on_mount(self) -> None:
-        """Focus the prompt input once the UI is mounted."""
+        """Focus the prompt input and anchor the log to follow output."""
         self.query_one("#prompt", Input).focus()
+        # keep the log pinned to the bottom as streamed content grows, until
+        # the user scrolls up
+        self.query_one("#log", VerticalScroll).anchor()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Start an agent turn when the prompt input is submitted.
@@ -104,6 +108,7 @@ class App(TextualApp):
         """Clear per-turn streaming state so turns render independently."""
         self._streaming_kind = None
         self._stream_widget = None
+        self._stream = None
         self._suppress.clear()
 
     @work(thread=True)
@@ -117,9 +122,10 @@ class App(TextualApp):
             for message in self._agent.run(UserMessage(content=text)):
                 self.call_from_thread(self._handle_message, message)
         finally:
+            self.call_from_thread(self._end_stream)
             self.call_from_thread(self._set_busy, False)
 
-    def _handle_message(self, message: Message) -> None:
+    async def _handle_message(self, message: Message) -> None:
         """Render a single message, streaming chunks into one widget.
 
         Mirrors the console renderer: assistant and reasoning chunks build
@@ -137,18 +143,23 @@ class App(TextualApp):
             kind, classes = None, None
 
         if kind is not None:
-            self._handle_chunk(kind, classes, message.display_text)
+            await self._handle_chunk(kind, classes, message.display_text)
             return
 
-        self._streaming_kind = None
-        self._stream_widget = None
+        await self._end_stream()
         if type(message) in self._suppress:
             self._suppress.discard(type(message))
             return
         self._mount(self._render(message))
 
-    def _handle_chunk(self, kind: type, classes: str | None, delta: str) -> None:
-        """Append a streaming delta to the current markdown span.
+    async def _handle_chunk(self, kind: type, classes: str | None, delta: str) -> None:
+        """Stream a delta into the current markdown span.
+
+        A new span (different ``kind``) starts a fresh widget and
+        :class:`MarkdownStream`; deltas are written to the stream, which
+        coalesces bursts into as few renders as the UI can keep up with so a
+        fast token stream never saturates the UI thread (which also handles
+        input).
 
         Args:
             kind: the finalized message type the chunk belongs to.
@@ -156,15 +167,27 @@ class App(TextualApp):
             delta: the incremental text to append.
         """
         if self._streaming_kind is not kind:
+            await self._end_stream()
             self._streaming_kind = kind
             self._suppress.add(kind)
-            self._stream_buffer = delta
-            self._stream_widget = Markdown(self._stream_buffer, classes=classes)
-            self._mount(self._stream_widget)
-        else:
-            self._stream_buffer += delta
-            self._stream_widget.update(self._stream_buffer)
-            self.query_one("#log", VerticalScroll).scroll_end(animate=False)
+            self._stream_widget = Markdown(classes=classes)
+            # await the mount so the widget's on-mount update() completes before
+            # the stream's first append, otherwise it would wipe the first delta
+            await self.query_one("#log", VerticalScroll).mount(self._stream_widget)
+            self._stream = Markdown.get_stream(self._stream_widget)
+        await self._stream.write(delta)
+
+    async def _end_stream(self) -> None:
+        """Stop the active stream, flushing buffered deltas, and reset state.
+
+        Resets the per-span streaming state so the next span renders into its own
+        widget.
+        """
+        if self._stream is not None:
+            await self._stream.stop()
+            self._stream = None
+        self._streaming_kind = None
+        self._stream_widget = None
 
     @staticmethod
     def _render(message: Message) -> Widget:
