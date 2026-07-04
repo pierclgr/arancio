@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Dict, List, Type
 
 from arancio.core.builders.base import Builder
-from arancio.core.types.messages import Message
-from arancio.core.types.requests import BaseRequest
-from arancio.core.types.tools import ToolSchema
+from arancio.core.messages import Message
+from arancio.core.requests import BaseRequest
+from arancio.core.tools.schema import ToolSchema
 
 if TYPE_CHECKING:
     from arancio.core.clients.base import BaseClient

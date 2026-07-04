@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from arancio.core.builders.payload.base import BasePayloadBuilder
-from arancio.core.types.messages import (
+from arancio.core.messages import (
     AssistantMessage,
     Message,
     ReasoningMessage,
@@ -12,8 +12,8 @@ from arancio.core.types.messages import (
     ToolResultMessage,
     UserMessage,
 )
-from arancio.core.types.requests import LiteLLMRequest
-from arancio.core.types.tools import ToolSchema
+from arancio.core.requests import LiteLLMRequest
+from arancio.core.tools.schema import ToolSchema
 
 
 class LiteLLMPayloadBuilder(BasePayloadBuilder):

@@ -3,8 +3,8 @@
 from abc import abstractmethod
 from typing import Any
 
+from arancio.core.messages import ToolErrorMessage, ToolResultMessage
 from arancio.core.parsers.base import Parser
-from arancio.core.types.messages import ToolErrorMessage, ToolResultMessage
 
 
 class BaseToolResultParser(Parser):

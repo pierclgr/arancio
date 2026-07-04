@@ -7,9 +7,9 @@ import trafilatura
 from trafilatura.settings import use_config
 
 from arancio.core.clients.base import BaseClient
+from arancio.core.messages import AssistantMessage, ChunkMessage, UserMessage
 from arancio.core.parsers.tool_result.web.fetch import FetchWebToolResultParser
 from arancio.core.tools.base import BaseTool
-from arancio.core.types.messages import AssistantMessage, ChunkMessage, UserMessage
 
 _SYSTEM_PROMPT = (
     "You extract and summarize information from a single fetched web page. "

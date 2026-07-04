@@ -12,10 +12,10 @@ from arancio.core.constants.path.base import (
     TOOL_INPUT_SCHEMA_FILENAME,
     TOOLS_HARNESS_PATH,
 )
+from arancio.core.messages import ToolResultMessage
 from arancio.core.parsers.tool_result.base import BaseToolResultParser
+from arancio.core.tools.schema import ToolSchema
 from arancio.core.tools.session import ToolSession, default_session
-from arancio.core.types.messages import ToolResultMessage
-from arancio.core.types.tools import ToolSchema
 from arancio.core.utils.naming import camel_to_snake
 
 

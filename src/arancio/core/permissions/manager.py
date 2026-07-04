@@ -3,15 +3,15 @@
 from arancio.core.controllers.base import Controller
 from arancio.core.controllers.requests import PermissionRequest
 from arancio.core.controllers.responses import Decision
-from arancio.core.tools.base import BaseTool
-from arancio.core.tools.manager import ToolManager
-from arancio.core.types.messages import (
+from arancio.core.messages import (
     Message,
     ToolCallMessage,
     ToolErrorMessage,
     UserMessage,
 )
-from arancio.core.types.permissions import PermissionCategory, PermissionLevel
+from arancio.core.permissions.types import PermissionCategory, PermissionLevel
+from arancio.core.tools.base import BaseTool
+from arancio.core.tools.manager import ToolManager
 
 
 class PermissionManager:
@@ -165,9 +165,9 @@ class PermissionManager:
 
         Returns:
             An ``(allowed, message)`` pair. ``message`` is a
-            :class:`~arancio.core.types.messages.UserMessage` wrapping the note in a
+            :class:`~arancio.core.messages.UserMessage` wrapping the note in a
             report-then-answer instruction when the call is allowed with one, a
-            :class:`~arancio.core.types.messages.ToolErrorMessage` describing the denial
+            :class:`~arancio.core.messages.ToolErrorMessage` describing the denial
             or not-permitted reason when the call is refused, and ``None`` for a
             plain allow.
         """

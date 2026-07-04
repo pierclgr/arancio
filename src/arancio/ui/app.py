@@ -9,7 +9,7 @@ from textual.widgets import Input, Markdown, Static
 from textual.widgets.markdown import MarkdownStream
 
 from arancio.core.agents import Agent
-from arancio.core.types.messages import (
+from arancio.core.messages import (
     AssistantChunkMessage,
     AssistantMessage,
     ErrorMessage,
@@ -19,8 +19,9 @@ from arancio.core.types.messages import (
     ToolCallMessage,
     ToolErrorMessage,
     ToolResultMessage,
-    UserMessage,
 )
+from arancio.prompt.actions.executor import ActionExecutor
+from arancio.prompt.manager import PromptManager
 
 
 class App(TextualApp):
@@ -59,6 +60,7 @@ class App(TextualApp):
         """
         super().__init__()
         self._agent = agent
+        self._action_executor = ActionExecutor(agent=agent)
         self._model_id = model_id
         self._busy = False
         self._streaming_kind: type | None = None
@@ -119,7 +121,11 @@ class App(TextualApp):
             text: the user message that starts the turn.
         """
         try:
-            for message in self._agent.run(UserMessage(content=text)):
+            # classify the prompt into an action, then run it: a command is
+            # handled locally, any other prompt goes to the model. both yield a
+            # message stream rendered the same way
+            action = PromptManager.resolve_prompt(text)
+            for message in self._action_executor.execute(action):
                 self.call_from_thread(self._handle_message, message)
         finally:
             self.call_from_thread(self._end_stream)

@@ -8,7 +8,7 @@ import pytest
 
 import arancio.core.clients.litellm as litellm_module
 from arancio.core.clients.litellm import LiteLLMClient
-from arancio.core.types.messages import (
+from arancio.core.messages import (
     AssistantChunkMessage,
     AssistantMessage,
     ReasoningMessage,
@@ -16,8 +16,8 @@ from arancio.core.types.messages import (
     ToolResultMessage,
     UserMessage,
 )
-from arancio.core.types.requests import BaseRequest
-from arancio.core.types.tools import ToolSchema
+from arancio.core.requests import BaseRequest
+from arancio.core.tools.schema import ToolSchema
 
 
 def _build_response(output: list) -> SimpleNamespace:

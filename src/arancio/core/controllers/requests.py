@@ -4,7 +4,7 @@ Each request kind is a :class:`BaseControllerRequest` subclass; the kind is the 
 itself, dispatched with ``isinstance`` by the controller.
 """
 
-from arancio.core.types.messages import ToolCallMessage
+from arancio.core.messages import ToolCallMessage
 
 
 class BaseControllerRequest:

@@ -4,8 +4,7 @@ import json
 from collections.abc import Iterable, Iterator
 from typing import Any, List
 
-from arancio.core.parsers.base import Parser
-from arancio.core.types.messages import (
+from arancio.core.messages import (
     AssistantChunkMessage,
     AssistantMessage,
     Message,
@@ -13,6 +12,7 @@ from arancio.core.types.messages import (
     ReasoningMessage,
     ToolCallMessage,
 )
+from arancio.core.parsers.base import Parser
 
 
 class LiteLLMResponseParser(Parser):

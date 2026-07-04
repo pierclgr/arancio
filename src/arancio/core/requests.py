@@ -3,8 +3,8 @@
 from dataclasses import dataclass, field
 from typing import List
 
-from arancio.core.types.messages import Message
-from arancio.core.types.tools import ToolSchema
+from arancio.core.messages import Message
+from arancio.core.tools.schema import ToolSchema
 
 
 @dataclass(frozen=True)

@@ -1,9 +1,9 @@
 """Tool construction driven by a permission list."""
 
 from arancio.core.clients.base import BaseClient
+from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 from arancio.core.tools.base import BaseTool
 from arancio.core.tools.web.fetch import FetchWebTool
-from arancio.core.types.permissions import PermissionCategory, PermissionLevel
 
 
 class ToolManager:

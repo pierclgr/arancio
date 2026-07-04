@@ -6,10 +6,10 @@ from typing import List, Type
 
 from arancio.core.builders.payload.base import BasePayloadBuilder
 from arancio.core.builders.request.base import BaseRequestBuilder
+from arancio.core.messages import Message
 from arancio.core.parsers.response.base import BaseResponseParser
-from arancio.core.types.messages import Message
-from arancio.core.types.requests import BaseRequest
-from arancio.core.types.tools import ToolSchema
+from arancio.core.requests import BaseRequest
+from arancio.core.tools.schema import ToolSchema
 
 
 class BaseClient(ABC):

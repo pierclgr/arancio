@@ -9,10 +9,10 @@ from arancio.core.controllers.responses import (
     Decision,
     PermissionResponse,
 )
+from arancio.core.messages import ToolCallMessage, ToolErrorMessage, UserMessage
 from arancio.core.permissions.manager import PermissionManager
+from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 from arancio.core.tools.manager import ToolManager
-from arancio.core.types.messages import ToolCallMessage, ToolErrorMessage, UserMessage
-from arancio.core.types.permissions import PermissionCategory, PermissionLevel
 
 
 class _FakeController:

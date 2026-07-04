@@ -5,8 +5,8 @@ from collections.abc import Iterator
 
 import requests
 
+from arancio.core.messages import Message
 from arancio.core.parsers.base import Parser
-from arancio.core.types.messages import Message
 
 
 class BaseResponseParser(Parser, ABC):

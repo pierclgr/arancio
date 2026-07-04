@@ -14,9 +14,9 @@ from arancio.core.constants.litellm import (
     LITELLM_DEFAULT_THINKING_EFFORT,
     LITELLM_DEFAULT_THINKING_SUMMARY,
 )
+from arancio.core.messages import Message
 from arancio.core.parsers.response.litellm import LiteLLMResponseParser
-from arancio.core.types.messages import Message
-from arancio.core.types.requests import LiteLLMRequest
+from arancio.core.requests import LiteLLMRequest
 
 # silence LiteLLM's pydantic serializer warnings when streaming Responses
 # usage objects; the warning is purely informational noise from a third-

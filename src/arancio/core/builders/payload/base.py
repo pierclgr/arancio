@@ -4,9 +4,9 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from arancio.core.builders.base import Builder
-from arancio.core.types.messages import Message, ToolResultMessage
-from arancio.core.types.requests import BaseRequest
-from arancio.core.types.tools import ToolSchema
+from arancio.core.messages import Message, ToolResultMessage
+from arancio.core.requests import BaseRequest
+from arancio.core.tools.schema import ToolSchema
 
 
 class BasePayloadBuilder(Builder, ABC):

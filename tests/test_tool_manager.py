@@ -1,9 +1,9 @@
 """Tests for ToolManager: constructing tools from granted categories."""
 
 from arancio.core.clients.litellm import LiteLLMClient
+from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 from arancio.core.tools.manager import ToolManager
 from arancio.core.tools.web.fetch import FetchWebTool
-from arancio.core.types.permissions import PermissionCategory, PermissionLevel
 
 
 def _summary_client() -> LiteLLMClient:

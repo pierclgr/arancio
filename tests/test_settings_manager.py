@@ -4,8 +4,8 @@ import arancio.storage.manager as storage_mod
 from arancio.core.agents import Agent
 from arancio.core.clients.litellm import LiteLLMClient
 from arancio.core.permissions.manager import PermissionManager
+from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 from arancio.core.tools.manager import ToolManager
-from arancio.core.types.permissions import PermissionCategory, PermissionLevel
 from arancio.settings.manager import SettingsManager
 from arancio.settings.settings import Settings
 from arancio.storage.manager import StorageManager

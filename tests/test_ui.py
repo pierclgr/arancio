@@ -5,7 +5,7 @@ from collections.abc import Iterator
 
 from textual.widgets import Input, Markdown
 
-from arancio.core.types.messages import (
+from arancio.core.messages import (
     AssistantChunkMessage,
     AssistantMessage,
     Message,

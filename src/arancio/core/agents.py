@@ -13,9 +13,7 @@ from arancio.core.constants.agent import (
     AGENT_DEFAULT_TURN_WAIT_TIME,
     AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
 )
-from arancio.core.permissions.manager import PermissionManager
-from arancio.core.tools.base import BaseTool
-from arancio.core.types.messages import (
+from arancio.core.messages import (
     ChunkMessage,
     ErrorMessage,
     Message,
@@ -23,8 +21,10 @@ from arancio.core.types.messages import (
     ToolErrorMessage,
     ToolResultMessage,
 )
-from arancio.core.types.permissions import PermissionCategory, PermissionLevel
-from arancio.core.types.tools import ToolSchema
+from arancio.core.permissions.manager import PermissionManager
+from arancio.core.permissions.types import PermissionCategory, PermissionLevel
+from arancio.core.tools.base import BaseTool
+from arancio.core.tools.schema import ToolSchema
 
 
 class Agent:

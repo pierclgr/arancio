@@ -13,11 +13,7 @@ from arancio.core.controllers.responses import (
     Decision,
     PermissionResponse,
 )
-from arancio.core.parsers.tool_result.base import BaseToolResultParser
-from arancio.core.permissions.manager import PermissionManager
-from arancio.core.tools.base import BaseTool
-from arancio.core.tools.manager import ToolManager
-from arancio.core.types.messages import (
+from arancio.core.messages import (
     AssistantChunkMessage,
     AssistantMessage,
     ErrorMessage,
@@ -28,8 +24,12 @@ from arancio.core.types.messages import (
     ToolResultMessage,
     UserMessage,
 )
-from arancio.core.types.permissions import PermissionCategory, PermissionLevel
-from arancio.core.types.requests import BaseRequest
+from arancio.core.parsers.tool_result.base import BaseToolResultParser
+from arancio.core.permissions.manager import PermissionManager
+from arancio.core.permissions.types import PermissionCategory, PermissionLevel
+from arancio.core.requests import BaseRequest
+from arancio.core.tools.base import BaseTool
+from arancio.core.tools.manager import ToolManager
 
 
 class _ReasoningClient(BaseClient):

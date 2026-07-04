@@ -13,7 +13,7 @@ from arancio.core.constants.litellm import (
     LITELLM_DEFAULT_THINKING_EFFORT,
     LITELLM_DEFAULT_THINKING_SUMMARY,
 )
-from arancio.core.types.permissions import PermissionCategory, PermissionLevel
+from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 
 
 @dataclass

@@ -1,5 +1,6 @@
 """Tests for tool result parsers."""
 
+from arancio.core.messages import ToolErrorMessage, ToolResultMessage
 from arancio.core.parsers.tool_result.commands.shell import ShellCommandToolResultParser
 from arancio.core.parsers.tool_result.files.edit import EditFileToolResultParser
 from arancio.core.parsers.tool_result.files.glob import GlobToolResultParser
@@ -8,7 +9,6 @@ from arancio.core.parsers.tool_result.files.read import ReadFileToolResultParser
 from arancio.core.parsers.tool_result.files.write import WriteFileToolResultParser
 from arancio.core.parsers.tool_result.web.fetch import FetchWebToolResultParser
 from arancio.core.parsers.tool_result.web.search import SearchWebToolResultParser
-from arancio.core.types.messages import ToolErrorMessage, ToolResultMessage
 
 
 def test_shell_command_parser_keeps_stdout_successful() -> None:
