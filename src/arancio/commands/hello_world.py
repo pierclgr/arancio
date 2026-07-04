@@ -11,13 +11,15 @@ class HelloWorldCommand(BaseCommand):
     description = "Greet the name given as the command's argument."
 
     @classmethod
-    def execute(cls, name: str, times: int) -> AssistantMessage:
+    def execute(cls, name: str, times: int = 1, **kwargs) -> AssistantMessage:
         """Return a greeting for the given name, repeated ``times`` times.
 
         Args:
             name: the name to greet, bound to the first prompt word.
             times: how many times to repeat the greeting, bound to the
-                second prompt word.
+                second prompt word; defaults to 1 when omitted.
+            **kwargs: absorbs the ``application`` argument, which this command
+                does not need.
 
         Returns:
             An assistant message greeting the name.

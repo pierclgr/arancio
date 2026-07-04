@@ -1,36 +1,47 @@
-"""Executor running the action produced by the prompt manager."""
+"""Executor running the action built from the prompt manager's arguments."""
 
+from __future__ import annotations
+
+import inspect
 from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any, Type
 
+from arancio.commands.base import BaseCommand
 from arancio.commands.registry import COMMAND_REGISTRY
 from arancio.core.agents import Agent
 from arancio.core.messages import ErrorMessage, Message, UserMessage
 from arancio.prompt.actions.types import BaseAction, CommandAction, PromptAction
 
+if TYPE_CHECKING:
+    from arancio.ui.app import App
+
 
 class ActionExecutor:
-    """Carries out the action produced by the prompt manager.
+    """Carries out an action built from the prompt manager's arguments.
 
     A :class:`arancio.prompt.actions.types.CommandAction` is resolved against
-    :data:`arancio.commands.registry.COMMAND_REGISTRY` and run locally; a
-    :class:`arancio.prompt.actions.types.PromptAction` is sent to the model through the
-    agent. Both produce the same message stream so callers render them the same
-    way.
+    :data:`arancio.commands.registry.COMMAND_REGISTRY`: its raw prompt words are
+    bound to the command's parameter names and run locally. A
+    :class:`arancio.prompt.actions.types.PromptAction` is sent to the model
+    through the agent. Both produce the same message stream so callers render
+    them the same way.
     """
 
-    def __init__(self, agent: Agent) -> None:
-        """Store the agent used to run a prompt action.
+    def __init__(self, agent: Agent, application: App) -> None:
+        """Store the agent and application used to carry out actions.
 
         Args:
             agent: the agent whose run loop handles a prompt action.
+            application: the running app a command acts on.
         """
         self._agent = agent
+        self._application = application
 
     def execute(self, action: BaseAction) -> Iterator[Message]:
         """Execute the action, producing its output messages.
 
         Args:
-            action: the action produced by the prompt manager.
+            action: the action to execute.
 
         Returns:
             An iterator over the messages the action produces.
@@ -46,7 +57,7 @@ class ActionExecutor:
             raise ValueError(f"Unknown action type: {type(action)}")
 
     def _execute_command(self, action: CommandAction) -> Iterator[Message]:
-        """Run the action's command, yielding its output messages.
+        """Bind the action's words to the command's parameters and run it.
 
         Args:
             action: the command action to run.
@@ -61,7 +72,8 @@ class ActionExecutor:
             return
 
         try:
-            result = command.run(*action.args)
+            kwargs = self._build_command_kwargs(command, action.args)
+            result = command.run(**kwargs)
         except Exception as exc:
             yield ErrorMessage(
                 content=f"Error while executing command {action.name}: {exc}"
@@ -70,6 +82,40 @@ class ActionExecutor:
 
         if result is not None:
             yield result
+
+    def _build_command_kwargs(
+        self, command: Type[BaseCommand], args: list[str]
+    ) -> dict[str, Any]:
+        """Match the prompt words to the command's parameters and add the application.
+
+        Each word is matched, in order, to the next parameter the command
+        declares (excluding ``application``); a word beyond the number of
+        declared parameters is dropped rather than rejected.
+
+        Args:
+            command: the command whose ``execute`` parameters to match against.
+            args: the raw prompt words.
+
+        Returns:
+            The keyword arguments for :meth:`command.run`: the prompt words
+            keyed by their matching parameter name, plus the running application
+            when the command declares an ``application`` parameter.
+        """
+        signature = inspect.signature(command.execute)
+        prompt_parameter_names = [
+            parameter_name
+            for parameter_name, parameter in signature.parameters.items()
+            if parameter_name != "application"
+            and parameter.kind
+            in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.POSITIONAL_ONLY,
+            )
+        ]
+        kwargs = dict(zip(prompt_parameter_names, args))
+        if "application" in signature.parameters:
+            kwargs["application"] = self._application
+        return kwargs
 
     def _execute_prompt(self, action: PromptAction) -> Iterator[Message]:
         """Send the action's text to the model through the agent.
