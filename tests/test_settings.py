@@ -1,5 +1,7 @@
 """Tests for the Settings data holder and its YAML-serializable form."""
 
+import pytest
+
 from arancio.core.constants.agent import (
     AGENT_DEFAULT_MAX_RETRIES,
     AGENT_DEFAULT_MAX_TURNS,
@@ -21,8 +23,8 @@ def test_default_values():
     assert settings.permissions == {
         category: PermissionLevel.ASK for category in PermissionCategory
     }
-    assert settings.model_id is None
-    assert settings.summary_model_id is None
+    assert settings.provider is None
+    assert settings.model_name is None
     assert settings.thinking_effort == LITELLM_DEFAULT_THINKING_EFFORT
     assert settings.thinking_summary == LITELLM_DEFAULT_THINKING_SUMMARY
     assert settings.max_turns == AGENT_DEFAULT_MAX_TURNS
@@ -41,7 +43,8 @@ def test_to_dict_uses_plain_types():
         "WEB": "ask",
         "EXECUTE": "ask",
     }
-    assert data["model_id"] is None
+    assert data["provider"] is None
+    assert data["model_name"] is None
     assert data["max_turns"] == AGENT_DEFAULT_MAX_TURNS
     assert data["max_retries"] == AGENT_DEFAULT_MAX_RETRIES
 
@@ -53,8 +56,8 @@ def test_to_from_dict_roundtrip():
             PermissionCategory.READ: PermissionLevel.AUTO,
             PermissionCategory.EXECUTE: PermissionLevel.ASK,
         },
-        model_id="openai/gpt-4o",
-        summary_model_id="openai/gpt-4o-mini",
+        provider="openai",
+        model_name="gpt-4o",
         thinking_effort="high",
         thinking_summary=None,
         max_turns=7,
@@ -64,3 +67,30 @@ def test_to_from_dict_roundtrip():
     )
 
     assert Settings.from_dict(settings.to_dict()) == settings
+
+
+def test_model_id_joins_provider_and_model_name():
+    """``model_id`` joins the provider and model name fields."""
+    settings = Settings.default()
+    settings.provider = "openai"
+    settings.model_name = "gpt-4o"
+
+    assert settings.model_id == "openai/gpt-4o"
+
+
+def test_model_id_raises_when_provider_is_unset():
+    """``model_id`` raises when the provider is not configured."""
+    settings = Settings.default()
+    settings.model_name = "gpt-4o"
+
+    with pytest.raises(ValueError):
+        _ = settings.model_id
+
+
+def test_model_id_raises_when_model_name_is_unset():
+    """``model_id`` raises when the model name is not configured."""
+    settings = Settings.default()
+    settings.provider = "openai"
+
+    with pytest.raises(ValueError):
+        _ = settings.model_id

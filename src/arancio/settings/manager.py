@@ -11,12 +11,13 @@ class SettingsManager:
 
     The single settings surface the entry points use: it loads settings through
     the storage layer (creating defaults on first run), pushes them into the
-    client, summary client and agent, and persists changes back to disk.
+    client, summary client (kept on the same model as the client) and agent, and
+    persists changes back to disk.
 
     Attributes:
         _storage: the storage layer reading and writing the settings file.
         _client: the agent's main client (model and thinking settings).
-        _summary_client: the web-summary client (summary model).
+        _summary_client: the web-summary client (uses the main client's model).
         _agent: the agent (loop limits and permissions).
         _settings: the current in-memory settings, or ``None`` before the first
             load.
@@ -34,7 +35,8 @@ class SettingsManager:
         Args:
             storage: the storage layer reading and writing the settings file.
             client: the agent's main client.
-            summary_client: the web-summary client.
+            summary_client: the web-summary client; kept on the same model as
+                ``client``.
             agent: the agent whose loop limits and permissions are configured.
         """
         self._storage = storage
@@ -82,16 +84,21 @@ class SettingsManager:
     def apply(self) -> None:
         """Push the current settings into the live objects.
 
-        Sets the client's model and thinking settings, the summary client's model, the
-        agent's loop limits, and replaces the agent's permission grants (which rebuilds
-        its tool catalog). The summary client's thinking is left untouched: it is
-        disabled once where the summary client is constructed.
+        Sets the client's model and thinking settings, the summary client's model (the
+        same model as the main client), the agent's loop limits, and replaces the
+        agent's permission grants (which rebuilds its tool catalog). The summary
+        client's thinking is left untouched: it is disabled once where the summary
+        client is constructed. The client's model is left ``None`` while the provider or
+        model name is not yet configured.
         """
         settings = self._settings
-        self._client.model_id = settings.model_id
+        model_id = (
+            settings.model_id if settings.provider and settings.model_name else None
+        )
+        self._client.model_id = model_id
         self._client.thinking_effort = settings.thinking_effort
         self._client.thinking_summary = settings.thinking_summary
-        self._summary_client.model_id = settings.summary_model_id
+        self._summary_client.model_id = model_id
         self._agent.max_turns = settings.max_turns
         self._agent.max_retries = settings.max_retries
         self._agent.retry_delay = settings.turn_wait_time

@@ -23,6 +23,7 @@ from arancio.core.messages import (
 from arancio.prompt.actions.executor import ActionExecutor
 from arancio.prompt.actions.factory import ActionFactory
 from arancio.prompt.manager import PromptManager
+from arancio.settings.manager import SettingsManager
 
 
 class App(TextualApp):
@@ -52,16 +53,22 @@ class App(TextualApp):
 
     BINDINGS = [("ctrl+c", "quit", "Quit")]
 
-    def __init__(self, agent: Agent, model_id: str) -> None:
+    def __init__(
+        self, agent: Agent, model_id: str, settings_manager: SettingsManager
+    ) -> None:
         """Initialize the app with the agent it drives and the model label.
 
         Args:
             agent: the agent whose run loop the app streams.
             model_id: the model identifier shown in the toolbar.
+            settings_manager: the manager used to apply and persist settings
+                changes made through commands (e.g. ``/model``).
         """
         super().__init__()
         self._agent = agent
-        self._action_executor = ActionExecutor(agent=agent, application=self)
+        self._action_executor = ActionExecutor(
+            agent=agent, application=self, settings_manager=settings_manager
+        )
         self._model_id = model_id
         self._busy = False
         self._streaming_kind: type | None = None
@@ -246,6 +253,15 @@ class App(TextualApp):
         self.query_one("#toolbar", Static).update(self._toolbar_text())
         if not busy:
             self.query_one("#prompt", Input).focus()
+
+    def set_displayed_model_id(self, model_id: str) -> None:
+        """Update the model id shown in the toolbar.
+
+        Args:
+            model_id: the model id to display.
+        """
+        self._model_id = model_id
+        self.query_one("#toolbar", Static).update(self._toolbar_text())
 
     def _toolbar_text(self) -> str:
         """Build the toolbar text (placeholder content; fields TBD).

@@ -53,8 +53,8 @@ def _custom_settings():
     """Return a non-default settings snapshot used across tests."""
     return Settings(
         permissions={PermissionCategory.READ: PermissionLevel.AUTO},
-        model_id="openai/gpt-4o",
-        summary_model_id="openai/gpt-4o-mini",
+        provider="openai",
+        model_name="gpt-4o",
         thinking_effort="high",
         thinking_summary=None,
         max_turns=9,
@@ -74,7 +74,7 @@ def test_apply_pushes_settings_into_live_objects():
     assert client.model_id == "openai/gpt-4o"
     assert client.thinking_effort == "high"
     assert client.thinking_summary is None
-    assert summary_client.model_id == "openai/gpt-4o-mini"
+    assert summary_client.model_id == "openai/gpt-4o"
     # apply leaves the summary client's (construction-time) thinking untouched
     assert summary_client.thinking_effort is None
     assert summary_client.thinking_summary is None

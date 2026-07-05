@@ -17,6 +17,7 @@ from arancio.core.parsers.tool_result.base import BaseToolResultParser
 from arancio.core.tools.schema import ToolSchema
 from arancio.core.tools.session import ToolSession, default_session
 from arancio.core.utils.naming import camel_to_snake
+from arancio.core.utils.text import decapitalize
 
 
 class BaseTool(ABC):
@@ -122,7 +123,7 @@ class BaseTool(ABC):
             output = self._call(**kwargs)
             is_error = False
         except Exception as exc:
-            output = f"Error while executing {self.name}: {exc}"
+            output = f"Error while executing {self.name}: {decapitalize(str(exc))}"
             is_error = True
 
         return self._result_parser.parse(

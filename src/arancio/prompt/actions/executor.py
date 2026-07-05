@@ -9,8 +9,11 @@ from typing import TYPE_CHECKING, Any, Type
 from arancio.commands.base import BaseCommand
 from arancio.commands.registry import COMMAND_REGISTRY
 from arancio.core.agents import Agent
-from arancio.core.messages import ErrorMessage, Message, UserMessage
+from arancio.core.messages import AssistantMessage, ErrorMessage, Message, UserMessage
+from arancio.core.utils.text import decapitalize
+from arancio.prompt.actions.constants import INJECTABLE_COMMAND_PARAMETERS
 from arancio.prompt.actions.types import BaseAction, CommandAction, PromptAction
+from arancio.settings.manager import SettingsManager
 
 if TYPE_CHECKING:
     from arancio.ui.app import App
@@ -27,15 +30,20 @@ class ActionExecutor:
     them the same way.
     """
 
-    def __init__(self, agent: Agent, application: App) -> None:
-        """Store the agent and application used to carry out actions.
+    def __init__(
+        self, agent: Agent, application: App, settings_manager: SettingsManager
+    ) -> None:
+        """Store the objects used to carry out actions.
 
         Args:
             agent: the agent whose run loop handles a prompt action.
             application: the running app a command acts on.
+            settings_manager: the settings manager a command can use to apply
+                and persist settings changes.
         """
         self._agent = agent
         self._application = application
+        self._settings_manager = settings_manager
 
     def execute(self, action: BaseAction) -> Iterator[Message]:
         """Execute the action, producing its output messages.
@@ -59,6 +67,9 @@ class ActionExecutor:
     def _execute_command(self, action: CommandAction) -> Iterator[Message]:
         """Bind the action's words to the command's parameters and run it.
 
+        A plain-string result is wrapped into an :class:`AssistantMessage` so
+        the executor always yields messages, regardless of the action type.
+
         Args:
             action: the command action to run.
 
@@ -76,20 +87,24 @@ class ActionExecutor:
             result = command.run(**kwargs)
         except Exception as exc:
             yield ErrorMessage(
-                content=f"Error while executing command {action.name}: {exc}"
+                content=(
+                    f"Error while executing command {action.name}: "
+                    f"{decapitalize(str(exc))}"
+                )
             )
             return
 
-        if result is not None:
-            yield result
+        if result is None:
+            return
+        yield AssistantMessage(content=result) if isinstance(result, str) else result
 
     def _build_command_kwargs(
         self, command: Type[BaseCommand], args: list[str]
     ) -> dict[str, Any]:
-        """Match the prompt words to the command's parameters and add the application.
+        """Match the prompt words to the command's parameters and inject dependencies.
 
-        Each word is matched, in order, to the next parameter the command
-        declares (excluding ``application``); a word beyond the number of
+        Each word is matched, in order, to the next prompt parameter the command
+        declares (excluding the injected ones below); a word beyond the number of
         declared parameters is dropped rather than rejected.
 
         Args:
@@ -97,15 +112,20 @@ class ActionExecutor:
             args: the raw prompt words.
 
         Returns:
-            The keyword arguments for :meth:`command.run`: the prompt words
-            keyed by their matching parameter name, plus the running application
-            when the command declares an ``application`` parameter.
+            The keyword arguments for :meth:`command.run`: the prompt words keyed
+            by their matching parameter name, plus the running application and/or
+            the settings manager for any the command declares a parameter for.
         """
+        # each injectable parameter name maps to a same-named private attribute
+        # on the executor (``application`` -> ``self._application``, etc.)
+        injectable = {
+            name: getattr(self, f"_{name}") for name in INJECTABLE_COMMAND_PARAMETERS
+        }
         signature = inspect.signature(command.execute)
         prompt_parameter_names = [
             parameter_name
             for parameter_name, parameter in signature.parameters.items()
-            if parameter_name != "application"
+            if parameter_name not in INJECTABLE_COMMAND_PARAMETERS
             and parameter.kind
             in (
                 inspect.Parameter.POSITIONAL_OR_KEYWORD,
@@ -113,8 +133,9 @@ class ActionExecutor:
             )
         ]
         kwargs = dict(zip(prompt_parameter_names, args))
-        if "application" in signature.parameters:
-            kwargs["application"] = self._application
+        for name, value in injectable.items():
+            if name in signature.parameters:
+                kwargs[name] = value
         return kwargs
 
     def _execute_prompt(self, action: PromptAction) -> Iterator[Message]:
@@ -123,7 +144,16 @@ class ActionExecutor:
         Args:
             action: the prompt action to send.
 
-        Returns:
-            The agent's message stream for the prompt.
+        Yields:
+            The agent's message stream for the prompt, or an
+            :class:`ErrorMessage` when no provider or model name is
+            configured yet.
         """
-        return self._agent.run(UserMessage(content=action.prompt))
+        try:
+            self._settings_manager.settings.model_id
+        except ValueError as exc:
+            yield ErrorMessage(
+                content=f"Error sending message: {decapitalize(str(exc))}"
+            )
+            return
+        yield from self._agent.run(UserMessage(content=action.prompt))

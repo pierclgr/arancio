@@ -8,9 +8,11 @@ from arancio.core.messages import (
     Message,
     UserMessage,
 )
+from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 from arancio.prompt.actions.executor import ActionExecutor
 from arancio.prompt.actions.factory import ActionFactory
 from arancio.prompt.actions.types import CommandAction, PromptAction
+from arancio.settings.settings import Settings
 
 
 class _DummyAgent:
@@ -18,15 +20,59 @@ class _DummyAgent:
 
 
 class _RecordingApplication:
-    """Application stub recording whether it was asked to exit."""
+    """Application stub recording whether it was asked to exit or set a model."""
 
     def __init__(self) -> None:
-        """Start with no recorded exit."""
+        """Start with no recorded exit and no displayed model id."""
         self.exit_called = False
+        self.displayed_model_id: str | None = None
 
     def exit(self) -> None:
         """Record that an exit was requested."""
         self.exit_called = True
+
+    def set_displayed_model_id(self, model_id: str) -> None:
+        """Record the model id the toolbar was asked to display.
+
+        Args:
+            model_id: the model id to display.
+        """
+        self.displayed_model_id = model_id
+
+
+class _RecordingSettingsManager:
+    """Settings-manager stub recording ``apply``/``save`` calls without disk I/O."""
+
+    def __init__(
+        self, provider: str | None = "openai", model_name: str | None = "gpt-4o"
+    ) -> None:
+        """Build settings with the given provider and model name.
+
+        Args:
+            provider: the initial provider, or ``None`` to leave it unset.
+            model_name: the initial model name, or ``None`` to leave it unset.
+        """
+        self.settings = Settings(
+            permissions={c: PermissionLevel.ASK for c in PermissionCategory},
+            provider=provider,
+            model_name=model_name,
+            thinking_effort="medium",
+            thinking_summary=None,
+            max_turns=None,
+            max_retries=3,
+            turn_wait_time=1.0,
+            turn_wait_time_multiplier=2.0,
+        )
+        self.applied = False
+        self.saved = False
+
+    def apply(self) -> None:
+        """Record that the settings were applied to the live objects."""
+        self.applied = True
+
+    def save(self) -> None:
+        """Record that the settings were persisted to disk."""
+        self.saved = True
 
 
 class _RecordingAgent:
@@ -86,7 +132,11 @@ def test_factory_create_action_dispatches_to_prompt_action() -> None:
 
 def test_execute_command_action_runs_command() -> None:
     """A command action runs its command and yields the result message."""
-    executor = ActionExecutor(agent=_DummyAgent(), application=_RecordingApplication())
+    executor = ActionExecutor(
+        agent=_DummyAgent(),
+        application=_RecordingApplication(),
+        settings_manager=_RecordingSettingsManager(),
+    )
     action = CommandAction(name="hello-world", args=["Sam", "1"])
 
     messages = list(executor.execute(action))
@@ -96,7 +146,11 @@ def test_execute_command_action_runs_command() -> None:
 
 def test_execute_command_action_ignores_extra_prompt_words() -> None:
     """A prompt word beyond the command's parameters is silently dropped."""
-    executor = ActionExecutor(agent=_DummyAgent(), application=_RecordingApplication())
+    executor = ActionExecutor(
+        agent=_DummyAgent(),
+        application=_RecordingApplication(),
+        settings_manager=_RecordingSettingsManager(),
+    )
     action = CommandAction(name="hello-world", args=["Sam", "1", "extra"])
 
     messages = list(executor.execute(action))
@@ -106,7 +160,11 @@ def test_execute_command_action_ignores_extra_prompt_words() -> None:
 
 def test_execute_unknown_command_yields_error() -> None:
     """An unknown command name yields an error message."""
-    executor = ActionExecutor(agent=_DummyAgent(), application=_RecordingApplication())
+    executor = ActionExecutor(
+        agent=_DummyAgent(),
+        application=_RecordingApplication(),
+        settings_manager=_RecordingSettingsManager(),
+    )
 
     messages = list(executor.execute(CommandAction(name="nope", args=[])))
 
@@ -115,7 +173,11 @@ def test_execute_unknown_command_yields_error() -> None:
 
 def test_execute_command_with_uncoercible_argument_yields_error() -> None:
     """An argument that cannot match its type yields an error message."""
-    executor = ActionExecutor(agent=_DummyAgent(), application=_RecordingApplication())
+    executor = ActionExecutor(
+        agent=_DummyAgent(),
+        application=_RecordingApplication(),
+        settings_manager=_RecordingSettingsManager(),
+    )
     action = CommandAction(name="hello-world", args=["Sam", "three"])
 
     (message,) = list(executor.execute(action))
@@ -126,7 +188,11 @@ def test_execute_command_with_uncoercible_argument_yields_error() -> None:
 
 def test_execute_command_missing_argument_yields_error() -> None:
     """A command missing a mandatory argument yields an error message."""
-    executor = ActionExecutor(agent=_DummyAgent(), application=_RecordingApplication())
+    executor = ActionExecutor(
+        agent=_DummyAgent(),
+        application=_RecordingApplication(),
+        settings_manager=_RecordingSettingsManager(),
+    )
     action = CommandAction(name="hello-world", args=[])
 
     (message,) = list(executor.execute(action))
@@ -138,7 +204,11 @@ def test_execute_command_missing_argument_yields_error() -> None:
 def test_execute_exit_command_quits_the_application() -> None:
     """The exit command action exits the application and yields no message."""
     application = _RecordingApplication()
-    executor = ActionExecutor(agent=_DummyAgent(), application=application)
+    executor = ActionExecutor(
+        agent=_DummyAgent(),
+        application=application,
+        settings_manager=_RecordingSettingsManager(),
+    )
 
     messages = list(executor.execute(CommandAction(name="exit", args=[])))
 
@@ -146,13 +216,91 @@ def test_execute_exit_command_quits_the_application() -> None:
     assert application.exit_called is True
 
 
+def test_execute_model_command_injects_application_and_settings_manager() -> None:
+    """The model command action applies, persists and confirms the new model id."""
+    application = _RecordingApplication()
+    settings_manager = _RecordingSettingsManager(provider="openai", model_name="gpt-4o")
+    executor = ActionExecutor(
+        agent=_DummyAgent(), application=application, settings_manager=settings_manager
+    )
+    action = CommandAction(name="model", args=["gpt-5"])
+
+    messages = list(executor.execute(action))
+
+    assert messages == [AssistantMessage(content="Model set to openai/gpt-5")]
+    assert settings_manager.settings.model_name == "gpt-5"
+    assert settings_manager.applied is True
+    assert settings_manager.saved is True
+    assert application.displayed_model_id == "openai/gpt-5"
+
+
+def test_execute_model_command_without_provider_yields_error() -> None:
+    """A missing provider surfaces as an error message, not a crash.
+
+    ``ModelCommand`` sets ``model_name`` then reads ``settings.model_id``, which raises
+    ``ValueError`` when the provider is unset, before ``apply`` or ``save`` ever run;
+    the executor's generic exception handling turns it into an :class:`ErrorMessage`,
+    the same as any other command failure. ``model_name`` is restored to its previous
+    value rather than left dangling.
+    """
+    application = _RecordingApplication()
+    settings_manager = _RecordingSettingsManager(provider=None, model_name="gpt-4o")
+    executor = ActionExecutor(
+        agent=_DummyAgent(), application=application, settings_manager=settings_manager
+    )
+    action = CommandAction(name="model", args=["gpt-5"])
+
+    (message,) = list(executor.execute(action))
+
+    assert isinstance(message, ErrorMessage)
+    assert "model" in message.content
+    assert settings_manager.applied is False
+    assert settings_manager.saved is False
+    assert settings_manager.settings.model_name == "gpt-4o"
+    assert application.displayed_model_id is None
+
+
 def test_execute_prompt_action_delegates_to_agent() -> None:
     """A prompt action sends its text to the model through the agent."""
     reply = AssistantMessage(content="hi")
     agent = _RecordingAgent(reply)
-    executor = ActionExecutor(agent=agent, application=_RecordingApplication())
+    executor = ActionExecutor(
+        agent=agent,
+        application=_RecordingApplication(),
+        settings_manager=_RecordingSettingsManager(),
+    )
 
     messages = list(executor.execute(PromptAction(prompt="hello there")))
 
     assert messages == [reply]
     assert agent.received == UserMessage(content="hello there")
+
+
+def test_execute_prompt_action_without_provider_yields_error() -> None:
+    """Sending a message without a configured provider yields an error, not a call."""
+    agent = _RecordingAgent(AssistantMessage(content="hi"))
+    executor = ActionExecutor(
+        agent=agent,
+        application=_RecordingApplication(),
+        settings_manager=_RecordingSettingsManager(provider=None, model_name=None),
+    )
+
+    (message,) = list(executor.execute(PromptAction(prompt="hello there")))
+
+    assert isinstance(message, ErrorMessage)
+    assert agent.received is None
+
+
+def test_execute_prompt_action_without_model_name_yields_error() -> None:
+    """Sending a message without a configured model name yields an error, not a call."""
+    agent = _RecordingAgent(AssistantMessage(content="hi"))
+    executor = ActionExecutor(
+        agent=agent,
+        application=_RecordingApplication(),
+        settings_manager=_RecordingSettingsManager(provider="openai", model_name=None),
+    )
+
+    (message,) = list(executor.execute(PromptAction(prompt="hello there")))
+
+    assert isinstance(message, ErrorMessage)
+    assert agent.received is None

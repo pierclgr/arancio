@@ -196,7 +196,7 @@ def test_powershell_command_reports_missing_host(which_mock, run_mock) -> None:
     run_mock.assert_not_called()
     output = (
         "Error while executing PowershellCommandTool: "
-        "PowerShell host not found: powershell.exe or pwsh"
+        "powerShell host not found: powershell.exe or pwsh"
     )
     assert result == ToolErrorMessage(
         content=output,
@@ -368,7 +368,7 @@ def test_read_tool_reports_missing_file(tmp_path: Path) -> None:
 
     result = ReadFileTool().call(call_id="call_1", file_path=str(target))
 
-    output = f"Error while executing ReadFileTool: File not found: {target}"
+    output = f"Error while executing ReadFileTool: file not found: {target}"
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
@@ -380,7 +380,7 @@ def test_read_tool_reports_directory_path(tmp_path: Path) -> None:
     result = ReadFileTool().call(call_id="call_1", file_path=str(tmp_path))
 
     output = (
-        f"Error while executing ReadFileTool: Path is not a regular file: {tmp_path}"
+        f"Error while executing ReadFileTool: path is not a regular file: {tmp_path}"
     )
     assert result == ToolErrorMessage(
         content=output,
@@ -466,7 +466,7 @@ def test_write_tool_refuses_overwrite_without_prior_read(tmp_path: Path) -> None
     assert target.read_text() == "untouched"
     output = (
         f"Error while executing WriteFileTool: "
-        f"File exists but was not read this session; "
+        f"file exists but was not read this session; "
         f"read it first before overwriting: {target}"
     )
     assert result == ToolErrorMessage(
@@ -495,7 +495,7 @@ def test_write_tool_refuses_overwrite_after_mtime_drift(tmp_path: Path) -> None:
     assert target.read_text() == "old"
     output = (
         f"Error while executing WriteFileTool: "
-        f"File has changed on disk since it was read; "
+        f"file has changed on disk since it was read; "
         f"re-read before overwriting: {target}"
     )
     assert result == ToolErrorMessage(
@@ -555,7 +555,7 @@ def test_write_tool_reports_directory_target(tmp_path: Path) -> None:
     )
 
     output = (
-        f"Error while executing WriteFileTool: Path is not a regular file: {tmp_path}"
+        f"Error while executing WriteFileTool: path is not a regular file: {tmp_path}"
     )
     assert result == ToolErrorMessage(
         content=output,
@@ -758,7 +758,7 @@ def test_edit_tool_reports_missing_file(tmp_path: Path) -> None:
         new_string="b",
     )
 
-    output = f"Error while executing EditFileTool: File not found: {target}"
+    output = f"Error while executing EditFileTool: file not found: {target}"
     assert result == ToolErrorMessage(
         content=output,
         id="call_1",
@@ -775,7 +775,7 @@ def test_edit_tool_reports_directory_target(tmp_path: Path) -> None:
     )
 
     output = (
-        f"Error while executing EditFileTool: Path is not a regular file: {tmp_path}"
+        f"Error while executing EditFileTool: path is not a regular file: {tmp_path}"
     )
     assert result == ToolErrorMessage(
         content=output,
@@ -798,7 +798,7 @@ def test_edit_tool_refuses_without_prior_read(tmp_path: Path) -> None:
     assert target.read_text() == "hello\n"
     output = (
         f"Error while executing EditFileTool: "
-        f"File was not read this session; "
+        f"file was not read this session; "
         f"read it first before editing: {target}"
     )
     assert result == ToolErrorMessage(
@@ -828,7 +828,7 @@ def test_edit_tool_refuses_after_mtime_drift(tmp_path: Path) -> None:
     assert target.read_text() == "hello\n"
     output = (
         f"Error while executing EditFileTool: "
-        f"File has changed on disk since it was read; "
+        f"file has changed on disk since it was read; "
         f"re-read before editing: {target}"
     )
     assert result == ToolErrorMessage(

@@ -4,17 +4,20 @@ import inspect
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
+from arancio.prompt.actions.constants import INJECTABLE_COMMAND_PARAMETERS
+
 
 class BaseCommand(ABC):
     """Base class for slash commands parsed from the prompt.
 
     Subclasses set :attr:`name` and :attr:`description` and implement
-    :meth:`execute` with its own named parameters. A command that needs to act on
-    the running application declares a parameter named ``application``, which
-    :class:`arancio.prompt.actions.executor.ActionExecutor` always supplies;
-    commands that don't need it declare a ``**kwargs`` catch-all to absorb it (and
-    any other argument they don't care about) instead of listing it explicitly.
-    The concrete :meth:`run` receives the arguments as keywords, coerces them to
+    :meth:`execute` with its own named parameters. A command declares a
+    parameter named ``application`` and/or ``settings_manager`` to have
+    :class:`arancio.prompt.actions.executor.ActionExecutor` supply the running
+    application and/or the settings manager; a command that needs neither
+    declares a ``**kwargs`` catch-all to absorb them (and any other argument it
+    doesn't care about) instead of listing them explicitly. The concrete
+    :meth:`run` receives the arguments as keywords, coerces them to
     :meth:`execute`'s parameter types via :meth:`_validate_args` (rejecting a
     missing mandatory argument or a value that cannot be coerced), then forwards
     them all to :meth:`execute`.
@@ -45,14 +48,15 @@ class BaseCommand(ABC):
     def _validate_args(cls, **kwargs) -> dict[str, Any]:
         """Coerce the keyword arguments to :meth:`execute`'s parameter types.
 
-        ``application`` is forwarded untouched; each argument bound to a named,
-        annotated parameter of :meth:`execute` is converted to its type
-        annotation (e.g. ``"3"`` to ``3`` for an ``int`` parameter). An argument
-        absorbed by :meth:`execute`'s ``**kwargs`` catch-all, if it has one, is
-        also forwarded untouched. A value that cannot be converted to its
-        annotated type raises :class:`TypeError`; a missing mandatory argument or
-        an unexpected keyword argument raises :class:`TypeError` when
-        :meth:`execute` is actually called with the result.
+        ``application`` and ``settings_manager`` are forwarded untouched; each
+        other argument bound to a named, annotated parameter of :meth:`execute`
+        is converted to its type annotation (e.g. ``"3"`` to ``3`` for an
+        ``int`` parameter). An argument absorbed by :meth:`execute`'s
+        ``**kwargs`` catch-all, if it has one, is also forwarded untouched. A
+        value that cannot be converted to its annotated type raises
+        :class:`TypeError`; a missing mandatory argument or an unexpected
+        keyword argument raises :class:`TypeError` when :meth:`execute` is
+        actually called with the result.
 
         Args:
             **kwargs: the arguments keyed by :meth:`execute`'s parameter names.
@@ -69,7 +73,7 @@ class BaseCommand(ABC):
             parameter = signature.parameters.get(parameter_name)
             annotation = parameter.annotation if parameter else inspect.Parameter.empty
             if (
-                parameter_name != "application"
+                parameter_name not in INJECTABLE_COMMAND_PARAMETERS
                 and annotation is not inspect.Parameter.empty
                 and isinstance(annotation, type)
             ):

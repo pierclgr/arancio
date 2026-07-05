@@ -37,7 +37,7 @@ def main() -> None:
     )
     settings_manager.load()
 
-    app = App(agent=agent, model_id=client.model_id)
+    app = App(agent=agent, model_id=client.model_id, settings_manager=settings_manager)
     controller.app = app
     app.run()
 

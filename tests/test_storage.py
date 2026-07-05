@@ -87,7 +87,8 @@ def test_load_settings_reads_back_saved_settings(
     """``load_settings`` returns the settings previously persisted to disk."""
     monkeypatch.setattr(storage_mod, "ARANCIO_SETTINGS_FILE", tmp_path / "settings.yml")
     settings = Settings.default()
-    settings.model_id = "openai/gpt-4o"
+    settings.provider = "openai"
+    settings.model_name = "gpt-4o"
 
     StorageManager().save_settings(settings)
 

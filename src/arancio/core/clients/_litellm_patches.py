@@ -42,7 +42,7 @@ def _delta_has_text_and_reasoning(chunk) -> bool:
 
 
 def _patch_mixed_reasoning_text_chunk() -> None:
-    """Stop LiteLLM's Responses bridge dropping text from mixed chunks.
+    """Stop LiteLLM's Responses bridge dropping/reordering text in mixed chunks.
 
     LiteLLM's chat-to-Responses bridge
     (``LiteLLMCompletionStreamingIterator``) transforms each chat chunk in
@@ -50,12 +50,29 @@ def _patch_mixed_reasoning_text_chunk() -> None:
     single chunk carries both ``reasoning_content`` and ``content`` (some
     providers, e.g. ``ollama_chat/*`` models, pack the reasoning-to-answer
     transition into one chunk), the method returns the reasoning delta and
-    never emits the text delta, so the start of the answer is silently
-    lost. This wraps the method: for a mixed chunk it queues the reasoning
-    delta into the iterator's pending buffer and returns the text delta, so
-    both reach the consumer in order. Non-mixed chunks fall through to the
-    original implementation unchanged.
+    never emits the text delta, so the start of the answer is silently lost.
 
+    This wraps the method to queue *both* deltas, in order, onto
+    ``_pending_response_events`` and return ``None`` for a mixed chunk. A
+    ``None`` return isn't special-cased: it is the value LiteLLM's own
+    transform already returns when a chunk has nothing to emit, and every
+    caller (the sync ``__next__``, the async ``__anext__``, and this
+    module's own :func:`_patch_sync_first_chunk_drop`) already falls back to
+    draining ``_pending_response_events`` in FIFO order when that happens.
+    An earlier version of this patch returned the text delta directly and
+    only queued the reasoning delta, reasoning "the caller appends our
+    return value and pops from the front" — true for ``__anext__``, but
+    ``__next__`` returns a non-``None`` result immediately instead of
+    queueing it. For any mixed chunk other than the very first one in the
+    stream, that shipped the text delta *before* the already-queued
+    reasoning delta on the sync path arancio actually drives, visibly
+    reordering reasoning and answer text (e.g. the answer's first fragment,
+    then a stray one-line reasoning fragment, then the rest of the answer).
+    Queuing both and returning ``None`` sidesteps the whole return-vs-queue
+    distinction: ordering only ever depends on the shared FIFO queue, which
+    every caller already drains the same way.
+
+    Non-mixed chunks fall through to the original implementation unchanged.
     The wrapper is idempotent and self-disabling: if a future LiteLLM
     version stops producing mixed chunks (or fixes the transform), the
     ``_delta_has_text_and_reasoning`` guard is simply never true and the
@@ -68,16 +85,15 @@ def _patch_mixed_reasoning_text_chunk() -> None:
     original = cls._transform_chat_completion_chunk_to_response_api_chunk
 
     def _patched(self, chunk):
-        """Emit both reasoning and text events for a mixed chat chunk.
+        """Queue both reasoning and text events for a mixed chat chunk.
 
         Args:
             self: the streaming-iterator instance.
             chunk: the chat-completions chunk being transformed.
 
         Returns:
-            The text delta event for a mixed chunk (with the reasoning
-            delta queued ahead of the caller's own append), otherwise the
-            original method's result.
+            ``None`` for a mixed chunk (both deltas are queued instead),
+            otherwise the original method's result.
         """
         if not _delta_has_text_and_reasoning(chunk):
             return original(self, chunk)
@@ -89,11 +105,6 @@ def _patch_mixed_reasoning_text_chunk() -> None:
             output_index=0,
             delta=delta.reasoning_content,
         )
-        # the caller appends our return value to the end of
-        # _pending_response_events and pops from the front, so queue the
-        # reasoning delta first to keep reasoning-before-text ordering
-        self._pending_response_events.append(reasoning_delta)
-
         self._sequence_number += 1
         text_delta = OutputTextDeltaEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
@@ -103,7 +114,9 @@ def _patch_mixed_reasoning_text_chunk() -> None:
             delta=delta.content,
         )
         text_delta.__dict__["sequence_number"] = self._sequence_number
-        return text_delta
+        self._pending_response_events.append(reasoning_delta)
+        self._pending_response_events.append(text_delta)
+        return None
 
     cls._transform_chat_completion_chunk_to_response_api_chunk = _patched
     setattr(cls, _MIXED_CHUNK_PATCH_FLAG, True)

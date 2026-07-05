@@ -25,6 +25,7 @@ from arancio.core.permissions.manager import PermissionManager
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 from arancio.core.tools.base import BaseTool
 from arancio.core.tools.schema import ToolSchema
+from arancio.core.utils.text import decapitalize
 
 
 class Agent:
@@ -360,7 +361,11 @@ class Agent:
                 # post-stream errors that fire after finalized messages were
                 # already delivered (e.g. provider-side logging callback bugs)
                 # must not trigger a retry
-                yield ErrorMessage(content=f"Error while executing user request: {e}")
+                yield ErrorMessage(
+                    content=(
+                        f"Error while executing user request: {decapitalize(str(e))}"
+                    )
+                )
                 if received_finalized:
                     return
                 # abort once the failed turns in a row reach max_retries

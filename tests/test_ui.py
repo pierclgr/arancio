@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Iterator
 
-from textual.widgets import Input, Markdown
+from textual.widgets import Input, Markdown, Static
 
 from arancio.core.messages import (
     AssistantChunkMessage,
@@ -12,12 +12,49 @@ from arancio.core.messages import (
     ReasoningMessage,
     UserMessage,
 )
+from arancio.core.permissions.types import PermissionCategory, PermissionLevel
+from arancio.settings.settings import Settings
 from arancio.ui.app import App
 from arancio.ui.widgets.question import QuestionScreen
 
 
 class _DummyAgent:
     """Stand-in agent; the UI tests never run its loop."""
+
+
+class _FakeSettingsManager:
+    """Settings-manager stub recording ``apply``/``save`` calls without disk I/O."""
+
+    def __init__(
+        self, provider: str | None = "openai", model_name: str | None = "gpt-4o"
+    ) -> None:
+        """Build settings with the given provider and model name.
+
+        Args:
+            provider: the initial provider, or ``None`` to leave it unset.
+            model_name: the initial model name, or ``None`` to leave it unset.
+        """
+        self.settings = Settings(
+            permissions={c: PermissionLevel.ASK for c in PermissionCategory},
+            provider=provider,
+            model_name=model_name,
+            thinking_effort="medium",
+            thinking_summary=None,
+            max_turns=None,
+            max_retries=3,
+            turn_wait_time=1.0,
+            turn_wait_time_multiplier=2.0,
+        )
+        self.applied = False
+        self.saved = False
+
+    def apply(self) -> None:
+        """Record that the settings were applied to the live objects."""
+        self.applied = True
+
+    def save(self) -> None:
+        """Record that the settings were persisted to disk."""
+        self.saved = True
 
 
 class _ScriptedAgent:
@@ -71,7 +108,11 @@ def _app() -> App:
     Returns:
         An :class:`App` instance with a dummy agent.
     """
-    return App(agent=_DummyAgent(), model_id="test-model")
+    return App(
+        agent=_DummyAgent(),
+        model_id="test-model",
+        settings_manager=_FakeSettingsManager(),
+    )
 
 
 def test_question_screen_dismisses_with_pressed_answer() -> None:
@@ -212,7 +253,9 @@ def test_enter_sends_consecutive_messages() -> None:
 
     async def _run() -> None:
         app = _SyncApp(
-            agent=_ScriptedAgent([AssistantMessage(content="reply")]), model_id="m"
+            agent=_ScriptedAgent([AssistantMessage(content="reply")]),
+            model_id="m",
+            settings_manager=_FakeSettingsManager(),
         )
         async with app.run_test() as pilot:
             prompt = app.query_one("#prompt", Input)
@@ -245,5 +288,20 @@ def test_reset_stream_clears_cross_turn_state() -> None:
             await app._handle_message(AssistantMessage(content="reply"))
             await pilot.pause()
             assert len(app.query(Markdown)) == 1
+
+    asyncio.run(_run())
+
+
+def test_set_displayed_model_id_updates_toolbar() -> None:
+    """Updating the displayed model id refreshes the cached label and toolbar."""
+
+    async def _run() -> None:
+        app = _app()
+        async with app.run_test() as pilot:
+            app.set_displayed_model_id("openai/gpt-5")
+            await pilot.pause()
+
+            assert app._model_id == "openai/gpt-5"
+            assert "openai/gpt-5" in str(app.query_one("#toolbar", Static).render())
 
     asyncio.run(_run())

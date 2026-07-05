@@ -27,9 +27,11 @@ class Settings:
 
     Attributes:
         permissions: granted category to autonomy level mapping.
-        model_id: the agent's model id, or ``None`` when not yet configured.
-        summary_model_id: the web-summary model id, or ``None`` when not yet
-            configured.
+        provider: the agent model's provider prefix (e.g. ``"openai"``), or
+            ``None`` when not yet configured.
+        model_name: the agent model's name, without the provider prefix, or
+            ``None`` when not yet configured. The web-summary client uses this
+            same model.
         thinking_effort: the model's reasoning effort.
         thinking_summary: the model's reasoning summary mode, or ``None`` to
             disable summaries (e.g. for Ollama models).
@@ -43,14 +45,31 @@ class Settings:
     """
 
     permissions: dict[PermissionCategory, PermissionLevel]
-    model_id: str | None
-    summary_model_id: str | None
+    provider: str | None
+    model_name: str | None
     thinking_effort: str
     thinking_summary: str | None
     max_turns: int | None
     max_retries: int
     turn_wait_time: float
     turn_wait_time_multiplier: float
+
+    @property
+    def model_id(self) -> str:
+        """Build the model id from the current provider and model name.
+
+        Returns:
+            The joined ``provider/model_name`` model id.
+
+        Raises:
+            ValueError: when the provider is not configured.
+            ValueError: when the model name is not configured.
+        """
+        if not self.provider:
+            raise ValueError("No provider configured.")
+        if not self.model_name:
+            raise ValueError("No model name configured.")
+        return f"{self.provider}/{self.model_name}"
 
     @classmethod
     def default(cls) -> "Settings":
@@ -65,8 +84,8 @@ class Settings:
             permissions={
                 category: PermissionLevel.ASK for category in PermissionCategory
             },
-            model_id=None,
-            summary_model_id=None,
+            provider=None,
+            model_name=None,
             thinking_effort=LITELLM_DEFAULT_THINKING_EFFORT,
             thinking_summary=LITELLM_DEFAULT_THINKING_SUMMARY,
             max_turns=AGENT_DEFAULT_MAX_TURNS,
@@ -89,8 +108,8 @@ class Settings:
                 category.name: level.value
                 for category, level in self.permissions.items()
             },
-            "model_id": self.model_id,
-            "summary_model_id": self.summary_model_id,
+            "provider": self.provider,
+            "model_name": self.model_name,
             "thinking_effort": self.thinking_effort,
             "thinking_summary": self.thinking_summary,
             "max_turns": self.max_turns,
@@ -116,8 +135,8 @@ class Settings:
                 PermissionCategory[name]: PermissionLevel(level)
                 for name, level in data["permissions"].items()
             },
-            model_id=data["model_id"],
-            summary_model_id=data["summary_model_id"],
+            provider=data["provider"],
+            model_name=data["model_name"],
             thinking_effort=data["thinking_effort"],
             thinking_summary=data["thinking_summary"],
             max_turns=data["max_turns"],
