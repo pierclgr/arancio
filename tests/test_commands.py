@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from arancio.commands.base import BaseCommand
+from arancio.commands.effort import EffortCommand
 from arancio.commands.exit import ExitCommand
 from arancio.commands.hello_world import HelloWorldCommand
 from arancio.commands.model import ModelCommand
@@ -97,11 +98,21 @@ def test_exit_command_quits_the_application() -> None:
 
 
 class _ModelApplication:
-    """Application stub recording the model id it was asked to display."""
+    """Application stub recording the model id or effort it was asked to display."""
 
     def __init__(self) -> None:
-        """Start with no displayed model id."""
+        """Start with no displayed model id or effort."""
         self.displayed_model_id: str | None = None
+        self.displayed_effort: str | None = None
+
+    def set_displayed_effort(self, effort: str | None) -> None:
+        """Record the effort the toolbar was asked to display.
+
+        Args:
+            effort: the effort to display, or ``None`` when thinking is
+                disabled.
+        """
+        self.displayed_effort = effort
 
     def set_displayed_model_id(self, model_id: str) -> None:
         """Record the model id the toolbar was asked to display.
@@ -199,6 +210,134 @@ def test_model_command_requires_a_configured_provider() -> None:
     assert settings_manager.saved is False
     # model_name is restored to its previous value rather than left dangling
     assert settings_manager.settings.model_name == "gpt-4o"
+
+
+class _FakeEffortSettings:
+    """Minimal settings stub exposing the fields the effort command reads/writes."""
+
+    def __init__(
+        self,
+        thinking_effort: str = "medium",
+        provider: str | None = "openai",
+        model_name: str | None = "gpt-4o",
+    ) -> None:
+        """Store the initial thinking effort, provider and model name.
+
+        Args:
+            thinking_effort: the initial thinking effort.
+            provider: the initial provider, or ``None`` to leave it unset.
+            model_name: the initial model name, or ``None`` to leave it unset.
+        """
+        self.thinking_effort = thinking_effort
+        self.provider = provider
+        self.model_name = model_name
+
+    @property
+    def model_id(self) -> str:
+        """Build the model id from the current provider and model name.
+
+        Returns:
+            The joined ``provider/model_name`` model id.
+
+        Raises:
+            ValueError: when the provider is not configured.
+            ValueError: when the model name is not configured.
+        """
+        if not self.provider:
+            raise ValueError("No provider configured.")
+        if not self.model_name:
+            raise ValueError("No model name configured.")
+        return f"{self.provider}/{self.model_name}"
+
+
+class _FakeEffortSettingsManager:
+    """Settings-manager stub recording ``apply``/``save`` calls without disk I/O."""
+
+    def __init__(
+        self,
+        thinking_effort: str = "medium",
+        provider: str | None = "openai",
+        model_name: str | None = "gpt-4o",
+    ) -> None:
+        """Build a settings stub with the given thinking effort, provider and name.
+
+        Args:
+            thinking_effort: the initial thinking effort.
+            provider: the initial provider, or ``None`` to leave it unset.
+            model_name: the initial model name, or ``None`` to leave it unset.
+        """
+        self.settings = _FakeEffortSettings(thinking_effort, provider, model_name)
+        self.applied = False
+        self.saved = False
+
+    def apply(self) -> None:
+        """Record that the settings were applied to the live objects."""
+        self.applied = True
+
+    def save(self) -> None:
+        """Record that the settings were persisted to disk."""
+        self.saved = True
+
+
+def test_effort_command_sets_thinking_effort_and_confirms() -> None:
+    """The effort command applies the new value, refreshes the toolbar and confirms."""
+    application = _ModelApplication()
+    settings_manager = _FakeEffortSettingsManager()
+
+    result = EffortCommand.run(
+        application=application, settings_manager=settings_manager, effort="high"
+    )
+
+    assert settings_manager.settings.thinking_effort == "high"
+    assert settings_manager.applied is True
+    assert settings_manager.saved is True
+    assert application.displayed_effort == "high"
+    assert result == "Thinking effort set to high"
+
+
+def test_effort_command_accepts_any_free_form_value() -> None:
+    """Any text is accepted as the effort level, with no fixed set enforced."""
+    settings_manager = _FakeEffortSettingsManager()
+
+    result = EffortCommand.run(
+        application=_ModelApplication(),
+        settings_manager=settings_manager,
+        effort="ultra-mega",
+    )
+
+    assert settings_manager.settings.thinking_effort == "ultra-mega"
+    assert result == "Thinking effort set to ultra-mega"
+
+
+@pytest.mark.parametrize("keyword", ["null", "NULL", "Null"])
+def test_effort_command_null_disables_thinking(keyword: str) -> None:
+    """The word "null", in any case, sets the thinking effort to None."""
+    application = _ModelApplication()
+    settings_manager = _FakeEffortSettingsManager()
+
+    result = EffortCommand.run(
+        application=application, settings_manager=settings_manager, effort=keyword
+    )
+
+    assert settings_manager.settings.thinking_effort is None
+    assert application.displayed_effort is None
+    assert result == "Thinking effort set to null"
+
+
+def test_effort_command_requires_a_configured_model() -> None:
+    """Setting the effort without a configured model raises, unpersisted."""
+    application = _ModelApplication()
+    settings_manager = _FakeEffortSettingsManager(provider=None, model_name=None)
+
+    with pytest.raises(ValueError):
+        EffortCommand.run(
+            application=application, settings_manager=settings_manager, effort="high"
+        )
+
+    assert settings_manager.applied is False
+    assert settings_manager.saved is False
+    assert settings_manager.settings.thinking_effort == "medium"
+    assert application.displayed_effort is None
 
 
 def test_base_command_cannot_be_instantiated() -> None:

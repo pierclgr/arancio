@@ -20,12 +20,13 @@ class _DummyAgent:
 
 
 class _RecordingApplication:
-    """Application stub recording whether it was asked to exit or set a model."""
+    """Application stub recording exit/model/effort display requests."""
 
     def __init__(self) -> None:
-        """Start with no recorded exit and no displayed model id."""
+        """Start with no recorded exit and no displayed model id or effort."""
         self.exit_called = False
         self.displayed_model_id: str | None = None
+        self.displayed_effort: str | None = None
 
     def exit(self) -> None:
         """Record that an exit was requested."""
@@ -38,6 +39,15 @@ class _RecordingApplication:
             model_id: the model id to display.
         """
         self.displayed_model_id = model_id
+
+    def set_displayed_effort(self, effort: str | None) -> None:
+        """Record the effort the toolbar was asked to display.
+
+        Args:
+            effort: the effort to display, or ``None`` when thinking is
+                disabled.
+        """
+        self.displayed_effort = effort
 
 
 class _RecordingSettingsManager:
@@ -258,6 +268,59 @@ def test_execute_model_command_without_provider_yields_error() -> None:
     assert settings_manager.saved is False
     assert settings_manager.settings.model_name == "gpt-4o"
     assert application.displayed_model_id is None
+
+
+def test_execute_effort_command_injects_application_and_settings_manager() -> None:
+    """The effort command action applies, persists and confirms the new effort."""
+    application = _RecordingApplication()
+    settings_manager = _RecordingSettingsManager()
+    executor = ActionExecutor(
+        agent=_DummyAgent(), application=application, settings_manager=settings_manager
+    )
+    action = CommandAction(name="effort", args=["high"])
+
+    messages = list(executor.execute(action))
+
+    assert messages == [AssistantMessage(content="Thinking effort set to high")]
+    assert settings_manager.settings.thinking_effort == "high"
+    assert settings_manager.applied is True
+    assert settings_manager.saved is True
+    assert application.displayed_effort == "high"
+
+
+def test_execute_effort_command_null_disables_thinking() -> None:
+    """The effort command action accepts "null" to disable thinking entirely."""
+    application = _RecordingApplication()
+    settings_manager = _RecordingSettingsManager()
+    executor = ActionExecutor(
+        agent=_DummyAgent(), application=application, settings_manager=settings_manager
+    )
+    action = CommandAction(name="effort", args=["null"])
+
+    messages = list(executor.execute(action))
+
+    assert messages == [AssistantMessage(content="Thinking effort set to null")]
+    assert settings_manager.settings.thinking_effort is None
+    assert application.displayed_effort is None
+
+
+def test_execute_effort_command_without_model_yields_error() -> None:
+    """Setting the effort without a configured model surfaces as an error message."""
+    application = _RecordingApplication()
+    settings_manager = _RecordingSettingsManager(provider=None, model_name=None)
+    executor = ActionExecutor(
+        agent=_DummyAgent(), application=application, settings_manager=settings_manager
+    )
+    action = CommandAction(name="effort", args=["high"])
+
+    (message,) = list(executor.execute(action))
+
+    assert isinstance(message, ErrorMessage)
+    assert "effort" in message.content
+    assert settings_manager.applied is False
+    assert settings_manager.saved is False
+    assert settings_manager.settings.thinking_effort == "medium"
+    assert application.displayed_effort is None
 
 
 def test_execute_prompt_action_delegates_to_agent() -> None:

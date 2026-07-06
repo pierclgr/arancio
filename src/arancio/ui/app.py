@@ -62,7 +62,7 @@ class App(TextualApp):
             agent: the agent whose run loop the app streams.
             model_id: the model identifier shown in the toolbar.
             settings_manager: the manager used to apply and persist settings
-                changes made through commands (e.g. ``/model``).
+                changes made through commands (e.g. ``/model``, ``/effort``).
         """
         super().__init__()
         self._agent = agent
@@ -70,6 +70,7 @@ class App(TextualApp):
             agent=agent, application=self, settings_manager=settings_manager
         )
         self._model_id = model_id
+        self._effort = settings_manager.settings.thinking_effort
         self._busy = False
         self._streaming_kind: type | None = None
         self._stream_widget: Markdown | None = None
@@ -263,11 +264,23 @@ class App(TextualApp):
         self._model_id = model_id
         self.query_one("#toolbar", Static).update(self._toolbar_text())
 
+    def set_displayed_effort(self, effort: str | None) -> None:
+        """Update the thinking effort shown in the toolbar.
+
+        Args:
+            effort: the thinking effort to display, or ``None`` when thinking
+                is disabled.
+        """
+        self._effort = effort
+        self.query_one("#toolbar", Static).update(self._toolbar_text())
+
     def _toolbar_text(self) -> str:
         """Build the toolbar text (placeholder content; fields TBD).
 
         Returns:
-            The model id and the current running/ready status.
+            The model id, thinking effort and the current running/ready
+            status.
         """
         status = "working" if self._busy else "ready"
-        return f"model: {self._model_id}  ·  {status}"
+        effort = self._effort if self._effort is not None else "null"
+        return f"model: {self._model_id}  ·  effort: {effort}  ·  {status}"

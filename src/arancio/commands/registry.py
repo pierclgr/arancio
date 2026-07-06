@@ -3,6 +3,7 @@
 from typing import Dict, Type
 
 from arancio.commands.base import BaseCommand
+from arancio.commands.effort import EffortCommand
 from arancio.commands.exit import ExitCommand
 from arancio.commands.hello_world import HelloWorldCommand
 from arancio.commands.model import ModelCommand
@@ -14,4 +15,5 @@ COMMAND_REGISTRY: Dict[str, Type[BaseCommand]] = {
     ExitCommand.name: ExitCommand,
     "quit": ExitCommand,
     ModelCommand.name: ModelCommand,
+    EffortCommand.name: EffortCommand,
 }

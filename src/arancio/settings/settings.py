@@ -32,7 +32,8 @@ class Settings:
         model_name: the agent model's name, without the provider prefix, or
             ``None`` when not yet configured. The web-summary client uses this
             same model.
-        thinking_effort: the model's reasoning effort.
+        thinking_effort: the model's reasoning effort, or ``None`` to disable
+            thinking entirely.
         thinking_summary: the model's reasoning summary mode, or ``None`` to
             disable summaries (e.g. for Ollama models).
         max_turns: the maximum number of agent turns per run, or ``None``
@@ -47,7 +48,7 @@ class Settings:
     permissions: dict[PermissionCategory, PermissionLevel]
     provider: str | None
     model_name: str | None
-    thinking_effort: str
+    thinking_effort: str | None
     thinking_summary: str | None
     max_turns: int | None
     max_retries: int

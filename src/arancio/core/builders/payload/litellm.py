@@ -41,6 +41,8 @@ class LiteLLMPayloadBuilder(BasePayloadBuilder):
         if request.tool_list:
             kwargs["tools"] = [cls._build_tool(tool) for tool in request.tool_list]
         if request.thinking_effort is not None:
+            # not graded on every provider: for non-gpt-oss Ollama models, LiteLLM
+            # collapses this to a plain "thinking on/off" boolean (see AGENTS.md)
             reasoning: dict[str, Any] = {"effort": request.thinking_effort}
             if request.thinking_summary is not None:
                 reasoning["summary"] = request.thinking_summary

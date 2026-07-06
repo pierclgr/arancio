@@ -10,7 +10,6 @@ from arancio.commands.base import BaseCommand
 from arancio.commands.registry import COMMAND_REGISTRY
 from arancio.core.agents import Agent
 from arancio.core.messages import AssistantMessage, ErrorMessage, Message, UserMessage
-from arancio.core.utils.text import decapitalize
 from arancio.prompt.actions.constants import INJECTABLE_COMMAND_PARAMETERS
 from arancio.prompt.actions.types import BaseAction, CommandAction, PromptAction
 from arancio.settings.manager import SettingsManager
@@ -87,10 +86,7 @@ class ActionExecutor:
             result = command.run(**kwargs)
         except Exception as exc:
             yield ErrorMessage(
-                content=(
-                    f"Error while executing command {action.name}: "
-                    f"{decapitalize(str(exc))}"
-                )
+                content=f"Error while executing command {action.name}: {exc}"
             )
             return
 
@@ -152,8 +148,6 @@ class ActionExecutor:
         try:
             self._settings_manager.settings.model_id
         except ValueError as exc:
-            yield ErrorMessage(
-                content=f"Error sending message: {decapitalize(str(exc))}"
-            )
+            yield ErrorMessage(content=f"Error sending message: {exc}")
             return
         yield from self._agent.run(UserMessage(content=action.prompt))
