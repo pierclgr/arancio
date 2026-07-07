@@ -7,6 +7,7 @@ from arancio.commands.effort import EffortCommand
 from arancio.commands.exit import ExitCommand
 from arancio.commands.hello_world import HelloWorldCommand
 from arancio.commands.model import ModelCommand
+from arancio.commands.permissions import PermissionsCommand
 
 # register a command by adding an entry keyed by its name; aliases point at the
 # same class under an extra key
@@ -16,4 +17,5 @@ COMMAND_REGISTRY: Dict[str, Type[BaseCommand]] = {
     "quit": ExitCommand,
     ModelCommand.name: ModelCommand,
     EffortCommand.name: EffortCommand,
+    PermissionsCommand.name: PermissionsCommand,
 }

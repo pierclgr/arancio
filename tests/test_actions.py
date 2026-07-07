@@ -323,6 +323,98 @@ def test_execute_effort_command_without_model_yields_error() -> None:
     assert application.displayed_effort is None
 
 
+def test_execute_permissions_command_reports_current_level() -> None:
+    """The permissions command action reports the current level, unpersisted."""
+    settings_manager = _RecordingSettingsManager()
+    executor = ActionExecutor(
+        agent=_DummyAgent(),
+        application=_RecordingApplication(),
+        settings_manager=settings_manager,
+    )
+    action = CommandAction(name="permissions", args=["read"])
+
+    messages = list(executor.execute(action))
+
+    assert messages == [AssistantMessage(content="read permission level: ask")]
+    assert settings_manager.applied is False
+    assert settings_manager.saved is False
+
+
+def test_execute_permissions_command_sets_level_and_confirms() -> None:
+    """The permissions command action applies and persists the new level."""
+    settings_manager = _RecordingSettingsManager()
+    executor = ActionExecutor(
+        agent=_DummyAgent(),
+        application=_RecordingApplication(),
+        settings_manager=settings_manager,
+    )
+    action = CommandAction(name="permissions", args=["read", "auto"])
+
+    messages = list(executor.execute(action))
+
+    assert messages == [AssistantMessage(content="read permission level set to auto")]
+    assert (
+        settings_manager.settings.permissions[PermissionCategory.READ]
+        == PermissionLevel.AUTO
+    )
+    assert settings_manager.applied is True
+    assert settings_manager.saved is True
+
+
+def test_execute_permissions_command_rejects_unknown_permission() -> None:
+    """An unknown permission category surfaces as an error message, unpersisted."""
+    settings_manager = _RecordingSettingsManager()
+    executor = ActionExecutor(
+        agent=_DummyAgent(),
+        application=_RecordingApplication(),
+        settings_manager=settings_manager,
+    )
+    action = CommandAction(name="permissions", args=["nope"])
+
+    (message,) = list(executor.execute(action))
+
+    assert isinstance(message, ErrorMessage)
+    assert "permission" in message.content.lower()
+    assert settings_manager.applied is False
+    assert settings_manager.saved is False
+
+
+def test_execute_permissions_command_rejects_unknown_level() -> None:
+    """An unknown permission level surfaces as an error message, unpersisted."""
+    settings_manager = _RecordingSettingsManager()
+    executor = ActionExecutor(
+        agent=_DummyAgent(),
+        application=_RecordingApplication(),
+        settings_manager=settings_manager,
+    )
+    action = CommandAction(name="permissions", args=["read", "nope"])
+
+    (message,) = list(executor.execute(action))
+
+    assert isinstance(message, ErrorMessage)
+    assert "level" in message.content.lower()
+    assert settings_manager.applied is False
+    assert settings_manager.saved is False
+
+
+def test_execute_permissions_command_null_removes_the_grant() -> None:
+    """The permissions command action accepts "null" to remove the grant entirely."""
+    settings_manager = _RecordingSettingsManager()
+    executor = ActionExecutor(
+        agent=_DummyAgent(),
+        application=_RecordingApplication(),
+        settings_manager=settings_manager,
+    )
+    action = CommandAction(name="permissions", args=["read", "null"])
+
+    messages = list(executor.execute(action))
+
+    assert messages == [AssistantMessage(content="read permission removed")]
+    assert PermissionCategory.READ not in settings_manager.settings.permissions
+    assert settings_manager.applied is True
+    assert settings_manager.saved is True
+
+
 def test_execute_prompt_action_delegates_to_agent() -> None:
     """A prompt action sends its text to the model through the agent."""
     reply = AssistantMessage(content="hi")

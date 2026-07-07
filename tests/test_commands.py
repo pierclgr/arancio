@@ -9,6 +9,8 @@ from arancio.commands.effort import EffortCommand
 from arancio.commands.exit import ExitCommand
 from arancio.commands.hello_world import HelloWorldCommand
 from arancio.commands.model import ModelCommand
+from arancio.commands.permissions import PermissionsCommand
+from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 
 
 class _RecordingApplication:
@@ -338,6 +340,178 @@ def test_effort_command_requires_a_configured_model() -> None:
     assert settings_manager.saved is False
     assert settings_manager.settings.thinking_effort == "medium"
     assert application.displayed_effort is None
+
+
+class _FakePermissionsSettings:
+    """Minimal settings stub exposing the field the permissions command reads/writes."""
+
+    def __init__(
+        self, permissions: dict[PermissionCategory, PermissionLevel] | None = None
+    ) -> None:
+        """Store the initial permission grants.
+
+        Args:
+            permissions: the initial category-to-level mapping, or ``None``
+                to default every category to :attr:`PermissionLevel.ASK`.
+        """
+        self.permissions = permissions or {
+            category: PermissionLevel.ASK for category in PermissionCategory
+        }
+
+
+class _FakePermissionsSettingsManager:
+    """Settings-manager stub recording ``apply``/``save`` calls without disk I/O."""
+
+    def __init__(
+        self, permissions: dict[PermissionCategory, PermissionLevel] | None = None
+    ) -> None:
+        """Build a settings stub with the given permission grants.
+
+        Args:
+            permissions: the initial category-to-level mapping, or ``None``
+                to default every category to :attr:`PermissionLevel.ASK`.
+        """
+        self.settings = _FakePermissionsSettings(permissions)
+        self.applied = False
+        self.saved = False
+
+    def apply(self) -> None:
+        """Record that the settings were applied to the live objects."""
+        self.applied = True
+
+    def save(self) -> None:
+        """Record that the settings were persisted to disk."""
+        self.saved = True
+
+
+def test_permissions_command_reports_current_level_without_a_level_argument() -> None:
+    """Omitting the level reports the category's currently set level, unpersisted."""
+    settings_manager = _FakePermissionsSettingsManager()
+
+    result = PermissionsCommand.run(category="read", settings_manager=settings_manager)
+
+    assert result == "read permission level: ask"
+    assert settings_manager.applied is False
+    assert settings_manager.saved is False
+
+
+def test_permissions_command_sets_level_and_confirms() -> None:
+    """Giving both arguments replaces the level, applies and persists it."""
+    settings_manager = _FakePermissionsSettingsManager()
+
+    result = PermissionsCommand.run(
+        category="read", level="auto", settings_manager=settings_manager
+    )
+
+    assert result == "read permission level set to auto"
+    assert (
+        settings_manager.settings.permissions[PermissionCategory.READ]
+        == PermissionLevel.AUTO
+    )
+    assert settings_manager.applied is True
+    assert settings_manager.saved is True
+
+
+@pytest.mark.parametrize("category", ["READ", "Read", "read"])
+def test_permissions_command_category_name_is_case_insensitive(
+    category: str,
+) -> None:
+    """The permission category name is matched case-insensitively."""
+    settings_manager = _FakePermissionsSettingsManager()
+
+    result = PermissionsCommand.run(
+        category=category, settings_manager=settings_manager
+    )
+
+    assert result == "read permission level: ask"
+
+
+@pytest.mark.parametrize("level", ["AUTO", "Auto", "auto"])
+def test_permissions_command_level_is_case_insensitive(level: str) -> None:
+    """The permission level is matched case-insensitively."""
+    settings_manager = _FakePermissionsSettingsManager()
+
+    result = PermissionsCommand.run(
+        category="read", level=level, settings_manager=settings_manager
+    )
+
+    assert result == "read permission level set to auto"
+
+
+def test_permissions_command_rejects_unknown_permission() -> None:
+    """An unknown permission category raises, unpersisted."""
+    settings_manager = _FakePermissionsSettingsManager()
+
+    with pytest.raises(ValueError):
+        PermissionsCommand.run(category="nope", settings_manager=settings_manager)
+
+    assert settings_manager.applied is False
+    assert settings_manager.saved is False
+
+
+def test_permissions_command_rejects_unknown_level() -> None:
+    """An unknown permission level raises, unpersisted."""
+    settings_manager = _FakePermissionsSettingsManager()
+
+    with pytest.raises(ValueError):
+        PermissionsCommand.run(
+            category="read", level="nope", settings_manager=settings_manager
+        )
+
+    assert settings_manager.applied is False
+    assert settings_manager.saved is False
+    assert (
+        settings_manager.settings.permissions[PermissionCategory.READ]
+        == PermissionLevel.ASK
+    )
+
+
+@pytest.mark.parametrize("keyword", ["null", "NULL", "Null"])
+def test_permissions_command_null_removes_the_grant(keyword: str) -> None:
+    """The word "null", in any case, removes the category's grant entirely."""
+    settings_manager = _FakePermissionsSettingsManager()
+
+    result = PermissionsCommand.run(
+        category="read", level=keyword, settings_manager=settings_manager
+    )
+
+    assert result == "read permission removed"
+    assert PermissionCategory.READ not in settings_manager.settings.permissions
+    assert settings_manager.applied is True
+    assert settings_manager.saved is True
+
+
+def test_permissions_command_null_is_idempotent_when_already_removed() -> None:
+    """Removing an already-ungranted category succeeds without raising."""
+    settings_manager = _FakePermissionsSettingsManager(
+        permissions={
+            category: PermissionLevel.ASK
+            for category in PermissionCategory
+            if category is not PermissionCategory.READ
+        }
+    )
+
+    result = PermissionsCommand.run(
+        category="read", level="null", settings_manager=settings_manager
+    )
+
+    assert result == "read permission removed"
+    assert PermissionCategory.READ not in settings_manager.settings.permissions
+
+
+def test_permissions_command_reports_unset_for_an_ungranted_category() -> None:
+    """Reading a category with no grant at all reports that, not an error."""
+    settings_manager = _FakePermissionsSettingsManager(
+        permissions={
+            category: PermissionLevel.ASK
+            for category in PermissionCategory
+            if category is not PermissionCategory.READ
+        }
+    )
+
+    result = PermissionsCommand.run(category="read", settings_manager=settings_manager)
+
+    assert result == "No read permission set"
 
 
 def test_base_command_cannot_be_instantiated() -> None:
