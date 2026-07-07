@@ -98,15 +98,16 @@ class Settings:
     def to_dict(self) -> dict[str, Any]:
         """Render the settings as a YAML-serializable dictionary.
 
-        Permissions are flattened to plain strings (category name to level
-        value) so the file stays human-readable and free of Python objects.
+        Permissions are flattened to plain strings (lowercase category name to
+        level value) so the file stays human-readable and free of Python
+        objects.
 
         Returns:
             A dictionary with only built-in types, ready for ``yaml.safe_dump``.
         """
         return {
             "permissions": {
-                category.name: level.value
+                category.name.lower(): level.value
                 for category, level in self.permissions.items()
             },
             "provider": self.provider,
@@ -133,7 +134,7 @@ class Settings:
         """
         return cls(
             permissions={
-                PermissionCategory[name]: PermissionLevel(level)
+                PermissionCategory[name.upper()]: PermissionLevel(level)
                 for name, level in data["permissions"].items()
             },
             provider=data["provider"],

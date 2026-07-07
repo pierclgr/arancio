@@ -38,10 +38,10 @@ def test_to_dict_uses_plain_types():
     data = Settings.default().to_dict()
 
     assert data["permissions"] == {
-        "READ": "ask",
-        "WRITE": "ask",
-        "WEB": "ask",
-        "EXECUTE": "ask",
+        "read": "ask",
+        "write": "ask",
+        "web": "ask",
+        "execute": "ask",
     }
     assert data["provider"] is None
     assert data["model_name"] is None
