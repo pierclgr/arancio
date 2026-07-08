@@ -253,6 +253,10 @@ class Agent:
         self._permission_manager.set_permissions(permissions)
         self._refresh_tools()
 
+    def clear_history(self) -> None:
+        """Empty the conversation history, as if starting a new chat."""
+        self._message_history = []
+
     def _add_message_to_history(self, message: Message) -> None:
         """Append a single message to the conversation history.
 

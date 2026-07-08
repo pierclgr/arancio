@@ -109,8 +109,9 @@ class ActionExecutor:
 
         Returns:
             The keyword arguments for :meth:`command.run`: the prompt words keyed
-            by their matching parameter name, plus the running application and/or
-            the settings manager for any the command declares a parameter for.
+            by their matching parameter name, plus the running application, the
+            settings manager and/or the agent for any the command declares a
+            parameter for.
         """
         # each injectable parameter name maps to a same-named private attribute
         # on the executor (``application`` -> ``self._application``, etc.)

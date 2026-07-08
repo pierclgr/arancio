@@ -255,6 +255,11 @@ class App(TextualApp):
         if not busy:
             self.query_one("#prompt", Input).focus()
 
+    def clear_log(self) -> None:
+        """Remove every rendered message, matching a cleared chat history."""
+        self._reset_stream()
+        self.query_one("#log", VerticalScroll).remove_children()
+
     def set_displayed_model_id(self, model_id: str) -> None:
         """Update the model id shown in the toolbar.
 

@@ -820,6 +820,16 @@ def test_agent_repr_includes_configuration_without_history_contents() -> None:
     )
 
 
+def test_agent_clear_history_empties_message_history() -> None:
+    """clear_history empties the conversation history, as if starting fresh."""
+    agent = _agent(client=_ReasoningClient(), permission_manager=_StubManager())
+    agent._add_message_to_history(UserMessage(content="hello"))
+
+    agent.clear_history()
+
+    assert agent._message_history == []
+
+
 def test_agent_denied_tool_yields_error_and_skips_execution() -> None:
     """A denied tool call yields a tool error and does not execute."""
     client = _ToolLoopClient()

@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from arancio.commands.base import BaseCommand
+from arancio.commands.clear import ClearCommand
 from arancio.commands.effort import EffortCommand
 from arancio.commands.exit import ExitCommand
 from arancio.commands.hello_world import HelloWorldCommand
@@ -15,15 +16,32 @@ from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 
 
 class _RecordingApplication:
-    """Application stub recording whether it was asked to exit."""
+    """Application stub recording whether it was asked to exit or clear the log."""
 
     def __init__(self) -> None:
-        """Start with no recorded exit."""
+        """Start with no recorded exit or log clear."""
         self.exit_called = False
+        self.clear_log_called = False
 
     def exit(self) -> None:
         """Record that an exit was requested."""
         self.exit_called = True
+
+    def clear_log(self) -> None:
+        """Record that the log was asked to be cleared."""
+        self.clear_log_called = True
+
+
+class _RecordingAgent:
+    """Agent stub recording whether its history was asked to be cleared."""
+
+    def __init__(self) -> None:
+        """Start with no recorded history clear."""
+        self.clear_history_called = False
+
+    def clear_history(self) -> None:
+        """Record that the history was asked to be cleared."""
+        self.clear_history_called = True
 
 
 class _IntArgCommand(BaseCommand):
@@ -98,6 +116,18 @@ def test_exit_command_quits_the_application() -> None:
 
     assert result is None
     assert application.exit_called is True
+
+
+def test_clear_command_clears_history_and_log() -> None:
+    """The clear command empties the agent's history and the app's log silently."""
+    agent = _RecordingAgent()
+    application = _RecordingApplication()
+
+    result = ClearCommand.run(agent=agent, application=application)
+
+    assert agent.clear_history_called is True
+    assert application.clear_log_called is True
+    assert result is None
 
 
 class _ModelApplication:

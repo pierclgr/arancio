@@ -12,11 +12,12 @@ class BaseCommand(ABC):
 
     Subclasses set :attr:`name` and :attr:`description` and implement
     :meth:`execute` with its own named parameters. A command declares a
-    parameter named ``application`` and/or ``settings_manager`` to have
-    :class:`arancio.prompt.actions.executor.ActionExecutor` supply the running
-    application and/or the settings manager; a command that needs neither
-    declares a ``**kwargs`` catch-all to absorb them (and any other argument it
-    doesn't care about) instead of listing them explicitly. The concrete
+    parameter named ``application``, ``settings_manager`` and/or ``agent`` to
+    have :class:`arancio.prompt.actions.executor.ActionExecutor` supply the
+    running application, the settings manager and/or the agent; a command that
+    needs none of them declares a ``**kwargs`` catch-all to absorb them (and
+    any other argument it doesn't care about) instead of listing them
+    explicitly. The concrete
     :meth:`run` receives the arguments as keywords, coerces them to
     :meth:`execute`'s parameter types via :meth:`_validate_args` (rejecting a
     missing mandatory argument or a value that cannot be coerced), then forwards
@@ -48,8 +49,9 @@ class BaseCommand(ABC):
     def _validate_args(cls, **kwargs) -> dict[str, Any]:
         """Coerce the keyword arguments to :meth:`execute`'s parameter types.
 
-        ``application`` and ``settings_manager`` are forwarded untouched; each
-        other argument bound to a named, annotated parameter of :meth:`execute`
+        ``application``, ``settings_manager`` and ``agent`` are forwarded
+        untouched; each other argument bound to a named, annotated parameter
+        of :meth:`execute`
         is converted to its type annotation (e.g. ``"3"`` to ``3`` for an
         ``int`` parameter). An argument absorbed by :meth:`execute`'s
         ``**kwargs`` catch-all, if it has one, is also forwarded untouched. A

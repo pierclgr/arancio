@@ -16,21 +16,38 @@ from arancio.settings.settings import Settings
 
 
 class _DummyAgent:
-    """Stand-in agent; command-action tests never run its loop."""
+    """Stand-in agent; command-action tests never run its loop.
+
+    Also records whether its history was asked to be cleared, for the clear command
+    action test.
+    """
+
+    def __init__(self) -> None:
+        """Start with no recorded history clear."""
+        self.clear_history_called = False
+
+    def clear_history(self) -> None:
+        """Record that the history was asked to be cleared."""
+        self.clear_history_called = True
 
 
 class _RecordingApplication:
-    """Application stub recording exit/model/effort display requests."""
+    """Application stub recording exit/clear/model/effort display requests."""
 
     def __init__(self) -> None:
-        """Start with no recorded exit and no displayed model id or effort."""
+        """Start with no recorded exit, clear, displayed model id or effort."""
         self.exit_called = False
+        self.clear_log_called = False
         self.displayed_model_id: str | None = None
         self.displayed_effort: str | None = None
 
     def exit(self) -> None:
         """Record that an exit was requested."""
         self.exit_called = True
+
+    def clear_log(self) -> None:
+        """Record that the log was asked to be cleared."""
+        self.clear_log_called = True
 
     def set_displayed_model_id(self, model_id: str) -> None:
         """Record the model id the toolbar was asked to display.
@@ -224,6 +241,23 @@ def test_execute_exit_command_quits_the_application() -> None:
 
     assert messages == []
     assert application.exit_called is True
+
+
+def test_execute_clear_command_clears_history_and_log() -> None:
+    """The clear command action empties the agent's history and the app's log."""
+    agent = _DummyAgent()
+    application = _RecordingApplication()
+    executor = ActionExecutor(
+        agent=agent,
+        application=application,
+        settings_manager=_RecordingSettingsManager(),
+    )
+
+    messages = list(executor.execute(CommandAction(name="clear", args=[])))
+
+    assert messages == []
+    assert agent.clear_history_called is True
+    assert application.clear_log_called is True
 
 
 def test_execute_model_command_injects_application_and_settings_manager() -> None:
