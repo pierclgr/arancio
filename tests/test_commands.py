@@ -10,6 +10,7 @@ from arancio.commands.exit import ExitCommand
 from arancio.commands.hello_world import HelloWorldCommand
 from arancio.commands.model import ModelCommand
 from arancio.commands.permissions import PermissionsCommand
+from arancio.commands.provider import ProviderCommand
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 
 
@@ -211,6 +212,51 @@ def test_model_command_requires_a_configured_provider() -> None:
     assert settings_manager.applied is False
     assert settings_manager.saved is False
     # model_name is restored to its previous value rather than left dangling
+    assert settings_manager.settings.model_name == "gpt-4o"
+
+
+def test_provider_command_sets_provider_and_confirms() -> None:
+    """Setting the provider applies, persists and refreshes the toolbar's model id."""
+    application = _ModelApplication()
+    settings_manager = _FakeSettingsManager(provider="openai", model_name="gpt-4o")
+
+    result = ProviderCommand.run(
+        application=application, settings_manager=settings_manager, provider="anthropic"
+    )
+
+    assert settings_manager.settings.provider == "anthropic"
+    assert settings_manager.applied is True
+    assert settings_manager.saved is True
+    assert application.displayed_model_id == "anthropic/gpt-4o"
+    assert result == "Provider set to anthropic"
+
+
+def test_provider_command_without_model_name_skips_toolbar_update() -> None:
+    """Setting the provider alone still applies/persists, without a model id to show."""
+    application = _ModelApplication()
+    settings_manager = _FakeSettingsManager(provider=None, model_name=None)
+
+    result = ProviderCommand.run(
+        application=application, settings_manager=settings_manager, provider="openai"
+    )
+
+    assert settings_manager.settings.provider == "openai"
+    assert settings_manager.applied is True
+    assert settings_manager.saved is True
+    assert application.displayed_model_id is None
+    assert result == "Provider set to openai"
+
+
+def test_provider_command_keeps_model_name_unchanged() -> None:
+    """Setting the provider does not touch the current model name."""
+    settings_manager = _FakeSettingsManager(provider="openai", model_name="gpt-4o")
+
+    ProviderCommand.run(
+        application=_ModelApplication(),
+        settings_manager=settings_manager,
+        provider="anthropic",
+    )
+
     assert settings_manager.settings.model_name == "gpt-4o"
 
 

@@ -270,6 +270,42 @@ def test_execute_model_command_without_provider_yields_error() -> None:
     assert application.displayed_model_id is None
 
 
+def test_execute_provider_command_injects_application_and_settings_manager() -> None:
+    """The provider command action applies, persists and refreshes the toolbar."""
+    application = _RecordingApplication()
+    settings_manager = _RecordingSettingsManager(provider="openai", model_name="gpt-4o")
+    executor = ActionExecutor(
+        agent=_DummyAgent(), application=application, settings_manager=settings_manager
+    )
+    action = CommandAction(name="provider", args=["anthropic"])
+
+    messages = list(executor.execute(action))
+
+    assert messages == [AssistantMessage(content="Provider set to anthropic")]
+    assert settings_manager.settings.provider == "anthropic"
+    assert settings_manager.applied is True
+    assert settings_manager.saved is True
+    assert application.displayed_model_id == "anthropic/gpt-4o"
+
+
+def test_execute_provider_command_without_model_name_skips_toolbar_update() -> None:
+    """Setting the provider alone still confirms, without a model id to display."""
+    application = _RecordingApplication()
+    settings_manager = _RecordingSettingsManager(provider=None, model_name=None)
+    executor = ActionExecutor(
+        agent=_DummyAgent(), application=application, settings_manager=settings_manager
+    )
+    action = CommandAction(name="provider", args=["openai"])
+
+    messages = list(executor.execute(action))
+
+    assert messages == [AssistantMessage(content="Provider set to openai")]
+    assert settings_manager.settings.provider == "openai"
+    assert settings_manager.applied is True
+    assert settings_manager.saved is True
+    assert application.displayed_model_id is None
+
+
 def test_execute_effort_command_injects_application_and_settings_manager() -> None:
     """The effort command action applies, persists and confirms the new effort."""
     application = _RecordingApplication()
