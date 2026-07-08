@@ -19,7 +19,7 @@ class EffortCommand(BaseCommand):
 
     @classmethod
     def execute(
-        cls, effort: str, application: App, settings_manager: SettingsManager
+        cls, level: str, application: App, settings_manager: SettingsManager
     ) -> str:
         """Replace the thinking effort and apply it.
 
@@ -30,7 +30,7 @@ class EffortCommand(BaseCommand):
         currently configured.
 
         Args:
-            effort: the new thinking effort, bound to the prompt's first word;
+            level: the new thinking effort, bound to the prompt's first word;
                 ``"null"`` (any case) disables thinking.
             application: the running app whose toolbar is refreshed with the
                 new effort level.
@@ -41,7 +41,7 @@ class EffortCommand(BaseCommand):
             Confirmation text naming the new effort level.
         """
         settings_manager.settings.model_id
-        new_effort = None if effort.lower() == "null" else effort
+        new_effort = None if level.lower() == "null" else level
         settings_manager.settings.thinking_effort = new_effort
         settings_manager.apply()
         settings_manager.save()

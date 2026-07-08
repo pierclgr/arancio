@@ -287,7 +287,7 @@ def test_effort_command_sets_thinking_effort_and_confirms() -> None:
     settings_manager = _FakeEffortSettingsManager()
 
     result = EffortCommand.run(
-        application=application, settings_manager=settings_manager, effort="high"
+        application=application, settings_manager=settings_manager, level="high"
     )
 
     assert settings_manager.settings.thinking_effort == "high"
@@ -304,7 +304,7 @@ def test_effort_command_accepts_any_free_form_value() -> None:
     result = EffortCommand.run(
         application=_ModelApplication(),
         settings_manager=settings_manager,
-        effort="ultra-mega",
+        level="ultra-mega",
     )
 
     assert settings_manager.settings.thinking_effort == "ultra-mega"
@@ -318,7 +318,7 @@ def test_effort_command_null_disables_thinking(keyword: str) -> None:
     settings_manager = _FakeEffortSettingsManager()
 
     result = EffortCommand.run(
-        application=application, settings_manager=settings_manager, effort=keyword
+        application=application, settings_manager=settings_manager, level=keyword
     )
 
     assert settings_manager.settings.thinking_effort is None
@@ -333,7 +333,7 @@ def test_effort_command_requires_a_configured_model() -> None:
 
     with pytest.raises(ValueError):
         EffortCommand.run(
-            application=application, settings_manager=settings_manager, effort="high"
+            application=application, settings_manager=settings_manager, level="high"
         )
 
     assert settings_manager.applied is False
