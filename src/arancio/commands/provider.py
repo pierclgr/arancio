@@ -25,12 +25,15 @@ class ProviderCommand(BaseCommand):
 
         Unlike :class:`~arancio.commands.model.ModelCommand`, this does not
         require a model name to already be configured — setting the provider
-        alone is the first configuration step on a fresh install.
+        alone is the first configuration step on a fresh install. Assigning
+        ``settings.provider`` below raises ``ValueError`` before anything is
+        persisted when the value is not a valid LiteLLM provider name.
 
         Args:
             provider: the new provider prefix (e.g. ``"openai"``), bound to
-                the prompt's first word; any text is accepted. The current
-                model name is kept unchanged.
+                the prompt's first word, matched case-insensitively against
+                LiteLLM's supported providers. The current model name is kept
+                unchanged.
             application: the running app whose toolbar is refreshed with the
                 new model id, when a model name is already configured too.
             settings_manager: the manager used to apply and persist the
@@ -45,4 +48,4 @@ class ProviderCommand(BaseCommand):
         settings_manager.save()
         if settings.model_name:
             application.set_displayed_model_id(settings.model_id)
-        return f"Provider set to {provider}"
+        return f"Provider set to {settings.provider}"

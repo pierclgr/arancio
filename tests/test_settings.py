@@ -11,6 +11,7 @@ from arancio.core.constants.agent import (
 from arancio.core.constants.litellm import (
     LITELLM_DEFAULT_THINKING_EFFORT,
     LITELLM_DEFAULT_THINKING_SUMMARY,
+    LITELLM_PROVIDER_NAMES,
 )
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 from arancio.settings.settings import Settings
@@ -94,3 +95,49 @@ def test_model_id_raises_when_model_name_is_unset():
 
     with pytest.raises(ValueError):
         _ = settings.model_id
+
+
+def test_provider_accepts_a_valid_litellm_provider():
+    """Setting a recognized LiteLLM provider name stores it lowercased."""
+    settings = Settings.default()
+
+    settings.provider = "openai"
+
+    assert settings.provider == "openai"
+
+
+def test_provider_is_case_insensitive():
+    """A provider name is matched against LiteLLM's list case-insensitively."""
+    settings = Settings.default()
+
+    settings.provider = "OpenAI"
+
+    assert settings.provider == "openai"
+
+
+def test_provider_accepts_none_to_unset():
+    """Setting the provider to ``None`` unsets it without validation."""
+    settings = Settings.default()
+    settings.provider = "openai"
+
+    settings.provider = None
+
+    assert settings.provider is None
+
+
+def test_provider_rejects_unknown_provider():
+    """An unrecognized provider name raises, leaving the previous value intact."""
+    settings = Settings.default()
+    settings.provider = "openai"
+
+    with pytest.raises(ValueError):
+        settings.provider = "not-a-real-provider"
+
+    assert settings.provider == "openai"
+
+
+def test_litellm_provider_names_is_not_empty():
+    """The LiteLLM-derived provider set is populated and includes known providers."""
+    assert "openai" in LITELLM_PROVIDER_NAMES
+    assert "anthropic" in LITELLM_PROVIDER_NAMES
+    assert "ollama_chat" in LITELLM_PROVIDER_NAMES

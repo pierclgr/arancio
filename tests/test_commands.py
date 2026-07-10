@@ -12,6 +12,7 @@ from arancio.commands.hello_world import HelloWorldCommand
 from arancio.commands.model import ModelCommand
 from arancio.commands.permissions import PermissionsCommand
 from arancio.commands.provider import ProviderCommand
+from arancio.core.constants.litellm import LITELLM_PROVIDER_NAMES
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 
 
@@ -170,6 +171,36 @@ class _FakeModelSettings:
         self.model_name = model_name
 
     @property
+    def provider(self) -> str | None:
+        """Return the currently configured provider.
+
+        Returns:
+            The lowercased provider prefix, or ``None`` when not yet
+            configured.
+        """
+        return self._provider
+
+    @provider.setter
+    def provider(self, value: str | None) -> None:
+        """Validate and set the provider, matched case-insensitively.
+
+        Mirrors the real :attr:`Settings.provider` setter.
+
+        Args:
+            value: the provider name, in any case, or ``None`` to unset it.
+
+        Raises:
+            ValueError: when ``value`` is not a valid LiteLLM provider name.
+        """
+        if value is None:
+            self._provider = None
+            return
+        lowered = value.lower()
+        if lowered not in LITELLM_PROVIDER_NAMES:
+            raise ValueError(f"Unknown provider: {value!r}.")
+        self._provider = lowered
+
+    @property
     def model_id(self) -> str:
         """Build the model id from the current provider and model name.
 
@@ -288,6 +319,38 @@ def test_provider_command_keeps_model_name_unchanged() -> None:
     )
 
     assert settings_manager.settings.model_name == "gpt-4o"
+
+
+def test_provider_command_normalizes_case_in_confirmation() -> None:
+    """The confirmation and toolbar use the resolved, lowercased provider."""
+    application = _ModelApplication()
+    settings_manager = _FakeSettingsManager(provider="openai", model_name="gpt-4o")
+
+    result = ProviderCommand.run(
+        application=application, settings_manager=settings_manager, provider="OpenAI"
+    )
+
+    assert settings_manager.settings.provider == "openai"
+    assert application.displayed_model_id == "openai/gpt-4o"
+    assert result == "Provider set to openai"
+
+
+def test_provider_command_rejects_invalid_provider() -> None:
+    """An unrecognized provider raises, unpersisted, leaving the old value intact."""
+    application = _ModelApplication()
+    settings_manager = _FakeSettingsManager(provider="openai", model_name="gpt-4o")
+
+    with pytest.raises(ValueError):
+        ProviderCommand.run(
+            application=application,
+            settings_manager=settings_manager,
+            provider="not-a-real-provider",
+        )
+
+    assert settings_manager.applied is False
+    assert settings_manager.saved is False
+    assert settings_manager.settings.provider == "openai"
+    assert application.displayed_model_id is None
 
 
 class _FakeEffortSettings:

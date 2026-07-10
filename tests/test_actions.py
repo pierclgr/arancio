@@ -340,6 +340,25 @@ def test_execute_provider_command_without_model_name_skips_toolbar_update() -> N
     assert application.displayed_model_id is None
 
 
+def test_execute_provider_command_rejects_invalid_provider() -> None:
+    """An unrecognized provider surfaces as an error message, not a crash."""
+    application = _RecordingApplication()
+    settings_manager = _RecordingSettingsManager(provider="openai", model_name="gpt-4o")
+    executor = ActionExecutor(
+        agent=_DummyAgent(), application=application, settings_manager=settings_manager
+    )
+    action = CommandAction(name="provider", args=["not-a-real-provider"])
+
+    (message,) = list(executor.execute(action))
+
+    assert isinstance(message, ErrorMessage)
+    assert "provider" in message.content.lower()
+    assert settings_manager.applied is False
+    assert settings_manager.saved is False
+    assert settings_manager.settings.provider == "openai"
+    assert application.displayed_model_id is None
+
+
 def test_execute_effort_command_injects_application_and_settings_manager() -> None:
     """The effort command action applies, persists and confirms the new effort."""
     application = _RecordingApplication()
