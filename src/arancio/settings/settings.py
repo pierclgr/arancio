@@ -39,7 +39,7 @@ class Settings:
             thinking entirely.
         thinking_summary: the model's reasoning summary mode, or ``None`` to
             disable summaries (e.g. for Ollama models).
-        max_turns: the maximum number of agent turns per run, or ``None``
+        max_turns: the maximum number of agent turns per run, or ``"inf"``
             for no limit.
         max_retries: the maximum number of consecutive failed agent turns
             per run.
@@ -55,7 +55,7 @@ class Settings:
         model_name: str | None,
         thinking_effort: str | None,
         thinking_summary: str | None,
-        max_turns: int | None,
+        max_turns: int | str,
         max_retries: int,
         turn_wait_time: float,
         turn_wait_time_multiplier: float,
@@ -73,7 +73,7 @@ class Settings:
                 disable thinking entirely.
             thinking_summary: the model's reasoning summary mode, or ``None``
                 to disable summaries.
-            max_turns: the maximum number of agent turns per run, or ``None``
+            max_turns: the maximum number of agent turns per run, or ``"inf"``
                 for no limit.
             max_retries: the maximum number of consecutive failed agent turns
                 per run.

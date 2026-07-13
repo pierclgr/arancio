@@ -40,7 +40,7 @@ class _FakeSettingsManager:
             model_name=model_name,
             thinking_effort="medium",
             thinking_summary=None,
-            max_turns=None,
+            max_turns="inf",
             max_retries=3,
             turn_wait_time=1.0,
             turn_wait_time_multiplier=2.0,

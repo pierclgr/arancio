@@ -12,6 +12,7 @@ from arancio.core.constants.agent import (
     AGENT_DEFAULT_MAX_TURNS,
     AGENT_DEFAULT_TURN_WAIT_TIME,
     AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
+    AGENT_UNLIMITED_MAX_TURNS,
 )
 from arancio.core.messages import (
     ChunkMessage,
@@ -34,7 +35,7 @@ class Agent:
         self,
         client: BaseClient,
         permission_manager: PermissionManager,
-        max_turns: int | None = AGENT_DEFAULT_MAX_TURNS,
+        max_turns: int | str = AGENT_DEFAULT_MAX_TURNS,
         max_retries: int = AGENT_DEFAULT_MAX_RETRIES,
         retry_delay: float = AGENT_DEFAULT_TURN_WAIT_TIME,
         retry_delay_multiplier: float = AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
@@ -46,7 +47,7 @@ class Agent:
             permission_manager: the permission manager that creates the agent's
                 tools and gates each tool call.
             max_turns: the maximum number of loop turns before aborting, or
-                ``None`` (the default) for no limit: the loop runs until the
+                ``"inf"`` (the default) for no limit: the loop runs until the
                 model stops requesting tools.
             max_retries: the maximum number of consecutive failed turns before
                 the run aborts.
@@ -56,7 +57,7 @@ class Agent:
                 consecutive failed-turn retry (exponential backoff).
         """
         self._client: BaseClient = client
-        self._max_turns: int | None = max_turns
+        self._max_turns: int | str = max_turns
         self._max_retries: int = max_retries
         self._retry_delay: float = retry_delay
         self._retry_delay_multiplier: float = retry_delay_multiplier
@@ -118,21 +119,21 @@ class Agent:
         return self._system_prompt_builder.build()
 
     @property
-    def max_turns(self) -> int | None:
+    def max_turns(self) -> int | str:
         """Return the maximum number of loop turns per run.
 
         Returns:
-            The maximum number of turns before the run aborts, or ``None``
+            The maximum number of turns before the run aborts, or ``"inf"``
             when the run is unlimited.
         """
         return self._max_turns
 
     @max_turns.setter
-    def max_turns(self, value: int | None) -> None:
+    def max_turns(self, value: int | str) -> None:
         """Set the maximum number of loop turns per run.
 
         Args:
-            value: the new maximum number of turns, or ``None`` for no limit.
+            value: the new maximum number of turns, or ``"inf"`` for no limit.
         """
         self._max_turns = value
 
@@ -291,8 +292,9 @@ class Agent:
         tool result are appended to conversation history. Produced client
         and tool-result messages are yielded in order as they are handled.
         The loop ends naturally when the model replies without tool calls;
-        when ``max_turns`` is set, it also aborts after that many turns, and
-        it always aborts after ``max_retries`` consecutive failed turns.
+        when ``max_turns`` is an integer, it also aborts after that many
+        turns, and it always aborts after ``max_retries`` consecutive failed
+        turns.
 
         Args:
             message: the initial user message that starts the turn.
@@ -308,7 +310,11 @@ class Agent:
         consecutive_errors = 0
 
         # unlimited runs iterate until the model stops requesting tools
-        turns = count() if self._max_turns is None else range(self._max_turns)
+        turns = (
+            count()
+            if self._max_turns == AGENT_UNLIMITED_MAX_TURNS
+            else range(self._max_turns)
+        )
         for _ in turns:
             tool_calls: List[ToolCallMessage] = []
             received_finalized = False
