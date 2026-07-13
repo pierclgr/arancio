@@ -17,10 +17,12 @@ class PermissionLevel(Enum):
     """Autonomy level governing how a permitted tool category is executed.
 
     Attributes:
+        NONE: the category is not granted; its tools are never created.
         ASK: prompt the user for confirmation before each tool call.
         AUTO: execute permitted tool calls without confirmation.
     """
 
+    NONE = None
     ASK = "ask"
     AUTO = "auto"
 

@@ -52,7 +52,12 @@ def _build():
 def _custom_settings():
     """Return a non-default settings snapshot used across tests."""
     return Settings(
-        permissions={PermissionCategory.READ: PermissionLevel.AUTO},
+        permissions={
+            PermissionCategory.READ: PermissionLevel.AUTO,
+            PermissionCategory.WRITE: PermissionLevel.NONE,
+            PermissionCategory.WEB: PermissionLevel.NONE,
+            PermissionCategory.EXECUTE: PermissionLevel.NONE,
+        },
         provider="openai",
         model_name="gpt-4o",
         thinking_effort="high",

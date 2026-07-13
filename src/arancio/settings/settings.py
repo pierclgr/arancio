@@ -28,7 +28,9 @@ class Settings:
     breaking field-default resolution for every field declared after it.
 
     Attributes:
-        permissions: granted category to autonomy level mapping.
+        permissions: category to autonomy level mapping, covering every
+            category; :attr:`~arancio.core.permissions.types.PermissionLevel.NONE`
+            marks a category as not granted.
         provider: the agent model's provider prefix (e.g. ``"openai"``), or
             ``None`` when not yet configured. Validated against LiteLLM's
             supported providers on every assignment, including construction.
@@ -63,7 +65,8 @@ class Settings:
         """Initialize the settings snapshot.
 
         Args:
-            permissions: granted category to autonomy level mapping.
+            permissions: category to autonomy level mapping, covering every
+                category.
             provider: the agent model's provider prefix, or ``None`` when not
                 yet configured; validated against LiteLLM's supported
                 providers.

@@ -198,9 +198,16 @@ def test_validate_ask_denies_with_reason() -> None:
     assert "use the read tool instead" in message.content
 
 
-def test_validate_absent_category_denies() -> None:
-    """Calls to ungranted categories are denied without asking the controller."""
-    manager = _manager({PermissionCategory.READ: PermissionLevel.ASK})
+def test_validate_none_category_denies() -> None:
+    """Calls to a category at NONE are denied without asking the controller."""
+    manager = _manager(
+        {
+            PermissionCategory.READ: PermissionLevel.ASK,
+            PermissionCategory.WRITE: PermissionLevel.NONE,
+            PermissionCategory.WEB: PermissionLevel.NONE,
+            PermissionCategory.EXECUTE: PermissionLevel.NONE,
+        }
+    )
 
     content = "Tool WriteFileTool does not exist."
     assert manager.validate(_call("WriteFileTool")) == (
@@ -225,6 +232,9 @@ def test_add_and_remove() -> None:
     manager = _manager()
 
     manager.remove_permission(PermissionCategory.WEB)
+    assert (
+        manager.get_category_permission(PermissionCategory.WEB) is PermissionLevel.NONE
+    )
     content = "Tool SearchWebTool does not exist."
     assert manager.validate(_call("SearchWebTool")) == (
         False,
@@ -258,32 +268,78 @@ def test_set_permission_level_changes_existing_grant() -> None:
     )
 
 
-def test_set_permission_level_unknown_category_raises() -> None:
-    """set_permission_level raises when the category has no grant."""
+def test_set_permission_level_grants_ungranted_category() -> None:
+    """set_permission_level can grant a category that was at NONE."""
+    manager = _manager(
+        {
+            PermissionCategory.READ: PermissionLevel.ASK,
+            PermissionCategory.WRITE: PermissionLevel.NONE,
+            PermissionCategory.WEB: PermissionLevel.NONE,
+            PermissionCategory.EXECUTE: PermissionLevel.NONE,
+        }
+    )
+
+    manager.set_permission_level(PermissionCategory.WEB, PermissionLevel.AUTO)
+
+    assert (
+        manager.get_category_permission(PermissionCategory.WEB) is PermissionLevel.AUTO
+    )
+    assert manager.validate(_call("SearchWebTool")) == (True, None)
+
+
+def test_get_category_permission_ungranted_returns_none() -> None:
+    """get_category_permission returns NONE for a category with no grant."""
+    manager = _manager(
+        {
+            PermissionCategory.READ: PermissionLevel.ASK,
+            PermissionCategory.WRITE: PermissionLevel.NONE,
+            PermissionCategory.WEB: PermissionLevel.NONE,
+            PermissionCategory.EXECUTE: PermissionLevel.NONE,
+        }
+    )
+
+    assert (
+        manager.get_category_permission(PermissionCategory.WEB) is PermissionLevel.NONE
+    )
+
+
+def test_add_permission_raises_when_already_granted() -> None:
+    """add_permission raises when the category is already granted."""
     manager = _manager({PermissionCategory.READ: PermissionLevel.ASK})
 
     with pytest.raises(ValueError):
-        manager.set_permission_level(PermissionCategory.WEB, PermissionLevel.AUTO)
+        manager.add_permission(PermissionCategory.READ)
 
 
-def test_get_category_permission_unknown_category_raises() -> None:
-    """get_category_permission raises when the category has no grant."""
-    manager = _manager({PermissionCategory.READ: PermissionLevel.ASK})
+def test_remove_permission_raises_when_not_granted() -> None:
+    """remove_permission raises when the category is already at NONE."""
+    manager = _manager()
+    manager.remove_permission(PermissionCategory.WEB)
 
     with pytest.raises(ValueError):
-        manager.get_category_permission(PermissionCategory.WEB)
+        manager.remove_permission(PermissionCategory.WEB)
 
 
-def test_repr_lists_granted_categories_and_levels() -> None:
-    """The repr maps each granted category to its level, in insertion order."""
+def test_explicit_empty_dict_grants_nothing() -> None:
+    """An explicit empty permissions dict grants no category, unlike None."""
+    manager = _manager({})
+
+    assert manager.get_allowed_tools == []
+
+
+def test_repr_lists_all_categories_and_levels() -> None:
+    """The repr maps every category to its level, in insertion order."""
     manager = _manager(
         {
             PermissionCategory.READ: PermissionLevel.ASK,
             PermissionCategory.WRITE: PermissionLevel.AUTO,
+            PermissionCategory.WEB: PermissionLevel.NONE,
+            PermissionCategory.EXECUTE: PermissionLevel.NONE,
         }
     )
 
-    assert repr(manager) == "PermissionManager(READ=ASK, WRITE=AUTO)"
+    expected = "PermissionManager(READ=ASK, WRITE=AUTO, WEB=NONE, EXECUTE=NONE)"
+    assert repr(manager) == expected
 
 
 def test_no_permissions_arg_grants_all_categories_at_ask() -> None:

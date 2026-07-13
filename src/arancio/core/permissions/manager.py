@@ -17,13 +17,14 @@ from arancio.core.tools.manager import ToolManager
 class PermissionManager:
     """Hold the agent's permissions, create its tools and gate tool calls.
 
-    The manager maps each granted :class:`PermissionCategory` to its
+    The manager maps every :class:`PermissionCategory` to its
     :class:`PermissionLevel`, and owns a :class:`ToolManager` that builds the
-    tools for the granted categories. Tools whose category has no grant are
-    never created; calls to permitted tools are gated by their level.
+    tools for the granted categories. Tools whose category is at
+    :attr:`PermissionLevel.NONE` are never created; calls to permitted tools
+    are gated by their level.
 
     Attributes:
-        _permissions: mapping of granted category to its permission level.
+        _permissions: mapping of every category to its permission level.
         _tool_manager: the tool manager that creates tools from the grants.
         _controller: the controller used to ask the user about ``ask`` grants.
     """
@@ -41,12 +42,11 @@ class PermissionManager:
                 to resolve which tools are available.
             controller: the controller through which the manager asks the user
                 to approve or deny ``ask`` grants.
-            permissions: initial category-to-level grants. When omitted
-                (``None``) every category is granted at
-                :attr:`PermissionLevel.ASK`; pass an explicit ``{}`` to start
-                with no grants.
+            permissions: initial category-to-level grants, covering every
+                category. When omitted (``None``) every category is granted at
+                :attr:`PermissionLevel.ASK`.
         """
-        if not permissions:
+        if permissions is None:
             permissions = {
                 category: PermissionLevel.ASK for category in PermissionCategory
             }
@@ -58,7 +58,7 @@ class PermissionManager:
         """Return a developer-friendly representation of the permission grants.
 
         Returns:
-            A compact string mapping each granted category to its level.
+            A compact string mapping each category to its level.
         """
         grants = ", ".join(
             f"{category.name}={level.name}"
@@ -81,7 +81,7 @@ class PermissionManager:
         Raises:
             ValueError: when the category is already granted.
         """
-        if category in self._permissions:
+        if self._permissions[category] is not PermissionLevel.NONE:
             raise ValueError(f"Permission already granted for category {category}.")
         self._permissions[category] = level
 
@@ -94,40 +94,31 @@ class PermissionManager:
         Raises:
             ValueError: when the category has no grant.
         """
-        if category not in self._permissions:
+        if self._permissions[category] is PermissionLevel.NONE:
             raise ValueError(f"No permission granted for category {category}.")
-        del self._permissions[category]
+        self._permissions[category] = PermissionLevel.NONE
 
     def get_category_permission(self, category: PermissionCategory) -> PermissionLevel:
-        """Return the permission level granted for the given category.
+        """Return the permission level for the given category.
 
         Args:
             category: the category to look up.
 
         Returns:
-            The granted level.
-
-        Raises:
-            ValueError: when the category has no grant.
+            The category's level; :attr:`PermissionLevel.NONE` when not
+            granted.
         """
-        if category not in self._permissions:
-            raise ValueError(f"No permission granted for category {category}.")
         return self._permissions[category]
 
     def set_permission_level(
         self, category: PermissionCategory, level: PermissionLevel
     ) -> None:
-        """Change the permission level of the grant for the given category.
+        """Change the permission level for the given category.
 
         Args:
-            category: the category whose grant to update.
+            category: the category whose level to update.
             level: the new permission level.
-
-        Raises:
-            ValueError: when the category has no grant to update.
         """
-        if category not in self._permissions:
-            raise ValueError(f"No permission granted for category {category}.")
         self._permissions[category] = level
 
     def set_permissions(
@@ -136,7 +127,8 @@ class PermissionManager:
         """Replace all grants with the given category-to-level mapping.
 
         Args:
-            permissions: the new grants, replacing the current ones wholesale.
+            permissions: the new grants, covering every category, replacing
+                the current ones wholesale.
         """
         self._permissions = permissions
 
@@ -154,8 +146,9 @@ class PermissionManager:
         """Decide whether a requested tool call may execute.
 
         Allows ``auto`` grants without asking and asks the user through the
-        controller for ``ask`` grants. A call whose category has no grant (or
-        maps to no category) is denied with a not-permitted error. The
+        controller for ``ask`` grants. A call whose category is at
+        :attr:`PermissionLevel.NONE` (or maps to no category) is denied with a
+        not-permitted error. The
         controller's :class:`~arancio.core.controllers.responses.PermissionResponse`
         either allows the call (optionally with a note for the model) or denies
         it (optionally with a reason for the model).
