@@ -6,6 +6,7 @@ import pytest
 import yaml
 
 import arancio.storage.manager as storage_mod
+from arancio.core.messages import ErrorMessage, WarningMessage
 from arancio.settings.settings import Settings
 from arancio.storage.manager import StorageManager
 
@@ -71,14 +72,17 @@ def test_bind_litellm_login_dir_noop_when_already_symlink(tmp_path: Path) -> Non
 def test_load_settings_creates_default_file_when_absent(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """``load_settings`` writes and returns the defaults when no file exists."""
+    """``load_settings`` writes the defaults and signals ``None`` when absent."""
     settings_file = tmp_path / "settings.yml"
     monkeypatch.setattr(storage_mod, "ARANCIO_SETTINGS_FILE", settings_file)
 
-    loaded = StorageManager().load_settings()
+    data, messages = StorageManager().load_settings()
 
     assert settings_file.exists()
-    assert loaded == Settings.default()
+    assert yaml.safe_load(settings_file.read_text()) == Settings.default().to_dict()
+    assert data is None
+    assert len(messages) == 1
+    assert isinstance(messages[0], WarningMessage)
 
 
 def test_load_settings_reads_back_saved_settings(
@@ -92,7 +96,71 @@ def test_load_settings_reads_back_saved_settings(
 
     StorageManager().save_settings(settings)
 
-    assert StorageManager().load_settings() == settings
+    data, messages = StorageManager().load_settings()
+
+    assert data == settings.to_dict()
+    assert messages == []
+
+
+def test_load_settings_reports_error_for_empty_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An existing but empty file signals ``None`` and an error, untouched."""
+    settings_file = tmp_path / "settings.yml"
+    settings_file.write_text("")
+    monkeypatch.setattr(storage_mod, "ARANCIO_SETTINGS_FILE", settings_file)
+
+    data, messages = StorageManager().load_settings()
+
+    assert data is None
+    assert len(messages) == 1
+    assert isinstance(messages[0], ErrorMessage)
+    assert settings_file.read_text() == ""
+
+
+def test_load_settings_reports_error_for_malformed_yaml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Malformed YAML syntax signals ``None`` and an error, untouched."""
+    settings_file = tmp_path / "settings.yml"
+    settings_file.write_text("key: [unclosed")
+    monkeypatch.setattr(storage_mod, "ARANCIO_SETTINGS_FILE", settings_file)
+
+    data, messages = StorageManager().load_settings()
+
+    assert data is None
+    assert len(messages) == 1
+    assert isinstance(messages[0], ErrorMessage)
+    assert settings_file.read_text() == "key: [unclosed"
+
+
+def test_load_settings_reports_error_for_non_mapping_top_level(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A YAML file whose top level isn't a mapping signals ``None`` and an error."""
+    settings_file = tmp_path / "settings.yml"
+    settings_file.write_text("- a\n- b\n")
+    monkeypatch.setattr(storage_mod, "ARANCIO_SETTINGS_FILE", settings_file)
+
+    data, messages = StorageManager().load_settings()
+
+    assert data is None
+    assert len(messages) == 1
+    assert isinstance(messages[0], ErrorMessage)
+
+
+def test_load_settings_returns_raw_data_unvalidated(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A well-formed file's data is returned as-is; validation isn't storage's job."""
+    settings_file = tmp_path / "settings.yml"
+    settings_file.write_text("provider: notreal\nmax_turns: -3\n")
+    monkeypatch.setattr(storage_mod, "ARANCIO_SETTINGS_FILE", settings_file)
+
+    data, messages = StorageManager().load_settings()
+
+    assert data == {"provider": "notreal", "max_turns": -3}
+    assert messages == []
 
 
 def test_save_settings_writes_serialized_yaml(

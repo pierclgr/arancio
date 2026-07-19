@@ -2,6 +2,7 @@
 
 import shutil
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -10,6 +11,7 @@ from arancio.core.constants.path.base import (
     ARANCIO_SETTINGS_FILE,
     LITELLM_CONFIG_DIR,
 )
+from arancio.core.messages import ErrorMessage, Message, WarningMessage
 from arancio.settings.settings import Settings
 
 
@@ -116,18 +118,48 @@ class StorageManager:
         return ARANCIO_SETTINGS_FILE
 
     @classmethod
-    def load_settings(cls) -> Settings:
-        """Load the settings from disk, creating defaults when none exist.
+    def load_settings(cls) -> tuple[dict[str, Any] | None, list[Message]]:
+        """Read the settings file, signaling when it is missing or unusable.
 
         When the settings file is absent, the registered default settings are
-        built, written to disk and returned, so a first run leaves a populated
-        file behind.
+        built and written to disk (so a first run leaves a populated file
+        behind), reported as a warning; ``None`` is returned since there is no
+        file content to hand off. When the file exists but its content is
+        empty or otherwise not a YAML mapping (a syntax error, or e.g. a list
+        at the top level), ``None`` is returned without touching the file,
+        reported as an error. In both cases, deciding that ``None`` means
+        "use the default settings" and building them is the settings
+        manager's responsibility, not this method's. Per-field validation of
+        an otherwise well-formed dictionary is likewise the settings
+        manager's responsibility (delegated to
+        :class:`~arancio.settings.validator.SettingsValidator`).
 
         Returns:
-            The loaded settings, or the freshly created defaults.
+            A ``(data, messages)`` pair: the settings dictionary parsed from
+            disk, or ``None`` when the file is missing or unusable, and the
+            messages to surface in the UI describing that condition.
         """
         if not ARANCIO_SETTINGS_FILE.exists():
-            settings = Settings.default()
-            cls.save_settings(settings)
-            return settings
-        return Settings.from_dict(yaml.safe_load(ARANCIO_SETTINGS_FILE.read_text()))
+            cls.save_settings(Settings.default())
+            return None, [
+                WarningMessage(
+                    content="settings.yml not found; creating it with default settings."
+                )
+            ]
+
+        try:
+            data = yaml.safe_load(ARANCIO_SETTINGS_FILE.read_text())
+        except yaml.YAMLError:
+            data = None
+
+        if not isinstance(data, dict):
+            return None, [
+                ErrorMessage(
+                    content=(
+                        "settings.yml is empty or not a valid YAML mapping; "
+                        "using default settings."
+                    )
+                )
+            ]
+
+        return data, []

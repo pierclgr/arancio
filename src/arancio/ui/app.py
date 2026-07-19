@@ -19,6 +19,7 @@ from arancio.core.messages import (
     ToolCallMessage,
     ToolErrorMessage,
     ToolResultMessage,
+    WarningMessage,
 )
 from arancio.prompt.actions.executor import ActionExecutor
 from arancio.prompt.actions.factory import ActionFactory
@@ -43,6 +44,7 @@ class App(TextualApp):
     .reasoning, .reasoning * { color: $text-muted; text-style: italic; }
     .tool-call { color: $text-muted; }
     .error { color: $error; }
+    .warning { color: $warning; }
     QuestionScreen { align: center middle; }
     #question-dialog {
         width: 70%; height: auto; padding: 1 2;
@@ -54,7 +56,11 @@ class App(TextualApp):
     BINDINGS = [("ctrl+c", "quit", "Quit")]
 
     def __init__(
-        self, agent: Agent, model_id: str, settings_manager: SettingsManager
+        self,
+        agent: Agent,
+        model_id: str,
+        settings_manager: SettingsManager,
+        startup_messages: list[Message] | None = None,
     ) -> None:
         """Initialize the app with the agent it drives and the model label.
 
@@ -63,6 +69,9 @@ class App(TextualApp):
             model_id: the model identifier shown in the toolbar.
             settings_manager: the manager used to apply and persist settings
                 changes made through commands (e.g. ``/model``, ``/effort``).
+            startup_messages: messages to render once on mount (e.g. settings
+                validation warnings/errors produced while loading
+                ``settings.yml``). Defaults to none.
         """
         super().__init__()
         self._agent = agent
@@ -76,6 +85,7 @@ class App(TextualApp):
         self._stream_widget: Markdown | None = None
         self._stream: MarkdownStream | None = None
         self._suppress: set[type] = set()
+        self._startup_messages = list(startup_messages or [])
 
     def compose(self) -> ComposeResult:
         """Build the main page: message log, prompt input and toolbar.
@@ -89,11 +99,13 @@ class App(TextualApp):
         yield Static(self._toolbar_text(), id="toolbar")
 
     def on_mount(self) -> None:
-        """Focus the prompt input and anchor the log to follow output."""
+        """Focus the prompt input, anchor the log, and show startup messages."""
         self.query_one("#prompt", Input).focus()
         # keep the log pinned to the bottom as streamed content grows, until
         # the user scrolls up
         self.query_one("#log", VerticalScroll).anchor()
+        for message in self._startup_messages:
+            self._mount(self._render(message))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Start an agent turn when the prompt input is submitted.
@@ -224,6 +236,8 @@ class App(TextualApp):
             return Static(f"→ {message.name}({message.arguments})", classes="tool-call")
         if isinstance(message, (ToolErrorMessage, ErrorMessage)):
             return Static(message.display_text, classes="error")
+        if isinstance(message, WarningMessage):
+            return Static(message.display_text, classes="warning")
         if isinstance(message, ToolResultMessage):
             return Static(message.display_text, classes="tool-result")
         return Static(message.display_text, classes="user")

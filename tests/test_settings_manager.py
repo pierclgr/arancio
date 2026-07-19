@@ -97,14 +97,31 @@ def test_load_creates_defaults_and_applies(monkeypatch, tmp_path):
     monkeypatch.setattr(storage_mod, "ARANCIO_SETTINGS_FILE", tmp_path / "settings.yml")
     manager, client, _, agent = _build()
 
-    loaded = manager.load()
+    loaded, messages = manager.load()
 
     assert (tmp_path / "settings.yml").exists()
     assert loaded == Settings.default()
+    # file-missing warning, plus provider/model_name "not set" errors: the
+    # default settings are validated the same as a real file's would be
+    assert len(messages) == 3
     assert client.model_id is None
     assert agent.max_turns == Settings.default().max_turns
     # every category granted at ASK: the full tool catalog is built
     assert len(agent._tools) == 9
+
+
+def test_load_falls_back_on_invalid_field_and_applies_default(monkeypatch, tmp_path):
+    """An invalid field in the file falls back to its default when applied."""
+    settings_file = tmp_path / "settings.yml"
+    settings_file.write_text("provider: openai\nmodel_name: gpt-4o\nmax_turns: -3\n")
+    monkeypatch.setattr(storage_mod, "ARANCIO_SETTINGS_FILE", settings_file)
+    manager, _, _, agent = _build()
+
+    loaded, messages = manager.load()
+
+    assert loaded.max_turns == Settings.default().max_turns
+    assert len(messages) == 1
+    assert agent.max_turns == Settings.default().max_turns
 
 
 def test_save_persists_current_settings(monkeypatch, tmp_path):
@@ -115,4 +132,6 @@ def test_save_persists_current_settings(monkeypatch, tmp_path):
 
     manager.save()
 
-    assert StorageManager().load_settings() == _custom_settings()
+    data, messages = StorageManager().load_settings()
+    assert data == _custom_settings().to_dict()
+    assert messages == []

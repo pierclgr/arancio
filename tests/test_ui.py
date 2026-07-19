@@ -8,9 +8,11 @@ from textual.widgets import Input, Markdown, Static
 from arancio.core.messages import (
     AssistantChunkMessage,
     AssistantMessage,
+    ErrorMessage,
     Message,
     ReasoningMessage,
     UserMessage,
+    WarningMessage,
 )
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 from arancio.settings.settings import Settings
@@ -288,6 +290,31 @@ def test_reset_stream_clears_cross_turn_state() -> None:
             await app._handle_message(AssistantMessage(content="reply"))
             await pilot.pause()
             assert len(app.query(Markdown)) == 1
+
+    asyncio.run(_run())
+
+
+def test_startup_messages_render_on_mount() -> None:
+    """Startup messages (e.g. settings validation) render once when the app mounts."""
+
+    async def _run() -> None:
+        app = App(
+            agent=_DummyAgent(),
+            model_id="test-model",
+            settings_manager=_FakeSettingsManager(),
+            startup_messages=[
+                WarningMessage(content="careful"),
+                ErrorMessage(content="broken"),
+            ],
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            warnings = app.query(".warning")
+            errors = app.query(".error")
+            assert len(warnings) == 1
+            assert str(warnings.first().render()) == "careful"
+            assert len(errors) == 1
+            assert str(errors.first().render()) == "broken"
 
     asyncio.run(_run())
 

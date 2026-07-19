@@ -78,6 +78,16 @@ class ErrorMessage(Message):
     role: ClassVar[str] = "error"
 
 
+class WarningMessage(Message):
+    """Non-fatal problem surfaced to the agent consumer.
+
+    Attributes:
+        role: the role of the message.
+    """
+
+    role: ClassVar[str] = "warning"
+
+
 class ToolCallMessage(Message):
     """Model request to invoke a tool.
 

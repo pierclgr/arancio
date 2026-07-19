@@ -35,9 +35,14 @@ def main() -> None:
     settings_manager = SettingsManager(
         storage=storage, client=client, summary_client=summary_client, agent=agent
     )
-    settings_manager.load()
+    _, startup_messages = settings_manager.load()
 
-    app = App(agent=agent, model_id=client.model_id, settings_manager=settings_manager)
+    app = App(
+        agent=agent,
+        model_id=client.model_id,
+        settings_manager=settings_manager,
+        startup_messages=startup_messages,
+    )
     controller.app = app
     app.run()
 

@@ -2,7 +2,9 @@
 
 from arancio.core.agents import Agent
 from arancio.core.clients.base import BaseClient
+from arancio.core.messages import Message
 from arancio.settings.settings import Settings
+from arancio.settings.validator import SettingsValidator
 from arancio.storage.manager import StorageManager
 
 
@@ -64,18 +66,32 @@ class SettingsManager:
         """
         self._settings = value
 
-    def load(self) -> Settings:
-        """Load the settings from disk and apply them to the live objects.
+    def load(self) -> tuple[Settings, list[Message]]:
+        """Load, validate and apply the settings from disk.
 
-        Creates the default settings file on first run (delegated to the storage
-        layer), holds the loaded settings, then applies them.
+        Creates the default settings file on first run (delegated to the
+        storage layer, which also reports a missing or unreadable file). The
+        storage layer signals that condition with ``None`` in place of a
+        dictionary; deciding that ``None`` means "use the default settings"
+        is this method's call, not the storage layer's — the default
+        settings' own dictionary form is validated field by field the same
+        way a real file's would be, so e.g. an unconfigured
+        ``provider``/``model_name`` is still reported. Otherwise, the parsed
+        dictionary is validated by
+        :class:`~arancio.settings.validator.SettingsValidator`, which falls
+        back to defaults for any missing or invalid field. The loaded
+        settings are then applied to the live objects.
 
         Returns:
-            The loaded settings.
+            A ``(settings, messages)`` pair: the loaded settings, and the
+            file-level and field-level messages to surface in the UI.
         """
-        self._settings = self._storage.load_settings()
+        data, file_messages = self._storage.load_settings()
+        if data is None:
+            data = Settings.default().to_dict()
+        self._settings, field_messages = SettingsValidator.validate(data)
         self.apply()
-        return self._settings
+        return self._settings, file_messages + field_messages
 
     def save(self) -> None:
         """Persist the current settings to disk through the storage layer."""
