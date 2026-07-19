@@ -703,7 +703,7 @@ def test_agent_unlimited_by_default_completes_long_tool_runs() -> None:
     """
     client = _LongToolLoopClient(tool_turns=50)
     agent = _agent(client=client, permission_manager=_StubManager(tools=[EchoTool()]))
-    assert agent.max_turns is None
+    assert agent.max_turns == "inf"
 
     response = list(agent.run(UserMessage(content="hello")))
 

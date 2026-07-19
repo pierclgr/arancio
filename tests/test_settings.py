@@ -55,6 +55,8 @@ def test_to_from_dict_roundtrip():
     settings = Settings(
         permissions={
             PermissionCategory.READ: PermissionLevel.AUTO,
+            PermissionCategory.WRITE: PermissionLevel.NONE,
+            PermissionCategory.WEB: PermissionLevel.NONE,
             PermissionCategory.EXECUTE: PermissionLevel.ASK,
         },
         provider="openai",
@@ -68,6 +70,33 @@ def test_to_from_dict_roundtrip():
     )
 
     assert Settings.from_dict(settings.to_dict()) == settings
+
+
+def test_to_dict_renders_none_as_null():
+    """``to_dict`` renders a NONE level as plain ``None`` (YAML null)."""
+    settings = Settings(
+        permissions={
+            PermissionCategory.READ: PermissionLevel.AUTO,
+            PermissionCategory.WRITE: PermissionLevel.NONE,
+            PermissionCategory.WEB: PermissionLevel.NONE,
+            PermissionCategory.EXECUTE: PermissionLevel.NONE,
+        },
+        provider=None,
+        model_name=None,
+        thinking_effort=None,
+        thinking_summary=None,
+        max_turns=1,
+        max_retries=1,
+        turn_wait_time=1.0,
+        turn_wait_time_multiplier=1.0,
+    )
+
+    assert settings.to_dict()["permissions"] == {
+        "read": "auto",
+        "write": None,
+        "web": None,
+        "execute": None,
+    }
 
 
 def test_model_id_joins_provider_and_model_name():

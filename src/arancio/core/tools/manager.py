@@ -35,13 +35,18 @@ class ToolManager:
         """Return the granted categories' tool classes without instantiating them.
 
         Args:
-            permissions: mapping of granted category to level; only the
-                categories (keys) determine which tools are allowed.
+            permissions: mapping of category to level; categories at
+                :attr:`PermissionLevel.NONE` are skipped.
 
         Returns:
             One class per tool across the granted categories, not instantiated.
         """
-        return [tool_cls for category in permissions for tool_cls in category.value]
+        return [
+            tool_cls
+            for category, level in permissions.items()
+            if level is not PermissionLevel.NONE
+            for tool_cls in category.value
+        ]
 
     @classmethod
     def is_tool_available(
@@ -53,8 +58,8 @@ class ToolManager:
 
         Args:
             tool_name: the tool's class name (``BaseTool.name``).
-            permissions: mapping of granted category to level; only the
-                categories (keys) determine which tools are available.
+            permissions: mapping of category to level; categories at
+                :attr:`PermissionLevel.NONE` are skipped.
 
         Returns:
             ``True`` when the tool's class is among the available tools for the
@@ -71,8 +76,8 @@ class ToolManager:
         """Instantiate the tools for the granted categories.
 
         Args:
-            permissions: mapping of granted category to level; only the
-                categories (keys) determine which tools are built.
+            permissions: mapping of category to level; categories at
+                :attr:`PermissionLevel.NONE` are skipped.
 
         Returns:
             One instance per tool class across the granted categories.

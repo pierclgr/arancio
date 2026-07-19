@@ -85,7 +85,7 @@ class _RecordingSettingsManager:
             model_name=model_name,
             thinking_effort="medium",
             thinking_summary=None,
-            max_turns=None,
+            max_turns="inf",
             max_retries=3,
             turn_wait_time=1.0,
             turn_wait_time_multiplier=2.0,
@@ -487,7 +487,7 @@ def test_execute_permissions_command_rejects_unknown_level() -> None:
 
 
 def test_execute_permissions_command_null_removes_the_grant() -> None:
-    """The permissions command action accepts "null" to remove the grant entirely."""
+    """The permissions command action accepts "null" to remove a grant."""
     settings_manager = _RecordingSettingsManager()
     executor = ActionExecutor(
         agent=_DummyAgent(),
@@ -499,7 +499,10 @@ def test_execute_permissions_command_null_removes_the_grant() -> None:
     messages = list(executor.execute(action))
 
     assert messages == [AssistantMessage(content="read permission removed")]
-    assert PermissionCategory.READ not in settings_manager.settings.permissions
+    assert (
+        settings_manager.settings.permissions[PermissionCategory.READ]
+        is PermissionLevel.NONE
+    )
     assert settings_manager.applied is True
     assert settings_manager.saved is True
 

@@ -592,7 +592,7 @@ def test_permissions_command_rejects_unknown_level() -> None:
     """An unknown permission level raises, unpersisted."""
     settings_manager = _FakePermissionsSettingsManager()
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="null, ask, auto"):
         PermissionsCommand.run(
             category="read", level="nope", settings_manager=settings_manager
         )
@@ -607,7 +607,7 @@ def test_permissions_command_rejects_unknown_level() -> None:
 
 @pytest.mark.parametrize("keyword", ["null", "NULL", "Null"])
 def test_permissions_command_null_removes_the_grant(keyword: str) -> None:
-    """The word "null", in any case, removes the category's grant entirely."""
+    """The word "null", in any case, removes the category's grant."""
     settings_manager = _FakePermissionsSettingsManager()
 
     result = PermissionsCommand.run(
@@ -615,18 +615,22 @@ def test_permissions_command_null_removes_the_grant(keyword: str) -> None:
     )
 
     assert result == "read permission removed"
-    assert PermissionCategory.READ not in settings_manager.settings.permissions
+    assert (
+        settings_manager.settings.permissions[PermissionCategory.READ]
+        is PermissionLevel.NONE
+    )
     assert settings_manager.applied is True
     assert settings_manager.saved is True
 
 
-def test_permissions_command_null_is_idempotent_when_already_removed() -> None:
+def test_permissions_command_null_is_idempotent_when_already_none() -> None:
     """Removing an already-ungranted category succeeds without raising."""
     settings_manager = _FakePermissionsSettingsManager(
         permissions={
-            category: PermissionLevel.ASK
-            for category in PermissionCategory
-            if category is not PermissionCategory.READ
+            PermissionCategory.READ: PermissionLevel.NONE,
+            PermissionCategory.WRITE: PermissionLevel.ASK,
+            PermissionCategory.WEB: PermissionLevel.ASK,
+            PermissionCategory.EXECUTE: PermissionLevel.ASK,
         }
     )
 
@@ -635,16 +639,20 @@ def test_permissions_command_null_is_idempotent_when_already_removed() -> None:
     )
 
     assert result == "read permission removed"
-    assert PermissionCategory.READ not in settings_manager.settings.permissions
+    assert (
+        settings_manager.settings.permissions[PermissionCategory.READ]
+        is PermissionLevel.NONE
+    )
 
 
 def test_permissions_command_reports_unset_for_an_ungranted_category() -> None:
-    """Reading a category with no grant at all reports that, not an error."""
+    """Reading a category at NONE reports that, not an error."""
     settings_manager = _FakePermissionsSettingsManager(
         permissions={
-            category: PermissionLevel.ASK
-            for category in PermissionCategory
-            if category is not PermissionCategory.READ
+            PermissionCategory.READ: PermissionLevel.NONE,
+            PermissionCategory.WRITE: PermissionLevel.ASK,
+            PermissionCategory.WEB: PermissionLevel.ASK,
+            PermissionCategory.EXECUTE: PermissionLevel.ASK,
         }
     )
 

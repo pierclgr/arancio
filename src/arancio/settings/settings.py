@@ -11,9 +11,9 @@ from arancio.core.constants.agent import (
 from arancio.core.constants.litellm import (
     LITELLM_DEFAULT_THINKING_EFFORT,
     LITELLM_DEFAULT_THINKING_SUMMARY,
-    LITELLM_PROVIDER_NAMES,
 )
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
+from arancio.settings.utils.validations import is_known_provider
 
 
 class Settings:
@@ -28,7 +28,9 @@ class Settings:
     breaking field-default resolution for every field declared after it.
 
     Attributes:
-        permissions: granted category to autonomy level mapping.
+        permissions: category to autonomy level mapping, covering every
+            category; :attr:`~arancio.core.permissions.types.PermissionLevel.NONE`
+            marks a category as not granted.
         provider: the agent model's provider prefix (e.g. ``"openai"``), or
             ``None`` when not yet configured. Validated against LiteLLM's
             supported providers on every assignment, including construction.
@@ -39,7 +41,7 @@ class Settings:
             thinking entirely.
         thinking_summary: the model's reasoning summary mode, or ``None`` to
             disable summaries (e.g. for Ollama models).
-        max_turns: the maximum number of agent turns per run, or ``None``
+        max_turns: the maximum number of agent turns per run, or ``"inf"``
             for no limit.
         max_retries: the maximum number of consecutive failed agent turns
             per run.
@@ -55,7 +57,7 @@ class Settings:
         model_name: str | None,
         thinking_effort: str | None,
         thinking_summary: str | None,
-        max_turns: int | None,
+        max_turns: int | str,
         max_retries: int,
         turn_wait_time: float,
         turn_wait_time_multiplier: float,
@@ -63,7 +65,8 @@ class Settings:
         """Initialize the settings snapshot.
 
         Args:
-            permissions: granted category to autonomy level mapping.
+            permissions: category to autonomy level mapping, covering every
+                category.
             provider: the agent model's provider prefix, or ``None`` when not
                 yet configured; validated against LiteLLM's supported
                 providers.
@@ -73,7 +76,7 @@ class Settings:
                 disable thinking entirely.
             thinking_summary: the model's reasoning summary mode, or ``None``
                 to disable summaries.
-            max_turns: the maximum number of agent turns per run, or ``None``
+            max_turns: the maximum number of agent turns per run, or ``"inf"``
                 for no limit.
             max_retries: the maximum number of consecutive failed agent turns
                 per run.
@@ -158,10 +161,9 @@ class Settings:
         if value is None:
             self._provider = None
             return
-        lowered = value.lower()
-        if lowered not in LITELLM_PROVIDER_NAMES:
+        if not is_known_provider(value):
             raise ValueError(f"Unknown provider: {value!r}.")
-        self._provider = lowered
+        self._provider = value.lower()
 
     @property
     def model_id(self) -> str:

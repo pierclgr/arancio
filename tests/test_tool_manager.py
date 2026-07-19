@@ -77,11 +77,38 @@ def test_available_tools_empty_returns_no_classes() -> None:
 
 def test_is_tool_available() -> None:
     """is_tool_available is True for available tools, False otherwise."""
-    permissions = {PermissionCategory.READ: PermissionLevel.ASK}
+    permissions = {
+        PermissionCategory.READ: PermissionLevel.ASK,
+        PermissionCategory.WRITE: PermissionLevel.NONE,
+    }
 
     assert ToolManager.is_tool_available("ReadFileTool", permissions) is True
     assert ToolManager.is_tool_available("WriteFileTool", permissions) is False
     assert ToolManager.is_tool_available("EchoTool", permissions) is False
+
+
+def test_available_tools_skips_none_categories() -> None:
+    """A category at NONE contributes no tool classes."""
+    classes = ToolManager.available_tools(
+        {
+            PermissionCategory.READ: PermissionLevel.NONE,
+            PermissionCategory.WRITE: PermissionLevel.AUTO,
+        }
+    )
+
+    assert {cls.__name__ for cls in classes} == {"WriteFileTool", "EditFileTool"}
+
+
+def test_create_tools_skips_none_categories() -> None:
+    """A category at NONE builds no tools."""
+    tools = ToolManager(web_summary_client=_summary_client()).create_tools(
+        {
+            PermissionCategory.READ: PermissionLevel.NONE,
+            PermissionCategory.WRITE: PermissionLevel.AUTO,
+        }
+    )
+
+    assert {tool.name for tool in tools} == {"WriteFileTool", "EditFileTool"}
 
 
 def test_tool_repr_default_and_fetch_override() -> None:
