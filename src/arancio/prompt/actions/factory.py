@@ -1,5 +1,7 @@
 """Factory instantiating prompt actions."""
 
+from pathlib import Path
+
 from arancio.prompt.actions.types import BaseAction, CommandAction, PromptAction
 
 
@@ -18,7 +20,7 @@ class ActionFactory:
             **kwargs: the keyword arguments produced by
                 :meth:`arancio.prompt.manager.PromptManager.resolve_prompt`:
                 ``command_name``/``command_args`` for a command action, or
-                ``prompt`` for a prompt action.
+                ``prompt``/``mentions`` for a prompt action.
 
         Returns:
             A command action when ``kwargs`` contains ``command_name``, otherwise a
@@ -45,13 +47,18 @@ class ActionFactory:
         return CommandAction(name=command_name, args=command_args)
 
     @classmethod
-    def create_prompt_action(cls, prompt: str) -> PromptAction:
+    def create_prompt_action(
+        cls, prompt: str, mentions: list[Path] | None = None
+    ) -> PromptAction:
         """Create a prompt action.
 
         Args:
-            prompt: the raw prompt to send to the model.
+            prompt: the prompt to send to the model.
+            mentions: resolved absolute paths for the prompt's @mentions, in
+                order. Defaults to none.
 
         Returns:
-            A prompt action carrying the prompt text.
+            A prompt action carrying the prompt text and its resolved
+            mentions.
         """
-        return PromptAction(prompt=prompt)
+        return PromptAction(prompt=prompt, mentions=list(mentions or []))

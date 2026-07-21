@@ -1,18 +1,42 @@
 """Tests for the action executor."""
 
 from collections.abc import Iterator
+from pathlib import Path
 
+import pytest
+
+from arancio.core.agents import Agent
+from arancio.core.clients.base import BaseClient
+from arancio.core.clients.litellm import LiteLLMClient
+from arancio.core.controllers.requests import BaseControllerRequest
+from arancio.core.controllers.responses import (
+    BaseControllerResponse,
+    Decision,
+    PermissionResponse,
+)
 from arancio.core.messages import (
     AssistantMessage,
     ErrorMessage,
     Message,
+    ToolCallMessage,
+    ToolResultMessage,
     UserMessage,
 )
+from arancio.core.permissions.manager import PermissionManager
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
+from arancio.core.requests import BaseRequest
+from arancio.core.tools.manager import ToolManager
+from arancio.core.tools.session import default_session
 from arancio.prompt.actions.executor import ActionExecutor
 from arancio.prompt.actions.factory import ActionFactory
 from arancio.prompt.actions.types import CommandAction, PromptAction
 from arancio.settings.settings import Settings
+
+
+@pytest.fixture(autouse=True)
+def _reset_default_tool_session() -> None:
+    """Clear the shared tool session before each test for isolation."""
+    default_session.clear()
 
 
 class _DummyAgent:
@@ -103,7 +127,7 @@ class _RecordingSettingsManager:
 
 
 class _RecordingAgent:
-    """Agent stub recording the message it runs and yielding a fixed reply."""
+    """Agent stub recording the message/prelude it runs and yielding a fixed reply."""
 
     def __init__(self, reply: Message) -> None:
         """Store the reply each run yields.
@@ -113,17 +137,23 @@ class _RecordingAgent:
         """
         self._reply = reply
         self.received: Message | None = None
+        self.received_prelude: list[Message] | None = None
 
-    def run(self, message: Message) -> Iterator[Message]:
-        """Record the input message and yield the configured reply.
+    def run(
+        self, message: Message, prelude: list[Message] | None = None
+    ) -> Iterator[Message]:
+        """Record the input message/prelude and yield them then the reply.
 
         Args:
             message: the user message that starts the turn.
+            prelude: messages to yield before the configured reply.
 
         Yields:
-            The configured reply message.
+            Each ``prelude`` message, then the configured reply message.
         """
         self.received = message
+        self.received_prelude = prelude
+        yield from prelude or []
         yield self._reply
 
 
@@ -551,3 +581,154 @@ def test_execute_prompt_action_without_model_name_yields_error() -> None:
 
     assert isinstance(message, ErrorMessage)
     assert agent.received is None
+
+
+def test_execute_prompt_action_resolves_mention_and_injects_read_pair(
+    tmp_path: Path,
+) -> None:
+    """A resolving @mention injects a ReadFileTool call/result pair before the reply."""
+    target = tmp_path / "notes.txt"
+    target.write_text("hello world\n")
+    reply = AssistantMessage(content="ok")
+    agent = _RecordingAgent(reply)
+    executor = ActionExecutor(
+        agent=agent,
+        application=_RecordingApplication(),
+        settings_manager=_RecordingSettingsManager(),
+    )
+    action = PromptAction(prompt=f"see @{target}", mentions=[target])
+
+    messages = list(executor.execute(action))
+
+    call, result, final = messages
+    assert isinstance(call, ToolCallMessage)
+    assert call.name == "ReadFileTool"
+    assert call.arguments == {"file_path": str(target)}
+    assert isinstance(result, ToolResultMessage)
+    assert result.id == call.id
+    assert final == reply
+    assert agent.received == UserMessage(content=f"see @{target}")
+    assert agent.received_prelude == [call, result]
+
+
+def test_execute_prompt_action_md_mention_uses_dynamic_markdown(
+    tmp_path: Path,
+) -> None:
+    """A .md mention's result content is dynamic_markdown-expanded, not raw."""
+    (tmp_path / "other.md").write_text("included text")
+    target = tmp_path / "doc.md"
+    target.write_text("before <include>other.md</include> after")
+    agent = _RecordingAgent(AssistantMessage(content="ok"))
+    executor = ActionExecutor(
+        agent=agent,
+        application=_RecordingApplication(),
+        settings_manager=_RecordingSettingsManager(),
+    )
+    action = PromptAction(prompt=f"see @{target}", mentions=[target])
+
+    _, result, _ = list(executor.execute(action))
+
+    assert "included text" in result.content["content"]
+    assert "<include>" not in result.content["content"]
+
+
+def test_execute_prompt_action_multiple_mentions_yield_ordered_pairs(
+    tmp_path: Path,
+) -> None:
+    """Multiple resolved mentions yield ordered call/result pairs before the reply."""
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+    first.write_text("first")
+    second.write_text("second")
+    reply = AssistantMessage(content="ok")
+    agent = _RecordingAgent(reply)
+    executor = ActionExecutor(
+        agent=agent,
+        application=_RecordingApplication(),
+        settings_manager=_RecordingSettingsManager(),
+    )
+    action = PromptAction(
+        prompt=f"see @{first} and @{second}", mentions=[first, second]
+    )
+
+    messages = list(executor.execute(action))
+
+    assert len(messages) == 5
+    first_call, first_result, second_call, second_result, final = messages
+    assert first_call.arguments == {"file_path": str(first)}
+    assert second_call.arguments == {"file_path": str(second)}
+    assert first_result.id == first_call.id
+    assert second_result.id == second_call.id
+    assert final == reply
+
+
+class _FinalOnlyClient(BaseClient):
+    """Client returning only a final assistant message, no tool calls."""
+
+    _model_options = ["fake-model"]
+    _thinking_options: list[str] = []
+    _default_model_id = "fake-model"
+    _default_thinking_effort = None
+    request_schema = BaseRequest
+
+    def __init__(self) -> None:
+        """Initialize the fake client."""
+        super().__init__(token="token")
+
+    def send_request(self, request: BaseRequest) -> list[Message]:
+        """Return a final assistant message, ignoring the request.
+
+        Args:
+            request: the request built by the agent.
+
+        Returns:
+            A single final assistant message.
+        """
+        return [AssistantMessage(content="done")]
+
+
+class _NoOpController:
+    """Controller stub never expected to be asked in these tests."""
+
+    def request(self, request: BaseControllerRequest) -> BaseControllerResponse:
+        """Approve any request, though none is expected to reach it.
+
+        Args:
+            request: the request to approve.
+
+        Returns:
+            An ALLOW permission response.
+        """
+        return PermissionResponse(decision=Decision.ALLOW)
+
+
+def test_execute_prompt_action_mention_bypasses_read_permission_none(
+    tmp_path: Path,
+) -> None:
+    """A mentioned file is read even when READ permission is set to NONE."""
+    target = tmp_path / "secret.txt"
+    target.write_text("top secret")
+    permission_manager = PermissionManager(
+        ToolManager(
+            web_summary_client=LiteLLMClient(model_id="openai/gpt-4o", stream=False)
+        ),
+        _NoOpController(),
+        {category: PermissionLevel.NONE for category in PermissionCategory},
+    )
+    agent = Agent(client=_FinalOnlyClient(), permission_manager=permission_manager)
+    assert "ReadFileTool" not in agent._tools
+
+    executor = ActionExecutor(
+        agent=agent,
+        application=_RecordingApplication(),
+        settings_manager=_RecordingSettingsManager(),
+    )
+    action = PromptAction(prompt=f"see @{target}", mentions=[target])
+
+    messages = list(executor.execute(action))
+
+    call, result, final = messages
+    assert isinstance(call, ToolCallMessage)
+    assert call.name == "ReadFileTool"
+    assert isinstance(result, ToolResultMessage)
+    assert final == AssistantMessage(content="done")

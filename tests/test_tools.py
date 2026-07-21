@@ -470,6 +470,53 @@ def test_read_tool_handles_empty_file(tmp_path: Path) -> None:
     )
 
 
+def test_read_tool_expands_md_file_via_dynamic_markdown(tmp_path: Path) -> None:
+    """A .md file is expanded through dynamic_markdown before line numbering."""
+    (tmp_path / "other.md").write_text("included")
+    target = tmp_path / "doc.md"
+    target.write_text("before <include>other.md</include> after")
+
+    result = ReadFileTool().call(call_id="call_1", file_path=str(target))
+
+    canonical = str(target.resolve())
+    expected_block = "     1\tbefore included after"
+    output = {
+        "file_path": canonical,
+        "content": expected_block,
+        "start_line": 1,
+        "end_line": 1,
+        "total_lines": 1,
+        "truncated_lines": 0,
+    }
+    assert result == ToolResultMessage(
+        content=output,
+        id="call_1",
+        display_text=f"{canonical}\n{expected_block}\n[lines 1-1 of 1]",
+    )
+
+
+def test_read_tool_non_md_file_is_not_expanded(tmp_path: Path) -> None:
+    """A non-.md file containing dynamic-markdown-like tags is read raw."""
+    target = tmp_path / "doc.txt"
+    target.write_text("before <include>other.md</include> after")
+
+    result = ReadFileTool().call(call_id="call_1", file_path=str(target))
+
+    assert "<include>other.md</include>" in result.content["content"]
+
+
+def test_read_tool_md_file_with_unresolvable_field_tag_raises(tmp_path: Path) -> None:
+    """A .md file's dynamic-markdown expansion failure surfaces as a tool error."""
+    target = tmp_path / "doc.md"
+    target.write_text("<field>name</field>")
+
+    result = ReadFileTool().call(call_id="call_1", file_path=str(target))
+
+    assert isinstance(result, ToolErrorMessage)
+    assert "Error while executing ReadFileTool" in result.content
+    assert "requires a field_source" in result.content
+
+
 def test_read_tool_rejects_relative_paths() -> None:
     """Relative paths surface as tool errors via the wrapper."""
     result = ReadFileTool().call(call_id="call_1", file_path="relative.txt")

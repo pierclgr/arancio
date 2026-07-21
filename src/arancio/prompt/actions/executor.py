@@ -3,13 +3,23 @@
 from __future__ import annotations
 
 import inspect
+import json
+import uuid
 from collections.abc import Iterator
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Type
 
 from arancio.commands.base import BaseCommand
 from arancio.commands.registry import COMMAND_REGISTRY
 from arancio.core.agents import Agent
-from arancio.core.messages import AssistantMessage, ErrorMessage, Message, UserMessage
+from arancio.core.messages import (
+    AssistantMessage,
+    ErrorMessage,
+    Message,
+    ToolCallMessage,
+    UserMessage,
+)
+from arancio.core.tools.files.read import ReadFileTool
 from arancio.prompt.actions.constants import INJECTABLE_COMMAND_PARAMETERS
 from arancio.prompt.actions.types import BaseAction, CommandAction, PromptAction
 from arancio.settings.manager import SettingsManager
@@ -28,6 +38,10 @@ class ActionExecutor:
     through the agent. Both produce the same message stream so callers render
     them the same way.
     """
+
+    # shared across every instance so resolving @mentions doesn't reload the
+    # harness files on every prompt
+    _read_file_tool: ReadFileTool = ReadFileTool()
 
     def __init__(
         self, agent: Agent, application: App, settings_manager: SettingsManager
@@ -142,13 +156,56 @@ class ActionExecutor:
             action: the prompt action to send.
 
         Yields:
-            The agent's message stream for the prompt, or an
-            :class:`ErrorMessage` when no provider or model name is
-            configured yet.
+            A synthesized ReadFileTool call/result pair per resolved
+            @mention (in prompt order), then the agent's message stream for
+            the prompt, or an :class:`ErrorMessage` when no provider or
+            model name is configured yet.
         """
         try:
             self._settings_manager.settings.model_id
         except ValueError as exc:
             yield ErrorMessage(content=f"Error sending message: {exc}")
             return
-        yield from self._agent.run(UserMessage(content=action.prompt))
+        prelude = self._resolve_mentions(action.mentions)
+        yield from self._agent.run(UserMessage(content=action.prompt), prelude=prelude)
+
+    @classmethod
+    def _resolve_mentions(cls, mentions: list[Path]) -> list[Message]:
+        """Synthesize a ReadFileTool call/result pair for each resolved @mention.
+
+        Bypasses :class:`arancio.core.permissions.manager.PermissionManager`
+        entirely: the user's own explicit mention is itself sufficient
+        consent, regardless of the granted READ permission level. Each target
+        is read via a real :class:`ReadFileTool` instance, reusing its disk
+        read (or, for a ``.md`` target, its dynamic-markdown expansion),
+        line-numbering, truncation and session bookkeeping unchanged.
+
+        Args:
+            mentions: resolved absolute paths for the prompt's @mentions, in
+                order.
+
+        Returns:
+            A flat list alternating a ``ToolCallMessage`` named
+            ``"ReadFileTool"`` and its paired ``ToolResultMessage``/
+            ``ToolErrorMessage``, one pair per mention, in the same order as
+            ``mentions``.
+        """
+        if not mentions:
+            return []
+
+        messages: list[Message] = []
+        for target in mentions:
+            call_id = f"mention_{uuid.uuid4().hex}"
+            arguments = {"file_path": str(target)}
+            messages.append(
+                ToolCallMessage(
+                    content=f"ReadFileTool({json.dumps(arguments)})",
+                    id=call_id,
+                    name="ReadFileTool",
+                    arguments=arguments,
+                )
+            )
+            messages.append(
+                cls._read_file_tool.call(call_id=call_id, file_path=str(target))
+            )
+        return messages

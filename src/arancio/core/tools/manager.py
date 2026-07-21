@@ -3,6 +3,8 @@
 from arancio.core.clients.base import BaseClient
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 from arancio.core.tools.base import BaseTool
+from arancio.core.tools.files.glob import GlobTool
+from arancio.core.tools.files.grep import GrepTool
 from arancio.core.tools.web.fetch import FetchWebTool
 
 
@@ -13,6 +15,9 @@ class ToolManager:
     enum value is the frozen set of classes) and instantiates them. Every tool
     builds with no required arguments except :class:`FetchWebTool`, which
     receives the summarization client this manager holds and injects.
+    :class:`GlobTool` and :class:`GrepTool` are built with ``ignore_aware`` and
+    ``hidden_aware`` both off, so ``.gitignore``/``.ignore`` rules and hidden
+    files no longer filter their results.
 
     Attributes:
         _web_summary_client: the client injected into :class:`FetchWebTool`.
@@ -82,9 +87,14 @@ class ToolManager:
         Returns:
             One instance per tool class across the granted categories.
         """
-        return [
-            FetchWebTool(client=self._web_summary_client)
-            if tool_cls is FetchWebTool
-            else tool_cls()
-            for tool_cls in self.available_tools(permissions)
-        ]
+        tools = []
+        for tool_cls in self.available_tools(permissions):
+            if tool_cls is FetchWebTool:
+                tools.append(FetchWebTool(client=self._web_summary_client))
+            elif tool_cls in (GlobTool, GrepTool):
+                # TODO: hardcoded off until ignore/hidden awareness becomes a
+                # user-configurable permission
+                tools.append(tool_cls(ignore_aware=False, hidden_aware=False))
+            else:
+                tools.append(tool_cls())
+        return tools
