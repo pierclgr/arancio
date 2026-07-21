@@ -4,7 +4,7 @@ Reads a text file from the local filesystem and returns its content with `cat -n
 Before reading the file, please follow these steps:
 1. Path Verification:
    - `file_path` *MUST* be an absolute path. Relative paths are rejected, since the working directory is not persistent across calls.
-   - If unsure whether the file exists or whether the path is a directory, use `BashCommandTool` with `ls` first to verify.
+   - If unsure whether the file exists or whether the path is a directory, use `ShellCommandTool` with `ls` first to verify.
 
 ## USAGE
   - `file_path` argument is required and must be an absolute path to an existing regular file.
@@ -17,7 +17,7 @@ Before reading the file, please follow these steps:
 ## **VERY IMPORTANT**
 - The line-number prefix is purely an output formatting artefact. When constructing the `old_string` argument for a future edit tool, *NEVER* include the `<lineno><TAB>` prefix; use only the actual line content that appears after the tab, preserving its exact indentation.
 - This tool is for text files only. Images, PDFs and Jupyter notebooks are not supported in this iteration.
-- This tool *MUST* be preferred over `BashCommandTool` with `cat`, `head` or `tail`, since shell commands do not provide line numbers and have no per-line size cap.
+- This tool *MUST* be preferred over `ShellCommandTool` with `cat`, `head` or `tail`, since shell commands do not provide line numbers and have no per-line size cap.
 
 ## RETURNS
 The tool returns a dict with the following keys:

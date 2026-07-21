@@ -93,7 +93,7 @@ def test_for_tool_reverse_lookup() -> None:
     assert PermissionCategory.for_tool("ReadFileTool") is PermissionCategory.READ
     assert PermissionCategory.for_tool("WriteFileTool") is PermissionCategory.WRITE
     assert PermissionCategory.for_tool("FetchWebTool") is PermissionCategory.WEB
-    assert PermissionCategory.for_tool("BashCommandTool") is PermissionCategory.EXECUTE
+    assert PermissionCategory.for_tool("ShellCommandTool") is PermissionCategory.EXECUTE
     assert PermissionCategory.for_tool("EchoTool") is None
 
 
@@ -132,7 +132,7 @@ def test_validate_auto_true_without_asking() -> None:
     """AUTO grants allow the call and never ask the controller."""
     manager = _manager({PermissionCategory.EXECUTE: PermissionLevel.AUTO})
 
-    assert manager.validate(_call("BashCommandTool")) == (True, None)
+    assert manager.validate(_call("ShellCommandTool")) == (True, None)
 
 
 def test_validate_ask_allows_on_allow_decision() -> None:

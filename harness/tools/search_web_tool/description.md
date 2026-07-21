@@ -4,7 +4,7 @@ Runs a web search via DuckDuckGo and returns the top results as URL, title and e
 Before searching, please follow these steps:
 1. Query Formulation:
    - Write a focused, keyword-rich query. Match the phrasing real documentation or articles would use (e.g. `pytorch transformer api 2026`, not `how do I use the transformer api in pytorch`).
-   - Prefer this tool over `BashCommandTool` with `curl`/`wget` for open-ended lookups — it returns structured results and does not require knowing the URL up front.
+   - Prefer this tool over `ShellCommandTool` with `curl`/`wget` for open-ended lookups — it returns structured results and does not require knowing the URL up front.
 
 2. Result Sizing:
    - Use the default `num_results` for most lookups. Only raise it when you genuinely need broader coverage; the upper bound is <field>_max_num_results</field>.

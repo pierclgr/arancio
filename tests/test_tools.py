@@ -18,7 +18,7 @@ from arancio.core.messages import (
 )
 from arancio.core.parsers.tool_result.base import BaseToolResultParser
 from arancio.core.tools.base import BaseTool
-from arancio.core.tools.commands.powershell import PowershellCommandTool
+from arancio.core.tools.commands.shell import ShellCommandTool
 from arancio.core.tools.files.edit import EditFileTool
 from arancio.core.tools.files.glob import GlobTool
 from arancio.core.tools.files.grep import GrepTool
@@ -114,13 +114,16 @@ def test_tool_exception_routes_through_result_parser() -> None:
     )
 
 
-@patch("arancio.core.tools.commands.powershell.subprocess.run")
-@patch("arancio.core.tools.commands.powershell.shutil.which")
-def test_powershell_command_prefers_windows_powershell(
+@patch("arancio.core.tools.commands.shell.subprocess.run")
+@patch("arancio.core.tools.commands.shell.shutil.which")
+@patch("arancio.core.tools.commands.shell.platform.system")
+def test_shell_command_windows_prefers_windows_powershell(
+    system_mock,
     which_mock,
     run_mock,
 ) -> None:
-    """PowerShell tool prefers powershell.exe when it is available."""
+    """On Windows, the tool prefers powershell.exe when it is available."""
+    system_mock.return_value = "Windows"
     which_mock.side_effect = lambda name: (
         "powershell.exe" if name == "powershell.exe" else None
     )
@@ -131,7 +134,7 @@ def test_powershell_command_prefers_windows_powershell(
         stderr="",
     )
 
-    result = PowershellCommandTool().call(
+    result = ShellCommandTool().call(
         call_id="call_1",
         command="Write-Output ok",
         timeout=5,
@@ -166,10 +169,14 @@ def test_powershell_command_prefers_windows_powershell(
     )
 
 
-@patch("arancio.core.tools.commands.powershell.subprocess.run")
-@patch("arancio.core.tools.commands.powershell.shutil.which")
-def test_powershell_command_falls_back_to_pwsh(which_mock, run_mock) -> None:
-    """PowerShell tool falls back to pwsh when powershell.exe is unavailable."""
+@patch("arancio.core.tools.commands.shell.subprocess.run")
+@patch("arancio.core.tools.commands.shell.shutil.which")
+@patch("arancio.core.tools.commands.shell.platform.system")
+def test_shell_command_windows_falls_back_to_pwsh(
+    system_mock, which_mock, run_mock
+) -> None:
+    """On Windows, the tool falls back to pwsh when powershell.exe is unavailable."""
+    system_mock.return_value = "Windows"
     which_mock.side_effect = lambda name: "pwsh" if name == "pwsh" else None
     run_mock.return_value = subprocess.CompletedProcess(
         args=[],
@@ -178,24 +185,28 @@ def test_powershell_command_falls_back_to_pwsh(which_mock, run_mock) -> None:
         stderr="",
     )
 
-    PowershellCommandTool().call(call_id="call_1", command="Write-Output ok")
+    ShellCommandTool().call(call_id="call_1", command="Write-Output ok")
 
     command_args = run_mock.call_args.args[0]
     assert command_args[0] == "pwsh"
     assert command_args[-1] == "Write-Output ok"
 
 
-@patch("arancio.core.tools.commands.powershell.subprocess.run")
-@patch("arancio.core.tools.commands.powershell.shutil.which")
-def test_powershell_command_reports_missing_host(which_mock, run_mock) -> None:
+@patch("arancio.core.tools.commands.shell.subprocess.run")
+@patch("arancio.core.tools.commands.shell.shutil.which")
+@patch("arancio.core.tools.commands.shell.platform.system")
+def test_shell_command_windows_reports_missing_host(
+    system_mock, which_mock, run_mock
+) -> None:
     """Missing PowerShell hosts are reported as tool errors."""
+    system_mock.return_value = "Windows"
     which_mock.return_value = None
 
-    result = PowershellCommandTool().call(call_id="call_1", command="Get-ChildItem")
+    result = ShellCommandTool().call(call_id="call_1", command="Get-ChildItem")
 
     run_mock.assert_not_called()
     output = (
-        "Error while executing PowershellCommandTool: "
+        "Error while executing ShellCommandTool: "
         "PowerShell host not found: powershell.exe or pwsh"
     )
     assert result == ToolErrorMessage(
@@ -204,10 +215,14 @@ def test_powershell_command_reports_missing_host(which_mock, run_mock) -> None:
     )
 
 
-@patch("arancio.core.tools.commands.powershell.subprocess.run")
-@patch("arancio.core.tools.commands.powershell.shutil.which")
-def test_powershell_command_reports_timeout(which_mock, run_mock) -> None:
+@patch("arancio.core.tools.commands.shell.subprocess.run")
+@patch("arancio.core.tools.commands.shell.shutil.which")
+@patch("arancio.core.tools.commands.shell.platform.system")
+def test_shell_command_windows_reports_timeout(
+    system_mock, which_mock, run_mock
+) -> None:
     """Timed-out PowerShell commands return partial output as an error."""
+    system_mock.return_value = "Windows"
     which_mock.return_value = "powershell.exe"
     run_mock.side_effect = subprocess.TimeoutExpired(
         cmd=[],
@@ -216,7 +231,7 @@ def test_powershell_command_reports_timeout(which_mock, run_mock) -> None:
         stderr=b"slow\n",
     )
 
-    result = PowershellCommandTool().call(
+    result = ShellCommandTool().call(
         call_id="call_1",
         command="Start-Sleep 10",
         timeout=1,
@@ -236,10 +251,14 @@ def test_powershell_command_reports_timeout(which_mock, run_mock) -> None:
     )
 
 
-@patch("arancio.core.tools.commands.powershell.subprocess.run")
-@patch("arancio.core.tools.commands.powershell.shutil.which")
-def test_powershell_command_truncates_long_output(which_mock, run_mock) -> None:
+@patch("arancio.core.tools.commands.shell.subprocess.run")
+@patch("arancio.core.tools.commands.shell.shutil.which")
+@patch("arancio.core.tools.commands.shell.platform.system")
+def test_shell_command_windows_truncates_long_output(
+    system_mock, which_mock, run_mock
+) -> None:
     """PowerShell command streams are truncated independently."""
+    system_mock.return_value = "Windows"
     which_mock.return_value = "powershell.exe"
     run_mock.return_value = subprocess.CompletedProcess(
         args=[],
@@ -248,7 +267,99 @@ def test_powershell_command_truncates_long_output(which_mock, run_mock) -> None:
         stderr="",
     )
 
-    output = PowershellCommandTool()._call(command="Write-Output long")
+    output = ShellCommandTool()._call(command="Write-Output long")
+
+    assert output["stdout"].startswith("a" * 30_000)
+    assert "1 chars truncated" in output["stdout"]
+    assert output["truncated"] is True
+
+
+@patch("arancio.core.tools.commands.shell.subprocess.run")
+@patch("arancio.core.tools.commands.shell.platform.system")
+def test_shell_command_posix_runs_via_sh(system_mock, run_mock) -> None:
+    """On macOS/Linux, the tool runs the command via ``/bin/sh -c``."""
+    system_mock.return_value = "Darwin"
+    run_mock.return_value = subprocess.CompletedProcess(
+        args=[],
+        returncode=0,
+        stdout="ok\n",
+        stderr="",
+    )
+
+    result = ShellCommandTool().call(
+        call_id="call_1",
+        command="echo ok",
+        timeout=5,
+        cwd="/repo",
+    )
+
+    run_mock.assert_called_once_with(
+        "echo ok",
+        shell=True,
+        cwd="/repo",
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    output = {
+        "stdout": "ok\n",
+        "stderr": "",
+        "exit_code": 0,
+        "timed_out": False,
+        "truncated": False,
+    }
+    assert result == ToolResultMessage(
+        content=output,
+        id="call_1",
+        display_text="ok",
+    )
+
+
+@patch("arancio.core.tools.commands.shell.subprocess.run")
+@patch("arancio.core.tools.commands.shell.platform.system")
+def test_shell_command_posix_reports_timeout(system_mock, run_mock) -> None:
+    """Timed-out POSIX shell commands return partial output as an error."""
+    system_mock.return_value = "Linux"
+    run_mock.side_effect = subprocess.TimeoutExpired(
+        cmd="sleep 10",
+        timeout=1,
+        output=b"partial\n",
+        stderr=b"slow\n",
+    )
+
+    result = ShellCommandTool().call(
+        call_id="call_1",
+        command="sleep 10",
+        timeout=1,
+    )
+
+    output = {
+        "stdout": "partial\n",
+        "stderr": "slow\n",
+        "exit_code": -1,
+        "timed_out": True,
+        "truncated": False,
+    }
+    assert result == ToolErrorMessage(
+        content=output,
+        id="call_1",
+        display_text="partial\nslow\n[timed out]\n[exit code -1]",
+    )
+
+
+@patch("arancio.core.tools.commands.shell.subprocess.run")
+@patch("arancio.core.tools.commands.shell.platform.system")
+def test_shell_command_posix_truncates_long_output(system_mock, run_mock) -> None:
+    """POSIX shell command streams are truncated independently."""
+    system_mock.return_value = "Linux"
+    run_mock.return_value = subprocess.CompletedProcess(
+        args=[],
+        returncode=0,
+        stdout="a" * 30_001,
+        stderr="",
+    )
+
+    output = ShellCommandTool()._call(command="echo long")
 
     assert output["stdout"].startswith("a" * 30_000)
     assert "1 chars truncated" in output["stdout"]
@@ -873,15 +984,15 @@ def test_tool_raises_when_harness_dir_missing() -> None:
 
 def test_tool_name_property_returns_class_name() -> None:
     """``name`` property returns the python class name."""
-    assert PowershellCommandTool().name == "PowershellCommandTool"
+    assert ShellCommandTool().name == "ShellCommandTool"
 
 
 def test_tool_instance_loads_description_from_harness_dir() -> None:
     """Tool instance populates ``self.description`` from parsed ``description.md``."""
-    tool = PowershellCommandTool()
+    tool = ShellCommandTool()
     harness_root = Path("harness")
     expected_file = DynamicMarkdownFile(
-        harness_root / "tools/powershell_command_tool/description.md"
+        harness_root / "tools/shell_command_tool/description.md"
     )
     expected_file.parse(tool=tool)
     assert tool.description == expected_file.content
@@ -890,17 +1001,17 @@ def test_tool_instance_loads_description_from_harness_dir() -> None:
 def test_tool_instance_loads_input_schema_from_harness_dir() -> None:
     """Tool instance populates ``self.input_schema`` from ``input_schema.yml``."""
     raw = yaml.safe_load(
-        Path("harness/tools/powershell_command_tool/input_schema.yml").read_text()
+        Path("harness/tools/shell_command_tool/input_schema.yml").read_text()
     )
     expected = {"type": "object", "additionalProperties": False, **raw}
-    assert PowershellCommandTool().input_schema == expected
+    assert ShellCommandTool().input_schema == expected
 
 
 def test_tool_instance_schema_carries_loaded_attrs() -> None:
     """``schema()`` returns a ToolSchema built from harness-loaded attributes."""
-    tool = PowershellCommandTool()
+    tool = ShellCommandTool()
     harness_root = Path("harness")
-    tool_dir = harness_root / "tools/powershell_command_tool"
+    tool_dir = harness_root / "tools/shell_command_tool"
     expected_description_file = DynamicMarkdownFile(tool_dir / "description.md")
     expected_description_file.parse(tool=tool)
     expected_input_schema_raw = yaml.safe_load(
@@ -913,7 +1024,7 @@ def test_tool_instance_schema_carries_loaded_attrs() -> None:
     }
 
     assert tool.schema() == ToolSchema(
-        name="PowershellCommandTool",
+        name="ShellCommandTool",
         description=expected_description_file.content,
         input_schema=expected_input_schema,
     )

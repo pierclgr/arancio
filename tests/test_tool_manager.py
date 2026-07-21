@@ -42,8 +42,7 @@ def test_create_tools_multiple_categories_unions_tools() -> None:
         "ReadFileTool",
         "GlobTool",
         "GrepTool",
-        "BashCommandTool",
-        "PowershellCommandTool",
+        "ShellCommandTool",
     }
 
 

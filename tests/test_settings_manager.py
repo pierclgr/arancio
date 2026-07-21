@@ -107,7 +107,7 @@ def test_load_creates_defaults_and_applies(monkeypatch, tmp_path):
     assert client.model_id is None
     assert agent.max_turns == Settings.default().max_turns
     # every category granted at ASK: the full tool catalog is built
-    assert len(agent._tools) == 9
+    assert len(agent._tools) == 8
 
 
 def test_load_falls_back_on_invalid_field_and_applies_default(monkeypatch, tmp_path):

@@ -4,10 +4,10 @@ Searches files in a directory using ripgrep (`rg`) and returns structured result
 Before searching, please follow these steps:
 1. Pattern Validation:
    - The `pattern` argument uses ripgrep's regex syntax, not POSIX. Literal braces, dots and other regex metacharacters must be escaped (e.g. `interface\{\}` to match the literal string `interface{}`).
-   - Prefer this tool over `BashCommandTool` with `grep` or `find`, since it gives `.gitignore`-aware results and supports glob/type filters.
+   - Prefer this tool over `ShellCommandTool` with `grep` or `find`, since it gives `.gitignore`-aware results and supports glob/type filters.
 
 2. Path Verification:
-   - When `path` is specified, it must be an absolute path to an existing file or directory. If unsure whether the path exists, use `BashCommandTool` with `ls` first.
+   - When `path` is specified, it must be an absolute path to an existing file or directory. If unsure whether the path exists, use `ShellCommandTool` with `ls` first.
 
 ## USAGE
   - `pattern` argument is required. Full regex syntax: `log.*Error`, `def\s+\w+`, `TODO|FIXME`.

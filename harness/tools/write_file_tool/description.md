@@ -7,7 +7,7 @@ Before writing the file, please follow these steps:
    - Missing parent directories are created automatically; you do not need to `mkdir -p` first.
 2. Read-First Verification (overwriting existing files):
    - If `file_path` points to a file that already exists, you *MUST* have called `ReadFileTool` on the same path in this session before invoking `WriteFileTool`.
-   - If the file was modified on disk after your last `ReadFileTool` call (for example by another process or by a `BashCommandTool` invocation), you *MUST* re-read it before overwriting; the tool rejects writes whose recorded read mtime has drifted.
+   - If the file was modified on disk after your last `ReadFileTool` call (for example by another process or by a `ShellCommandTool` invocation), you *MUST* re-read it before overwriting; the tool rejects writes whose recorded read mtime has drifted.
    - Creating a brand-new file at a path that does not yet exist does *not* require a prior read.
 
 ## USAGE
@@ -17,7 +17,7 @@ Before writing the file, please follow these steps:
   - This tool is free to create documentation files (`*.md`, `README*`) at the model's own initiative. The `arancio` agent intentionally has no "no auto-create docs" rule because documentation generation is a core part of this agent's behavior.
 
 ## **VERY IMPORTANT**
-- *NEVER* attempt to bypass the read-first guard by invoking `BashCommandTool` (e.g. `echo ... > file`, `tee`, `sed -i`). Such bypasses defeat the safety mechanism that prevents blind clobbers of files the model has not seen.
+- *NEVER* attempt to bypass the read-first guard by invoking `ShellCommandTool` (e.g. `echo ... > file`, `tee`, `sed -i`). Such bypasses defeat the safety mechanism that prevents blind clobbers of files the model has not seen.
 - Successful writes update the session's read record automatically with the new file mtime, so an immediately-subsequent `WriteFileTool` call on the same path does not require an intervening `ReadFileTool` call.
 
 ## RETURNS

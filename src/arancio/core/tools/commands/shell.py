@@ -1,5 +1,7 @@
-"""Bash command tool exposing a shell command runner to LLM clients."""
+"""Shell command tool exposing a cross-platform command runner to LLM clients."""
 
+import platform
+import shutil
 import subprocess
 from typing import Type
 
@@ -7,11 +9,12 @@ from arancio.core.parsers.tool_result.commands.shell import ShellCommandToolResu
 from arancio.core.tools.base import BaseTool
 
 
-class BashCommandTool(BaseTool):
-    """Run a shell command via ``/bin/sh -c`` and return its output.
+class ShellCommandTool(BaseTool):
+    """Run a shell command via the host platform's native shell.
 
-    The tool captures ``stdout`` and ``stderr`` separately, returns the process exit
-    code and reports whether the run timed out or produced truncated output.
+    Dispatches to ``/bin/sh -c`` on macOS/Linux, or to PowerShell on Windows. Captures
+    ``stdout`` and ``stderr`` separately, returns the process exit code and reports
+    whether the run timed out or produced truncated output.
     """
 
     _default_timeout: int = 120
@@ -19,16 +22,35 @@ class BashCommandTool(BaseTool):
     _output_limit: int = 30_000
     _result_parser: Type[ShellCommandToolResultParser] = ShellCommandToolResultParser
 
+    @property
+    def _is_windows(self) -> bool:
+        """Report whether the tool is running on Windows.
+
+        Returns:
+            ``True`` when the host OS is Windows, ``False`` otherwise.
+        """
+        return platform.system() == "Windows"
+
+    @property
+    def _shell_label(self) -> str:
+        """Return a human-readable label for the shell in effect on this host.
+
+        Returns:
+            ``"PowerShell"`` on Windows, or the POSIX shell description
+            otherwise.
+        """
+        return "PowerShell" if self._is_windows else "POSIX shell (`/bin/sh -c`)"
+
     def _call(
         self,
         command: str,
         timeout: int | None = None,
         cwd: str | None = None,
     ) -> dict:
-        """Run a shell command and return its raw captured output.
+        """Run a command through the host platform's native shell.
 
         Args:
-            command: the shell command line to execute.
+            command: the command line to execute.
             timeout: maximum runtime in seconds. Defaults to ``120`` and
                 is capped at ``600``.
             cwd: absolute working directory for the command. Defaults
@@ -43,14 +65,30 @@ class BashCommandTool(BaseTool):
         effective_timeout = min(timeout or self._default_timeout, self._max_timeout)
 
         try:
-            completed = subprocess.run(
-                command,
-                shell=True,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=effective_timeout,
-            )
+            if self._is_windows:
+                completed = subprocess.run(
+                    [
+                        self._resolve_powershell_host(),
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-Command",
+                        command,
+                    ],
+                    shell=False,
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    timeout=effective_timeout,
+                )
+            else:
+                completed = subprocess.run(
+                    command,
+                    shell=True,
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    timeout=effective_timeout,
+                )
             stdout = completed.stdout
             stderr = completed.stderr
             exit_code = completed.returncode
@@ -71,6 +109,22 @@ class BashCommandTool(BaseTool):
             "timed_out": timed_out,
             "truncated": stdout_truncated or stderr_truncated,
         }
+
+    @staticmethod
+    def _resolve_powershell_host() -> str:
+        """Return the first available PowerShell executable.
+
+        Returns:
+            The path or executable name for the selected PowerShell host.
+
+        Raises:
+            RuntimeError: when neither ``powershell.exe`` nor ``pwsh`` is found.
+        """
+        for name in ("powershell.exe", "pwsh"):
+            host = shutil.which(name)
+            if host:
+                return host
+        raise RuntimeError("PowerShell host not found: powershell.exe or pwsh")
 
     @staticmethod
     def _decode(stream: bytes | str | None) -> str:

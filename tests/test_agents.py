@@ -954,8 +954,7 @@ def test_agent_full_permission_manager_builds_all_tools() -> None:
         "EditFileTool",
         "GlobTool",
         "GrepTool",
-        "BashCommandTool",
-        "PowershellCommandTool",
+        "ShellCommandTool",
         "SearchWebTool",
         "FetchWebTool",
     }

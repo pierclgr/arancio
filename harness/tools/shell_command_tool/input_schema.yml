@@ -1,7 +1,7 @@
 properties:
   command:
     type: string
-    description: The command to run via PowerShell -Command.
+    description: The command to run via the host platform's native shell (POSIX /bin/sh on macOS/Linux, PowerShell on Windows).
   timeout:
     type: integer
     description: Maximum runtime in seconds. Defaults to 120, capped at 600.

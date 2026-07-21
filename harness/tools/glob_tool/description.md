@@ -5,10 +5,10 @@ Before searching, please follow these steps:
 1. Pattern Validation:
    - The `pattern` argument is a glob, not a regex. Supported syntax: `**` (recursive), `*` (any chars in one segment), `?` (single char), `[abc]` (charclass), `{a,b}` (brace expansion).
    - Examples: `**/*.py`, `src/**/*.{ts,tsx}`, `*.md`, `**/test_*.py`.
-   - Prefer this tool over `BashCommandTool` with `find`, since it is faster and sorts by mtime.
+   - Prefer this tool over `ShellCommandTool` with `find`, since it is faster and sorts by mtime.
 
 2. Path Verification:
-   - When `path` is specified, it must be an absolute path to an existing directory. If unsure whether the path exists, use `BashCommandTool` with `ls` first.
+   - When `path` is specified, it must be an absolute path to an existing directory. If unsure whether the path exists, use `ShellCommandTool` with `ls` first.
 
 ## USAGE
   - `pattern` argument is required. Glob pattern matched against filenames (e.g. `**/*.py`, `src/**/*.{ts,tsx}`).
@@ -18,7 +18,7 @@ Before searching, please follow these steps:
 ## **VERY IMPORTANT**
 - This tool is for **filename**-based search only. For content search inside files, use `GrepTool`.
 - For open-ended multi-iteration filename hunts, delegate to a subagent rather than calling GlobTool repeatedly.
-- Prefer this tool over `BashCommandTool` with `find`: `find` is slower and does not sort by mtime.
+- Prefer this tool over `ShellCommandTool` with `find`: `find` is slower and does not sort by mtime.
 - When no files match, the tool returns an empty result — this is NOT an error. Do not retry with different patterns unless you have concrete reason to believe matching files exist.
 - Results are sorted by modification time **descending** (most recently modified first), so recent edits surface at the top of the list.
 

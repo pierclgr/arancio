@@ -2,8 +2,7 @@
 
 from enum import Enum
 
-from arancio.core.tools.commands.bash import BashCommandTool
-from arancio.core.tools.commands.powershell import PowershellCommandTool
+from arancio.core.tools.commands.shell import ShellCommandTool
 from arancio.core.tools.files.edit import EditFileTool
 from arancio.core.tools.files.glob import GlobTool
 from arancio.core.tools.files.grep import GrepTool
@@ -44,7 +43,7 @@ class PermissionCategory(Enum):
     READ = frozenset({ReadFileTool, GlobTool, GrepTool})
     WRITE = frozenset({WriteFileTool, EditFileTool})
     WEB = frozenset({SearchWebTool, FetchWebTool})
-    EXECUTE = frozenset({BashCommandTool, PowershellCommandTool})
+    EXECUTE = frozenset({ShellCommandTool})
 
     @classmethod
     def for_tool(cls, tool_name: str) -> "PermissionCategory | None":
