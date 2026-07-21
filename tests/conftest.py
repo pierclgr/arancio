@@ -13,5 +13,4 @@ from arancio.core.tools import base as tools_base
 
 _REPO_HARNESS = Path(__file__).resolve().parent.parent / "harness"
 
-tools_base.HARNESS_DIR_ROOT_PATH = _REPO_HARNESS
 tools_base.TOOLS_HARNESS_PATH = _REPO_HARNESS / "tools"

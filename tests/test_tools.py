@@ -883,7 +883,7 @@ def test_tool_instance_loads_description_from_harness_dir() -> None:
     expected_file = DynamicMarkdownFile(
         harness_root / "tools/powershell_command_tool/description.md"
     )
-    expected_file.parse(base_dir=harness_root, tool=tool)
+    expected_file.parse(tool=tool)
     assert tool.description == expected_file.content
 
 
@@ -902,7 +902,7 @@ def test_tool_instance_schema_carries_loaded_attrs() -> None:
     harness_root = Path("harness")
     tool_dir = harness_root / "tools/powershell_command_tool"
     expected_description_file = DynamicMarkdownFile(tool_dir / "description.md")
-    expected_description_file.parse(base_dir=harness_root, tool=tool)
+    expected_description_file.parse(tool=tool)
     expected_input_schema_raw = yaml.safe_load(
         (tool_dir / "input_schema.yml").read_text()
     )

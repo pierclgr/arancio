@@ -7,7 +7,6 @@ import yaml
 from dynamic_markdown.types.files.base import DynamicMarkdownFile
 
 from arancio.core.constants.path.base import (
-    HARNESS_DIR_ROOT_PATH,
     TOOL_DESCRIPTION_FILENAME,
     TOOL_INPUT_SCHEMA_FILENAME,
     TOOLS_HARNESS_PATH,
@@ -51,10 +50,10 @@ class BaseTool(ABC):
         Reads ``description.md`` and ``input_schema.yml`` from
         ``harness/tools/<snake_name>/`` and stores them as instance
         attributes. The description is parsed as dynamic markdown:
-        ``<include>``, ``<field>`` and ``<script>`` tags are expanded
-        with ``base_dir`` set to the harness root directory (so
-        ``<include>`` paths are resolved relative to ``harness/``) and
-        the tool instance as the field source.
+        ``<include>``/``@path``, ``<field>`` and ``<script>`` tags are
+        expanded with the tool instance as the field source; relative
+        include and script targets resolve against ``description.md``'s
+        own directory.
 
         Args:
             session: optional :class:`ToolSession` to override the
@@ -79,7 +78,7 @@ class BaseTool(ABC):
         self._description_file = DynamicMarkdownFile(
             self._harness_dir / TOOL_DESCRIPTION_FILENAME
         )
-        self._description_file.parse(base_dir=HARNESS_DIR_ROOT_PATH, tool=self)
+        self._description_file.parse(tool=self)
         self.description = self._description_file.content
 
         raw_input_schema = yaml.safe_load(
