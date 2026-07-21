@@ -104,8 +104,9 @@ def test_shell_command_parser_honors_explicit_error_flag() -> None:
 
 
 def test_read_tool_parser_formats_successful_slice() -> None:
-    """Read tool output is rendered with a footer summarizing the slice."""
+    """Read tool output is rendered with the file path and a slice footer."""
     output = {
+        "file_path": "/abs/file.txt",
         "content": "     1\thello\n     2\tworld",
         "start_line": 1,
         "end_line": 2,
@@ -118,13 +119,14 @@ def test_read_tool_parser_formats_successful_slice() -> None:
     assert result == ToolResultMessage(
         content=output,
         id="call_1",
-        display_text="     1\thello\n     2\tworld\n[lines 1-2 of 2]",
+        display_text="/abs/file.txt\n     1\thello\n     2\tworld\n[lines 1-2 of 2]",
     )
 
 
 def test_read_tool_parser_marks_empty_file() -> None:
-    """Empty files are surfaced with an explicit marker."""
+    """Empty files are surfaced with the file path and an explicit marker."""
     output = {
+        "file_path": "/abs/file.txt",
         "content": "",
         "start_line": 0,
         "end_line": 0,
@@ -137,13 +139,14 @@ def test_read_tool_parser_marks_empty_file() -> None:
     assert result == ToolResultMessage(
         content=output,
         id="call_1",
-        display_text="[empty file]",
+        display_text="/abs/file.txt\n[empty file]",
     )
 
 
 def test_read_tool_parser_marks_offset_past_end() -> None:
-    """Offsets past the last line yield a descriptive marker."""
+    """Offsets past the last line yield the file path and a descriptive marker."""
     output = {
+        "file_path": "/abs/file.txt",
         "content": "",
         "start_line": 0,
         "end_line": 0,
@@ -156,13 +159,14 @@ def test_read_tool_parser_marks_offset_past_end() -> None:
     assert result == ToolResultMessage(
         content=output,
         id="call_1",
-        display_text="[no lines returned, file has 5 lines]",
+        display_text="/abs/file.txt\n[no lines returned, file has 5 lines]",
     )
 
 
 def test_read_tool_parser_reports_truncated_lines() -> None:
     """Truncated lines are reported in a trailing footer line."""
     output = {
+        "file_path": "/abs/file.txt",
         "content": "     1\thello… [line truncated]",
         "start_line": 1,
         "end_line": 1,
@@ -176,7 +180,7 @@ def test_read_tool_parser_reports_truncated_lines() -> None:
         content=output,
         id="call_1",
         display_text=(
-            "     1\thello… [line truncated]\n[lines 1-1 of 1]\n"
+            "/abs/file.txt\n     1\thello… [line truncated]\n[lines 1-1 of 1]\n"
             "[1 long lines truncated]"
         ),
     )

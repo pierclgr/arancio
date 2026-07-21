@@ -37,12 +37,13 @@ class ReadFileTool(BaseTool):
                 ``_default_limit`` and is capped at ``_default_limit``.
 
         Returns:
-            A dict with keys ``content`` (str, ``cat -n``-formatted slice),
-            ``start_line`` (int, 1-indexed first returned line or ``0``),
-            ``end_line`` (int, 1-indexed last returned line or ``0``),
-            ``total_lines`` (int, total line count in the file) and
-            ``truncated_lines`` (int, number of returned lines truncated to
-            the per-line character cap).
+            A dict with keys ``file_path`` (str, canonical absolute path),
+            ``content`` (str, ``cat -n``-formatted slice), ``start_line``
+            (int, 1-indexed first returned line or ``0``), ``end_line``
+            (int, 1-indexed last returned line or ``0``), ``total_lines``
+            (int, total line count in the file) and ``truncated_lines``
+            (int, number of returned lines truncated to the per-line
+            character cap).
 
         Raises:
             ValueError: when ``file_path`` is not absolute or when
@@ -94,6 +95,7 @@ class ReadFileTool(BaseTool):
         self._session.record_read(path=canonical, mtime=mtime)
 
         return {
+            "file_path": canonical,
             "content": formatted,
             "start_line": start_idx + 1 if selected else 0,
             "end_line": start_idx + len(selected) if selected else 0,

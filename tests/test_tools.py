@@ -373,8 +373,10 @@ def test_read_tool_reads_full_file_with_line_numbers(tmp_path: Path) -> None:
 
     result = ReadFileTool().call(call_id="call_1", file_path=str(target))
 
+    canonical = str(target.resolve())
     expected_block = "     1\talpha\n     2\tbeta\n     3\tgamma"
     output = {
+        "file_path": canonical,
         "content": expected_block,
         "start_line": 1,
         "end_line": 3,
@@ -384,7 +386,7 @@ def test_read_tool_reads_full_file_with_line_numbers(tmp_path: Path) -> None:
     assert result == ToolResultMessage(
         content=output,
         id="call_1",
-        display_text=f"{expected_block}\n[lines 1-3 of 3]",
+        display_text=f"{canonical}\n{expected_block}\n[lines 1-3 of 3]",
     )
 
 
@@ -400,8 +402,10 @@ def test_read_tool_slices_with_offset_and_limit(tmp_path: Path) -> None:
         limit=2,
     )
 
+    canonical = str(target.resolve())
     expected_block = "     2\tline-2\n     3\tline-3"
     output = {
+        "file_path": canonical,
         "content": expected_block,
         "start_line": 2,
         "end_line": 3,
@@ -411,7 +415,7 @@ def test_read_tool_slices_with_offset_and_limit(tmp_path: Path) -> None:
     assert result == ToolResultMessage(
         content=output,
         id="call_1",
-        display_text=f"{expected_block}\n[lines 2-3 of 5]",
+        display_text=f"{canonical}\n{expected_block}\n[lines 2-3 of 5]",
     )
 
 
@@ -423,9 +427,11 @@ def test_read_tool_truncates_long_lines(tmp_path: Path) -> None:
 
     result = ReadFileTool().call(call_id="call_1", file_path=str(target))
 
+    canonical = str(target.resolve())
     capped = "a" * ReadFileTool._max_line_chars + ReadFileTool._line_truncation_marker
     expected_block = f"     1\t{capped}"
     output = {
+        "file_path": canonical,
         "content": expected_block,
         "start_line": 1,
         "end_line": 1,
@@ -435,7 +441,9 @@ def test_read_tool_truncates_long_lines(tmp_path: Path) -> None:
     assert result == ToolResultMessage(
         content=output,
         id="call_1",
-        display_text=f"{expected_block}\n[lines 1-1 of 1]\n[1 long lines truncated]",
+        display_text=(
+            f"{canonical}\n{expected_block}\n[lines 1-1 of 1]\n[1 long lines truncated]"
+        ),
     )
 
 
@@ -446,7 +454,9 @@ def test_read_tool_handles_empty_file(tmp_path: Path) -> None:
 
     result = ReadFileTool().call(call_id="call_1", file_path=str(target))
 
+    canonical = str(target.resolve())
     output = {
+        "file_path": canonical,
         "content": "",
         "start_line": 0,
         "end_line": 0,
@@ -456,7 +466,7 @@ def test_read_tool_handles_empty_file(tmp_path: Path) -> None:
     assert result == ToolResultMessage(
         content=output,
         id="call_1",
-        display_text="[empty file]",
+        display_text=f"{canonical}\n[empty file]",
     )
 
 
