@@ -477,19 +477,27 @@ def test_read_tool_expands_md_file_via_dynamic_markdown(tmp_path: Path) -> None:
     result = ReadFileTool().call(call_id="call_1", file_path=str(target))
 
     canonical = str(target.resolve())
-    expected_block = "     1\tbefore included after"
+    expanded = DynamicMarkdownFile(target)
+    expanded.parse()
+    expected_lines = expanded.content.splitlines()
+    expected_block = "\n".join(
+        f"{i:>6}\t{line}" for i, line in enumerate(expected_lines, start=1)
+    )
     output = {
         "file_path": canonical,
         "content": expected_block,
         "start_line": 1,
-        "end_line": 1,
-        "total_lines": 1,
+        "end_line": len(expected_lines),
+        "total_lines": len(expected_lines),
         "truncated_lines": 0,
     }
     assert result == ToolResultMessage(
         content=output,
         id="call_1",
-        display_text=f"{canonical}\n{expected_block}\n[lines 1-1 of 1]",
+        display_text=(
+            f"{canonical}\n{expected_block}"
+            f"\n[lines 1-{len(expected_lines)} of {len(expected_lines)}]"
+        ),
     )
 
 
