@@ -79,12 +79,25 @@ def test_resolve_prompt_leaves_non_resolving_mention_unchanged(
     }
 
 
-def test_resolve_prompt_directory_target_is_not_a_mention(tmp_path: Path) -> None:
-    """A mention pointing at a directory, not a file, is left unchanged."""
+def test_resolve_prompt_directory_target_resolves_as_a_mention(tmp_path: Path) -> None:
+    """A mention pointing at an existing directory resolves like a file mention."""
     directory = tmp_path / "adir"
     directory.mkdir()
 
     prompt = f"see @{directory} please"
+    action_kwargs = PromptManager.resolve_prompt(prompt)
+
+    assert action_kwargs == {
+        "prompt": f"see @{directory} please",
+        "mentions": [directory],
+    }
+
+
+def test_resolve_prompt_missing_path_is_not_a_mention(tmp_path: Path) -> None:
+    """A mention pointing at neither a file nor a directory is left unchanged."""
+    missing = tmp_path / "missing"
+
+    prompt = f"see @{missing} please"
     action_kwargs = PromptManager.resolve_prompt(prompt)
 
     assert action_kwargs == {"prompt": prompt, "mentions": []}

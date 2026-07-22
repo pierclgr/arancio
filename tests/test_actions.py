@@ -611,6 +611,41 @@ def test_execute_prompt_action_resolves_mention_and_injects_read_pair(
     assert agent.received_prelude == [call, result]
 
 
+def test_execute_prompt_action_directory_mention_lists_via_shell(
+    tmp_path: Path,
+) -> None:
+    """A directory @mention injects a ShellCommandTool listing call/result pair.
+
+    Unlike a glob-based file search, this must show subdirectory names too, not just
+    files, since it's meant to mirror a plain directory listing.
+    """
+    directory = tmp_path / "adir"
+    nested = directory / "subdir"
+    nested.mkdir(parents=True)
+    (directory / "top.txt").write_text("top")
+    reply = AssistantMessage(content="ok")
+    agent = _RecordingAgent(reply)
+    executor = ActionExecutor(
+        agent=agent,
+        application=_RecordingApplication(),
+        settings_manager=_RecordingSettingsManager(),
+    )
+    action = PromptAction(prompt=f"see @{directory}", mentions=[directory])
+
+    messages = list(executor.execute(action))
+
+    call, result, final = messages
+    assert isinstance(call, ToolCallMessage)
+    assert call.name == "ShellCommandTool"
+    assert str(directory) in call.arguments["command"]
+    assert isinstance(result, ToolResultMessage)
+    assert result.id == call.id
+    stdout = result.content["stdout"]
+    assert "top.txt" in stdout
+    assert "subdir" in stdout
+    assert final == reply
+
+
 def test_execute_prompt_action_md_mention_uses_dynamic_markdown(
     tmp_path: Path,
 ) -> None:

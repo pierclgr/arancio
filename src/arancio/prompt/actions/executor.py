@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import inspect
 import json
+import platform
+import shlex
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -19,6 +21,7 @@ from arancio.core.messages import (
     ToolCallMessage,
     UserMessage,
 )
+from arancio.core.tools.commands.shell import ShellCommandTool
 from arancio.core.tools.files.read import ReadFileTool
 from arancio.prompt.actions.constants import INJECTABLE_COMMAND_PARAMETERS
 from arancio.prompt.actions.types import BaseAction, CommandAction, PromptAction
@@ -42,6 +45,7 @@ class ActionExecutor:
     # shared across every instance so resolving @mentions doesn't reload the
     # harness files on every prompt
     _read_file_tool: ReadFileTool = ReadFileTool()
+    _shell_command_tool: ShellCommandTool = ShellCommandTool()
 
     def __init__(
         self, agent: Agent, application: App, settings_manager: SettingsManager
@@ -156,10 +160,11 @@ class ActionExecutor:
             action: the prompt action to send.
 
         Yields:
-            A synthesized ReadFileTool call/result pair per resolved
-            @mention (in prompt order), then the agent's message stream for
-            the prompt, or an :class:`ErrorMessage` when no provider or
-            model name is configured yet.
+            A synthesized ReadFileTool (file mention) or ShellCommandTool
+            (directory mention, listed with ``ls -la``) call/result pair
+            per resolved @mention, in prompt order, then the agent's
+            message stream for the prompt, or an :class:`ErrorMessage` when
+            no provider or model name is configured yet.
         """
         try:
             self._settings_manager.settings.model_id
@@ -171,14 +176,17 @@ class ActionExecutor:
 
     @classmethod
     def _resolve_mentions(cls, mentions: list[Path]) -> list[Message]:
-        """Synthesize a ReadFileTool call/result pair for each resolved @mention.
+        """Synthesize a tool call/result pair for each resolved @mention.
 
         Bypasses :class:`arancio.core.permissions.manager.PermissionManager`
         entirely: the user's own explicit mention is itself sufficient
-        consent, regardless of the granted READ permission level. Each target
-        is read via a real :class:`ReadFileTool` instance, reusing its disk
-        read (or, for a ``.md`` target, its dynamic-markdown expansion),
-        line-numbering, truncation and session bookkeeping unchanged.
+        consent, regardless of the granted READ permission level. A file
+        target is read via a real :class:`ReadFileTool` instance, reusing
+        its disk read (or, for a ``.md`` target, its dynamic-markdown
+        expansion), line-numbering, truncation and session bookkeeping
+        unchanged. A directory target is listed via a real
+        :class:`ShellCommandTool` instance running ``ls -la`` (or the
+        PowerShell equivalent on Windows) against the directory.
 
         Args:
             mentions: resolved absolute paths for the prompt's @mentions, in
@@ -186,9 +194,9 @@ class ActionExecutor:
 
         Returns:
             A flat list alternating a ``ToolCallMessage`` named
-            ``"ReadFileTool"`` and its paired ``ToolResultMessage``/
-            ``ToolErrorMessage``, one pair per mention, in the same order as
-            ``mentions``.
+            ``"ReadFileTool"`` or ``"ShellCommandTool"`` and its paired
+            ``ToolResultMessage``/``ToolErrorMessage``, one pair per
+            mention, in the same order as ``mentions``.
         """
         if not mentions:
             return []
@@ -196,16 +204,25 @@ class ActionExecutor:
         messages: list[Message] = []
         for target in mentions:
             call_id = f"mention_{uuid.uuid4().hex}"
-            arguments = {"file_path": str(target)}
+            if target.is_dir():
+                name = "ShellCommandTool"
+                if platform.system() == "Windows":
+                    command = f'Get-ChildItem -Force -LiteralPath "{target}"'
+                else:
+                    command = f"ls -la -- {shlex.quote(str(target))}"
+                arguments = {"command": command}
+                result = cls._shell_command_tool.call(call_id=call_id, **arguments)
+            else:
+                name = "ReadFileTool"
+                arguments = {"file_path": str(target)}
+                result = cls._read_file_tool.call(call_id=call_id, **arguments)
             messages.append(
                 ToolCallMessage(
-                    content=f"ReadFileTool({json.dumps(arguments)})",
+                    content=f"{name}({json.dumps(arguments)})",
                     id=call_id,
-                    name="ReadFileTool",
+                    name=name,
                     arguments=arguments,
                 )
             )
-            messages.append(
-                cls._read_file_tool.call(call_id=call_id, file_path=str(target))
-            )
+            messages.append(result)
         return messages

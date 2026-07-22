@@ -994,8 +994,6 @@ def test_agent_full_permission_manager_builds_all_tools() -> None:
         "ReadFileTool",
         "WriteFileTool",
         "EditFileTool",
-        "GlobTool",
-        "GrepTool",
         "ShellCommandTool",
         "SearchWebTool",
         "FetchWebTool",
@@ -1011,7 +1009,7 @@ def test_agent_add_permission_rebuilds_catalog() -> None:
 
     agent.add_permission(PermissionCategory.READ)
 
-    assert {"ReadFileTool", "GlobTool", "GrepTool"} <= set(agent._tools)
+    assert {"ReadFileTool"} <= set(agent._tools)
 
 
 def test_agent_remove_permission_rebuilds_catalog() -> None:
@@ -1022,7 +1020,7 @@ def test_agent_remove_permission_rebuilds_catalog() -> None:
             {PermissionCategory.READ: PermissionLevel.ASK}
         ),
     )
-    assert set(agent._tools) == {"ReadFileTool", "GlobTool", "GrepTool"}
+    assert set(agent._tools) == {"ReadFileTool"}
 
     agent.remove_permission(PermissionCategory.READ)
 

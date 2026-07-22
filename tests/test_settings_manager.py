@@ -89,7 +89,7 @@ def test_apply_pushes_settings_into_live_objects():
     assert agent.retry_delay_multiplier == 4.0
     # only READ granted: the catalog rebuilds to the read tools alone
     tool_names = {type(tool).__name__ for tool in agent._tools.values()}
-    assert tool_names == {"ReadFileTool", "GlobTool", "GrepTool"}
+    assert tool_names == {"ReadFileTool"}
 
 
 def test_load_creates_defaults_and_applies(monkeypatch, tmp_path):
@@ -107,7 +107,7 @@ def test_load_creates_defaults_and_applies(monkeypatch, tmp_path):
     assert client.model_id is None
     assert agent.max_turns == Settings.default().max_turns
     # every category granted at ASK: the full tool catalog is built
-    assert len(agent._tools) == 8
+    assert len(agent._tools) == 6
 
 
 def test_load_falls_back_on_invalid_field_and_applies_default(monkeypatch, tmp_path):
