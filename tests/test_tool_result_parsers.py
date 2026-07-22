@@ -3,8 +3,6 @@
 from arancio.core.messages import ToolErrorMessage, ToolResultMessage
 from arancio.core.parsers.tool_result.commands.shell import ShellCommandToolResultParser
 from arancio.core.parsers.tool_result.files.edit import EditFileToolResultParser
-from arancio.core.parsers.tool_result.files.glob import GlobToolResultParser
-from arancio.core.parsers.tool_result.files.grep import GrepToolResultParser
 from arancio.core.parsers.tool_result.files.read import ReadFileToolResultParser
 from arancio.core.parsers.tool_result.files.write import WriteFileToolResultParser
 from arancio.core.parsers.tool_result.web.fetch import FetchWebToolResultParser
@@ -104,8 +102,9 @@ def test_shell_command_parser_honors_explicit_error_flag() -> None:
 
 
 def test_read_tool_parser_formats_successful_slice() -> None:
-    """Read tool output is rendered with a footer summarizing the slice."""
+    """Read tool output is rendered with the file path and a slice footer."""
     output = {
+        "file_path": "/abs/file.txt",
         "content": "     1\thello\n     2\tworld",
         "start_line": 1,
         "end_line": 2,
@@ -118,13 +117,14 @@ def test_read_tool_parser_formats_successful_slice() -> None:
     assert result == ToolResultMessage(
         content=output,
         id="call_1",
-        display_text="     1\thello\n     2\tworld\n[lines 1-2 of 2]",
+        display_text="/abs/file.txt\n     1\thello\n     2\tworld\n[lines 1-2 of 2]",
     )
 
 
 def test_read_tool_parser_marks_empty_file() -> None:
-    """Empty files are surfaced with an explicit marker."""
+    """Empty files are surfaced with the file path and an explicit marker."""
     output = {
+        "file_path": "/abs/file.txt",
         "content": "",
         "start_line": 0,
         "end_line": 0,
@@ -137,13 +137,14 @@ def test_read_tool_parser_marks_empty_file() -> None:
     assert result == ToolResultMessage(
         content=output,
         id="call_1",
-        display_text="[empty file]",
+        display_text="/abs/file.txt\n[empty file]",
     )
 
 
 def test_read_tool_parser_marks_offset_past_end() -> None:
-    """Offsets past the last line yield a descriptive marker."""
+    """Offsets past the last line yield the file path and a descriptive marker."""
     output = {
+        "file_path": "/abs/file.txt",
         "content": "",
         "start_line": 0,
         "end_line": 0,
@@ -156,13 +157,14 @@ def test_read_tool_parser_marks_offset_past_end() -> None:
     assert result == ToolResultMessage(
         content=output,
         id="call_1",
-        display_text="[no lines returned, file has 5 lines]",
+        display_text="/abs/file.txt\n[no lines returned, file has 5 lines]",
     )
 
 
 def test_read_tool_parser_reports_truncated_lines() -> None:
     """Truncated lines are reported in a trailing footer line."""
     output = {
+        "file_path": "/abs/file.txt",
         "content": "     1\thello… [line truncated]",
         "start_line": 1,
         "end_line": 1,
@@ -176,7 +178,7 @@ def test_read_tool_parser_reports_truncated_lines() -> None:
         content=output,
         id="call_1",
         display_text=(
-            "     1\thello… [line truncated]\n[lines 1-1 of 1]\n"
+            "/abs/file.txt\n     1\thello… [line truncated]\n[lines 1-1 of 1]\n"
             "[1 long lines truncated]"
         ),
     )
@@ -314,268 +316,6 @@ def test_edit_tool_parser_honors_explicit_error_flag() -> None:
     output = "Error while executing EditFileTool: boom"
 
     result = EditFileToolResultParser.parse(
-        call_id="call_1",
-        output=output,
-        is_error=True,
-    )
-
-    assert result == ToolErrorMessage(
-        content=output,
-        id="call_1",
-    )
-
-
-# — GrepToolResultParser ——————————————————————————————————————————————
-
-
-def test_grep_parser_files_with_matches() -> None:
-    """Files-with-matches output is formatted with one path per line and a footer."""
-    output = {
-        "matches": ["/abs/a.py", "/abs/b.py"],
-        "total_matches": 2,
-        "truncated": False,
-        "timed_out": False,
-        "exit_code": 0,
-        "output_mode": "files_with_matches",
-    }
-
-    result = GrepToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="/abs/a.py\n/abs/b.py\n[2 files matched]",
-    )
-
-
-def test_grep_parser_content_mode() -> None:
-    """Content mode formats entries as file:line:text with a summary footer."""
-    output = {
-        "matches": [
-            {
-                "file": "/abs/a.py",
-                "line": 3,
-                "content": "def foo():",
-                "is_context": False,
-            },
-            {
-                "file": "/abs/b.py",
-                "line": 7,
-                "content": "def bar():",
-                "is_context": False,
-            },
-        ],
-        "total_matches": 2,
-        "truncated": False,
-        "timed_out": False,
-        "exit_code": 0,
-        "output_mode": "content",
-    }
-
-    result = GrepToolResultParser.parse(call_id="call_1", output=output)
-
-    expected = (
-        "/abs/a.py:3:def foo():\n/abs/b.py:7:def bar():\n[2 matches across 2 files]"
-    )
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text=expected,
-    )
-
-
-def test_grep_parser_count_mode() -> None:
-    """Count mode formats entries as file:N with a summary footer."""
-    output = {
-        "matches": [
-            {"file": "/abs/a.py", "count": 5},
-            {"file": "/abs/b.py", "count": 3},
-        ],
-        "total_matches": 2,
-        "truncated": False,
-        "timed_out": False,
-        "exit_code": 0,
-        "output_mode": "count",
-    }
-
-    result = GrepToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="/abs/a.py:5\n/abs/b.py:3\n[2 files with matches]",
-    )
-
-
-def test_grep_parser_truncated_output() -> None:
-    """Truncated output includes a different footer indicating the cap."""
-    output = {
-        "matches": ["/abs/a.py"],
-        "total_matches": 42,
-        "truncated": True,
-        "timed_out": False,
-        "exit_code": 0,
-        "output_mode": "files_with_matches",
-    }
-
-    result = GrepToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="/abs/a.py\n[output truncated, showing first 1 of 42]",
-    )
-
-
-def test_grep_parser_timeout() -> None:
-    """Timed-out results are surfaced as tool errors."""
-    output = {
-        "matches": [],
-        "total_matches": 0,
-        "truncated": False,
-        "timed_out": True,
-        "exit_code": -1,
-        "output_mode": "content",
-    }
-
-    result = GrepToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolErrorMessage(
-        content=output,
-        id="call_1",
-        display_text="[0 matches across 0 files]\n[timed out]",
-    )
-
-
-def test_grep_parser_explicit_error_flag() -> None:
-    """Explicit tool execution errors are preserved by the grep parser."""
-    output = "Error while executing GrepTool: boom"
-
-    result = GrepToolResultParser.parse(
-        call_id="call_1",
-        output=output,
-        is_error=True,
-    )
-
-    assert result == ToolErrorMessage(
-        content=output,
-        id="call_1",
-    )
-
-
-# — GlobToolResultParser ——————————————————————————————————————————————
-
-
-def test_glob_parser_formats_matches_with_footer() -> None:
-    """Successful glob output is rendered as paths plus an mtime footer."""
-    output = {
-        "matches": ["/abs/b.py", "/abs/a.py"],
-        "total_matches": 2,
-        "truncated": False,
-        "timed_out": False,
-        "exit_code": 0,
-        "search_path": "/abs",
-        "pattern": "*.py",
-    }
-
-    result = GlobToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="/abs/b.py\n/abs/a.py\n[2 files matched, sorted by mtime]",
-    )
-
-
-def test_glob_parser_empty_match() -> None:
-    """Empty match dicts render as a single ``[no files matched]`` marker."""
-    output = {
-        "matches": [],
-        "total_matches": 0,
-        "truncated": False,
-        "timed_out": False,
-        "exit_code": 1,
-        "search_path": "/abs",
-        "pattern": "*.nope",
-    }
-
-    result = GlobToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="[no files matched]",
-    )
-
-
-def test_glob_parser_singular_noun() -> None:
-    """A single match uses the singular ``file`` noun in the footer."""
-    output = {
-        "matches": ["/abs/only.py"],
-        "total_matches": 1,
-        "truncated": False,
-        "timed_out": False,
-        "exit_code": 0,
-        "search_path": "/abs",
-        "pattern": "*.py",
-    }
-
-    result = GlobToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="/abs/only.py\n[1 file matched, sorted by mtime]",
-    )
-
-
-def test_glob_parser_truncated_output() -> None:
-    """Truncated output uses the truncation footer with the original total."""
-    output = {
-        "matches": ["/abs/a.py"],
-        "total_matches": 42,
-        "truncated": True,
-        "timed_out": False,
-        "exit_code": 0,
-        "search_path": "/abs",
-        "pattern": "*.py",
-    }
-
-    result = GlobToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="/abs/a.py\n[output truncated, showing first 1 of 42]",
-    )
-
-
-def test_glob_parser_timeout() -> None:
-    """Timed-out results are surfaced as tool errors with the ``[timed out]`` tag."""
-    output = {
-        "matches": [],
-        "total_matches": 0,
-        "truncated": False,
-        "timed_out": True,
-        "exit_code": -1,
-        "search_path": "/abs",
-        "pattern": "*.py",
-    }
-
-    result = GlobToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolErrorMessage(
-        content=output,
-        id="call_1",
-        display_text="[no files matched]\n[timed out]",
-    )
-
-
-def test_glob_parser_explicit_error_flag() -> None:
-    """Explicit tool execution errors are preserved by the glob parser."""
-    output = "Error while executing GlobTool: boom"
-
-    result = GlobToolResultParser.parse(
         call_id="call_1",
         output=output,
         is_error=True,

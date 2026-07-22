@@ -4,8 +4,6 @@ from enum import Enum
 
 from arancio.core.tools.commands.shell import ShellCommandTool
 from arancio.core.tools.files.edit import EditFileTool
-from arancio.core.tools.files.glob import GlobTool
-from arancio.core.tools.files.grep import GrepTool
 from arancio.core.tools.files.read import ReadFileTool
 from arancio.core.tools.files.write import WriteFileTool
 from arancio.core.tools.web.fetch import FetchWebTool
@@ -34,13 +32,13 @@ class PermissionCategory(Enum):
     category through its import rather than leaving a stale string behind.
 
     Attributes:
-        READ: tools that read files or directory contents.
+        READ: tools that read file contents.
         WRITE: tools that create, write or edit files.
         WEB: tools that access the web.
         EXECUTE: tools that run terminal commands.
     """
 
-    READ = frozenset({ReadFileTool, GlobTool, GrepTool})
+    READ = frozenset({ReadFileTool})
     WRITE = frozenset({WriteFileTool, EditFileTool})
     WEB = frozenset({SearchWebTool, FetchWebTool})
     EXECUTE = frozenset({ShellCommandTool})

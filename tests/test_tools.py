@@ -20,8 +20,6 @@ from arancio.core.parsers.tool_result.base import BaseToolResultParser
 from arancio.core.tools.base import BaseTool
 from arancio.core.tools.commands.shell import ShellCommandTool
 from arancio.core.tools.files.edit import EditFileTool
-from arancio.core.tools.files.glob import GlobTool
-from arancio.core.tools.files.grep import GrepTool
 from arancio.core.tools.files.read import ReadFileTool
 from arancio.core.tools.files.write import WriteFileTool
 from arancio.core.tools.schema import ToolSchema
@@ -373,8 +371,10 @@ def test_read_tool_reads_full_file_with_line_numbers(tmp_path: Path) -> None:
 
     result = ReadFileTool().call(call_id="call_1", file_path=str(target))
 
+    canonical = str(target.resolve())
     expected_block = "     1\talpha\n     2\tbeta\n     3\tgamma"
     output = {
+        "file_path": canonical,
         "content": expected_block,
         "start_line": 1,
         "end_line": 3,
@@ -384,7 +384,7 @@ def test_read_tool_reads_full_file_with_line_numbers(tmp_path: Path) -> None:
     assert result == ToolResultMessage(
         content=output,
         id="call_1",
-        display_text=f"{expected_block}\n[lines 1-3 of 3]",
+        display_text=f"{canonical}\n{expected_block}\n[lines 1-3 of 3]",
     )
 
 
@@ -400,8 +400,10 @@ def test_read_tool_slices_with_offset_and_limit(tmp_path: Path) -> None:
         limit=2,
     )
 
+    canonical = str(target.resolve())
     expected_block = "     2\tline-2\n     3\tline-3"
     output = {
+        "file_path": canonical,
         "content": expected_block,
         "start_line": 2,
         "end_line": 3,
@@ -411,7 +413,7 @@ def test_read_tool_slices_with_offset_and_limit(tmp_path: Path) -> None:
     assert result == ToolResultMessage(
         content=output,
         id="call_1",
-        display_text=f"{expected_block}\n[lines 2-3 of 5]",
+        display_text=f"{canonical}\n{expected_block}\n[lines 2-3 of 5]",
     )
 
 
@@ -423,9 +425,11 @@ def test_read_tool_truncates_long_lines(tmp_path: Path) -> None:
 
     result = ReadFileTool().call(call_id="call_1", file_path=str(target))
 
+    canonical = str(target.resolve())
     capped = "a" * ReadFileTool._max_line_chars + ReadFileTool._line_truncation_marker
     expected_block = f"     1\t{capped}"
     output = {
+        "file_path": canonical,
         "content": expected_block,
         "start_line": 1,
         "end_line": 1,
@@ -435,7 +439,9 @@ def test_read_tool_truncates_long_lines(tmp_path: Path) -> None:
     assert result == ToolResultMessage(
         content=output,
         id="call_1",
-        display_text=f"{expected_block}\n[lines 1-1 of 1]\n[1 long lines truncated]",
+        display_text=(
+            f"{canonical}\n{expected_block}\n[lines 1-1 of 1]\n[1 long lines truncated]"
+        ),
     )
 
 
@@ -446,7 +452,9 @@ def test_read_tool_handles_empty_file(tmp_path: Path) -> None:
 
     result = ReadFileTool().call(call_id="call_1", file_path=str(target))
 
+    canonical = str(target.resolve())
     output = {
+        "file_path": canonical,
         "content": "",
         "start_line": 0,
         "end_line": 0,
@@ -456,8 +464,55 @@ def test_read_tool_handles_empty_file(tmp_path: Path) -> None:
     assert result == ToolResultMessage(
         content=output,
         id="call_1",
-        display_text="[empty file]",
+        display_text=f"{canonical}\n[empty file]",
     )
+
+
+def test_read_tool_expands_md_file_via_dynamic_markdown(tmp_path: Path) -> None:
+    """A .md file is expanded through dynamic_markdown before line numbering."""
+    (tmp_path / "other.md").write_text("included")
+    target = tmp_path / "doc.md"
+    target.write_text("before <include>other.md</include> after")
+
+    result = ReadFileTool().call(call_id="call_1", file_path=str(target))
+
+    canonical = str(target.resolve())
+    expected_block = "     1\tbefore included after"
+    output = {
+        "file_path": canonical,
+        "content": expected_block,
+        "start_line": 1,
+        "end_line": 1,
+        "total_lines": 1,
+        "truncated_lines": 0,
+    }
+    assert result == ToolResultMessage(
+        content=output,
+        id="call_1",
+        display_text=f"{canonical}\n{expected_block}\n[lines 1-1 of 1]",
+    )
+
+
+def test_read_tool_non_md_file_is_not_expanded(tmp_path: Path) -> None:
+    """A non-.md file containing dynamic-markdown-like tags is read raw."""
+    target = tmp_path / "doc.txt"
+    target.write_text("before <include>other.md</include> after")
+
+    result = ReadFileTool().call(call_id="call_1", file_path=str(target))
+
+    assert "<include>other.md</include>" in result.content["content"]
+
+
+def test_read_tool_md_file_with_unresolvable_field_tag_raises(tmp_path: Path) -> None:
+    """A .md file's dynamic-markdown expansion failure surfaces as a tool error."""
+    target = tmp_path / "doc.md"
+    target.write_text("<field>name</field>")
+
+    result = ReadFileTool().call(call_id="call_1", file_path=str(target))
+
+    assert isinstance(result, ToolErrorMessage)
+    assert "Error while executing ReadFileTool" in result.content
+    assert "requires a field_source" in result.content
 
 
 def test_read_tool_rejects_relative_paths() -> None:
@@ -1028,571 +1083,6 @@ def test_tool_instance_schema_carries_loaded_attrs() -> None:
         description=expected_description_file.content,
         input_schema=expected_input_schema,
     )
-
-
-# — GrepTool ——————————————————————————————————————————————————————————
-
-
-def test_grep_tool_files_with_matches_default(tmp_path: Path) -> None:
-    """Default mode returns only matching file paths."""
-    target = tmp_path / "greptest"
-    target.mkdir()
-    (target / "a.py").write_text("def foo():\n    pass\n")
-    (target / "b.py").write_text("x = 1\n")
-    (target / "c.txt").write_text("not python\n")
-
-    result = GrepTool().call(
-        call_id="call_1",
-        pattern=r"def\s+\w+",
-        path=str(target),
-        output_mode="files_with_matches",
-    )
-
-    canonical_a = str((target / "a.py").resolve())
-    output = result.content
-    assert output["output_mode"] == "files_with_matches"
-    assert canonical_a in output["matches"]
-    assert output["total_matches"] == 1
-    assert output["truncated"] is False
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text=f"{canonical_a}\n[1 file matched]",
-    )
-
-
-def test_grep_tool_content_mode(tmp_path: Path) -> None:
-    """Content mode returns matching lines with file, line number and content."""
-    target = tmp_path / "greptest"
-    target.mkdir()
-    (target / "app.py").write_text("def alpha():\n    pass\n\ndef beta():\n    pass\n")
-
-    result = GrepTool().call(
-        call_id="call_1",
-        pattern=r"def\s+\w+",
-        path=str(target),
-        output_mode="content",
-    )
-
-    canonical = str((target / "app.py").resolve())
-    output = result.content
-    assert output["output_mode"] == "content"
-    assert output["matches"] == [
-        {"file": canonical, "line": 1, "content": "def alpha():", "is_context": False},
-        {"file": canonical, "line": 4, "content": "def beta():", "is_context": False},
-    ]
-    assert output["total_matches"] == 2
-
-
-def test_grep_tool_count_mode(tmp_path: Path) -> None:
-    """Count mode returns match counts per file."""
-    target = tmp_path / "greptest"
-    target.mkdir()
-    (target / "f.py").write_text("foo\nfoo\nfoo\nbar\nfoo\n")
-
-    result = GrepTool().call(
-        call_id="call_1",
-        pattern="foo",
-        path=str(target),
-        output_mode="count",
-    )
-
-    canonical = str((target / "f.py").resolve())
-    output = result.content
-    assert output["output_mode"] == "count"
-    assert output["matches"] == [
-        {"file": canonical, "count": 4},
-    ]
-    assert output["total_matches"] == 1
-
-
-def test_grep_tool_case_insensitive(tmp_path: Path) -> None:
-    """Case insensitive flag matches mixed-case content."""
-    target = tmp_path / "greptest"
-    target.mkdir()
-    (target / "f.py").write_text("Hello World\n")
-
-    result = GrepTool().call(
-        call_id="call_1",
-        pattern="hello",
-        path=str(target),
-        output_mode="files_with_matches",
-        i=True,
-    )
-
-    assert len(result.content["matches"]) == 1
-
-
-def test_grep_tool_glob_filter(tmp_path: Path) -> None:
-    """Glob filter restricts search to matching filenames only."""
-    target = tmp_path / "greptest"
-    target.mkdir()
-    (target / "a.py").write_text("hello\n")
-    (target / "b.txt").write_text("hello\n")
-
-    result = GrepTool().call(
-        call_id="call_1",
-        pattern="hello",
-        path=str(target),
-        output_mode="files_with_matches",
-        glob="*.py",
-    )
-
-    output = result.content
-    assert len(output["matches"]) == 1
-    assert output["matches"][0].endswith("a.py")
-
-
-def test_grep_tool_file_type_filter(tmp_path: Path) -> None:
-    """File type filter restricts search to the given language."""
-    target = tmp_path / "greptest"
-    target.mkdir()
-    (target / "a.py").write_text("hello\n")
-    (target / "b.js").write_text("hello\n")
-
-    result = GrepTool().call(
-        call_id="call_1",
-        pattern="hello",
-        path=str(target),
-        output_mode="files_with_matches",
-        file_type="py",
-    )
-
-    output = result.content
-    assert len(output["matches"]) == 1
-    assert output["matches"][0].endswith("a.py")
-
-
-def test_grep_tool_head_limit_caps_output(tmp_path: Path) -> None:
-    """Head limit truncates output and sets the truncated flag."""
-    target = tmp_path / "greptest"
-    target.mkdir()
-    content = "\n".join(f"line-{i}" for i in range(20))
-    (target / "f.txt").write_text(content + "\n")
-
-    result = GrepTool().call(
-        call_id="call_1",
-        pattern=r"line-\d+",
-        path=str(target),
-        output_mode="content",
-        head_limit=5,
-    )
-
-    output = result.content
-    assert len(output["matches"]) == 5
-    assert output["total_matches"] == 20
-    assert output["truncated"] is True
-    assert "truncated" in result.display_text
-
-
-def test_grep_tool_context_lines(tmp_path: Path) -> None:
-    """Context lines are returned with the ``is_context`` flag set."""
-    target = tmp_path / "greptest"
-    target.mkdir()
-    (target / "f.txt").write_text("before\nmatch\nmiddle\nafter\n")
-
-    result = GrepTool().call(
-        call_id="call_1",
-        pattern="match",
-        path=str(target),
-        output_mode="content",
-        A=1,
-        B=1,
-    )
-
-    output = result.content
-    assert len(output["matches"]) == 3
-    contexts = [m for m in output["matches"] if m["is_context"]]
-    matches = [m for m in output["matches"] if not m["is_context"]]
-    assert len(contexts) == 2
-    assert len(matches) == 1
-    assert matches[0]["content"] == "match"
-
-
-def test_grep_tool_zero_matches(tmp_path: Path) -> None:
-    """Zero matches returns an empty result with exit code 1."""
-    target = tmp_path / "greptest"
-    target.mkdir()
-    (target / "f.txt").write_text("nothing here\n")
-
-    result = GrepTool().call(
-        call_id="call_1",
-        pattern="nonesuch",
-        path=str(target),
-        output_mode="content",
-    )
-
-    output = result.content
-    assert output["matches"] == []
-    assert output["total_matches"] == 0
-    assert output["exit_code"] == 1
-
-
-def test_grep_tool_escaped_literal_braces(tmp_path: Path) -> None:
-    """Literal braces are matched when properly escaped."""
-    target = tmp_path / "greptest"
-    target.mkdir()
-    (target / "f.txt").write_text("interface{}\n")
-
-    result = GrepTool().call(
-        call_id="call_1",
-        pattern=r"interface\{\}",
-        path=str(target),
-        output_mode="files_with_matches",
-    )
-
-    assert len(result.content["matches"]) == 1
-
-
-def test_grep_tool_reports_missing_path() -> None:
-    """Missing paths surface as tool errors."""
-    result = GrepTool().call(
-        call_id="call_1",
-        pattern="hello",
-        path="/nonexistent/path/for/grep",
-    )
-
-    assert isinstance(result, ToolErrorMessage)
-
-
-def test_grep_tool_reports_invalid_pattern() -> None:
-    """Invalid regex patterns surface as tool errors."""
-    result = GrepTool().call(
-        call_id="call_1",
-        pattern="[unclosed",
-    )
-
-    assert isinstance(result, ToolErrorMessage)
-
-
-def test_grep_tool_default_excludes_gitignored(tmp_path: Path) -> None:
-    """Defaults (``ignore_aware=True``) skip files matched by ``.gitignore``."""
-    target = tmp_path / "greptest"
-    target.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=target, check=True)
-    (target / ".gitignore").write_text("*.log\n")
-    (target / "a.log").write_text("hello\n")
-    (target / "b.py").write_text("hello\n")
-
-    result = GrepTool().call(
-        call_id="call_1",
-        pattern="hello",
-        path=str(target),
-        output_mode="files_with_matches",
-    )
-
-    matched_names = {os.path.basename(p) for p in result.content["matches"]}
-    assert "a.log" not in matched_names
-    assert "b.py" in matched_names
-
-
-def test_grep_tool_default_excludes_hidden(tmp_path: Path) -> None:
-    """Defaults (``hidden_aware=True``) skip hidden files."""
-    target = tmp_path / "greptest"
-    target.mkdir()
-    (target / ".hidden").write_text("hello\n")
-    (target / "visible.py").write_text("hello\n")
-
-    result = GrepTool().call(
-        call_id="call_1",
-        pattern="hello",
-        path=str(target),
-        output_mode="files_with_matches",
-    )
-
-    matched_names = {os.path.basename(p) for p in result.content["matches"]}
-    assert ".hidden" not in matched_names
-    assert "visible.py" in matched_names
-
-
-def test_grep_tool_ignore_aware_false_includes_gitignored(tmp_path: Path) -> None:
-    """Passing ``ignore_aware=False`` searches files matched by ``.gitignore``."""
-    target = tmp_path / "greptest"
-    target.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=target, check=True)
-    (target / ".gitignore").write_text("*.log\n")
-    (target / "a.log").write_text("hello\n")
-    (target / "b.py").write_text("hello\n")
-
-    result = GrepTool(ignore_aware=False).call(
-        call_id="call_1",
-        pattern="hello",
-        path=str(target),
-        output_mode="files_with_matches",
-    )
-
-    matched_names = {os.path.basename(p) for p in result.content["matches"]}
-    assert "a.log" in matched_names
-    assert "b.py" in matched_names
-
-
-def test_grep_tool_hidden_aware_false_includes_hidden(tmp_path: Path) -> None:
-    """Passing ``hidden_aware=False`` searches hidden files."""
-    target = tmp_path / "greptest"
-    target.mkdir()
-    (target / ".hidden").write_text("hello\n")
-    (target / "visible.py").write_text("hello\n")
-
-    result = GrepTool(hidden_aware=False).call(
-        call_id="call_1",
-        pattern="hello",
-        path=str(target),
-        output_mode="files_with_matches",
-    )
-
-    matched_names = {os.path.basename(p) for p in result.content["matches"]}
-    assert ".hidden" in matched_names
-    assert "visible.py" in matched_names
-
-
-def test_grep_tool_glob_filter_still_respects_ignore(tmp_path: Path) -> None:
-    """``glob`` filter combined with defaults still excludes gitignored files."""
-    target = tmp_path / "greptest"
-    target.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=target, check=True)
-    (target / ".gitignore").write_text("ignored.py\n")
-    (target / "ignored.py").write_text("hello\n")
-    (target / "kept.py").write_text("hello\n")
-
-    result = GrepTool().call(
-        call_id="call_1",
-        pattern="hello",
-        path=str(target),
-        output_mode="files_with_matches",
-        glob="*.py",
-    )
-
-    matched_names = {os.path.basename(p) for p in result.content["matches"]}
-    assert "ignored.py" not in matched_names
-    assert "kept.py" in matched_names
-
-
-# — GlobTool ——————————————————————————————————————————————————————————
-
-
-def test_glob_tool_returns_matching_paths(tmp_path: Path) -> None:
-    """Default mode returns absolute paths of files matching the glob."""
-    target = tmp_path / "globtest"
-    target.mkdir()
-    (target / "a.py").write_text("x\n")
-    (target / "b.py").write_text("y\n")
-    (target / "c.txt").write_text("z\n")
-
-    result = GlobTool().call(
-        call_id="call_1",
-        pattern="*.py",
-        path=str(target),
-    )
-
-    output = result.content
-    canonical_a = str((target / "a.py").resolve())
-    canonical_b = str((target / "b.py").resolve())
-    assert sorted(output["matches"]) == sorted([canonical_a, canonical_b])
-    assert output["total_matches"] == 2
-    assert output["truncated"] is False
-    assert output["timed_out"] is False
-    assert output["pattern"] == "*.py"
-    assert output["search_path"] == str(target.resolve())
-    assert isinstance(result, ToolResultMessage)
-
-
-def test_glob_tool_recursive_pattern(tmp_path: Path) -> None:
-    """Recursive ``**`` pattern descends into subdirectories."""
-    target = tmp_path / "globtest"
-    nested = target / "a" / "b"
-    nested.mkdir(parents=True)
-    (nested / "deep.py").write_text("x\n")
-
-    result = GlobTool().call(
-        call_id="call_1",
-        pattern="**/*.py",
-        path=str(target),
-    )
-
-    canonical = str((nested / "deep.py").resolve())
-    assert result.content["matches"] == [canonical]
-
-
-def test_glob_tool_sorts_by_mtime_descending(tmp_path: Path) -> None:
-    """Results are sorted by modification time, most recent first."""
-    target = tmp_path / "globtest"
-    target.mkdir()
-    paths = [target / f"f{i}.py" for i in range(3)]
-    for p in paths:
-        p.write_text("x\n")
-
-    os.utime(paths[0], (1_000_000, 1_000_000))
-    os.utime(paths[1], (3_000_000, 3_000_000))
-    os.utime(paths[2], (2_000_000, 2_000_000))
-
-    result = GlobTool().call(
-        call_id="call_1",
-        pattern="*.py",
-        path=str(target),
-    )
-
-    canonicals = [str(p.resolve()) for p in paths]
-    assert result.content["matches"] == [canonicals[1], canonicals[2], canonicals[0]]
-
-
-def test_glob_tool_head_limit_caps_output(tmp_path: Path) -> None:
-    """Head limit truncates output and sets the truncated flag."""
-    target = tmp_path / "globtest"
-    target.mkdir()
-    for i in range(5):
-        (target / f"f{i}.py").write_text("x\n")
-
-    result = GlobTool().call(
-        call_id="call_1",
-        pattern="*.py",
-        path=str(target),
-        head_limit=2,
-    )
-
-    output = result.content
-    assert len(output["matches"]) == 2
-    assert output["total_matches"] == 5
-    assert output["truncated"] is True
-    assert "truncated" in result.display_text
-
-
-def test_glob_tool_zero_matches(tmp_path: Path) -> None:
-    """Zero matches returns an empty result with exit code 1."""
-    target = tmp_path / "globtest"
-    target.mkdir()
-    (target / "f.txt").write_text("x\n")
-
-    result = GlobTool().call(
-        call_id="call_1",
-        pattern="*.nonexistent_ext",
-        path=str(target),
-    )
-
-    output = result.content
-    assert output["matches"] == []
-    assert output["total_matches"] == 0
-    assert output["exit_code"] == 1
-    assert output["truncated"] is False
-    assert result.display_text == "[no files matched]"
-
-
-def test_glob_tool_brace_expansion(tmp_path: Path) -> None:
-    """Brace expansion in the pattern matches multiple extensions."""
-    target = tmp_path / "globtest"
-    target.mkdir()
-    (target / "a.py").write_text("x\n")
-    (target / "b.txt").write_text("y\n")
-    (target / "c.md").write_text("z\n")
-
-    result = GlobTool().call(
-        call_id="call_1",
-        pattern="*.{py,txt}",
-        path=str(target),
-    )
-
-    output = result.content
-    matched_names = {os.path.basename(p) for p in output["matches"]}
-    assert matched_names == {"a.py", "b.txt"}
-
-
-def test_glob_tool_returns_absolute_paths(tmp_path: Path) -> None:
-    """All returned paths are absolute."""
-    target = tmp_path / "globtest"
-    target.mkdir()
-    (target / "f.py").write_text("x\n")
-
-    result = GlobTool().call(
-        call_id="call_1",
-        pattern="*.py",
-        path=str(target),
-    )
-
-    for p in result.content["matches"]:
-        assert os.path.isabs(p)
-
-
-def test_glob_tool_reports_missing_path() -> None:
-    """Missing paths surface as tool errors."""
-    result = GlobTool().call(
-        call_id="call_1",
-        pattern="*.py",
-        path="/nonexistent/path/for/glob",
-    )
-
-    assert isinstance(result, ToolErrorMessage)
-
-
-def test_glob_tool_default_excludes_gitignored(tmp_path: Path) -> None:
-    """Defaults (``ignore_aware=True``) exclude files matched by ``.gitignore``."""
-    target = tmp_path / "globtest"
-    target.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=target, check=True)
-    (target / ".gitignore").write_text("*.log\nsecret.txt\n")
-    (target / "a.log").write_text("x\n")
-    (target / "secret.txt").write_text("x\n")
-    (target / "b.py").write_text("x\n")
-
-    result = GlobTool().call(call_id="call_1", pattern="*", path=str(target))
-
-    names = {os.path.basename(p) for p in result.content["matches"]}
-    assert "a.log" not in names
-    assert "secret.txt" not in names
-    assert "b.py" in names
-
-
-def test_glob_tool_default_excludes_hidden(tmp_path: Path) -> None:
-    """Defaults (``hidden_aware=True``) exclude hidden files and directories."""
-    target = tmp_path / "globtest"
-    target.mkdir()
-    (target / ".hidden").write_text("x\n")
-    (target / "visible.py").write_text("x\n")
-    (target / ".hidden_dir").mkdir()
-    (target / ".hidden_dir" / "inside.py").write_text("x\n")
-
-    result = GlobTool().call(call_id="call_1", pattern="*", path=str(target))
-
-    names = {os.path.basename(p) for p in result.content["matches"]}
-    assert ".hidden" not in names
-    assert "inside.py" not in names
-    assert "visible.py" in names
-
-
-def test_glob_tool_ignore_aware_false_includes_gitignored(tmp_path: Path) -> None:
-    """Passing ``ignore_aware=False`` surfaces files matched by ``.gitignore``."""
-    target = tmp_path / "globtest"
-    target.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=target, check=True)
-    (target / ".gitignore").write_text("*.log\n")
-    (target / "a.log").write_text("x\n")
-    (target / "b.py").write_text("x\n")
-
-    result = GlobTool(ignore_aware=False).call(
-        call_id="call_1",
-        pattern="*",
-        path=str(target),
-    )
-
-    names = {os.path.basename(p) for p in result.content["matches"]}
-    assert "a.log" in names
-    assert "b.py" in names
-
-
-def test_glob_tool_hidden_aware_false_includes_hidden(tmp_path: Path) -> None:
-    """Passing ``hidden_aware=False`` surfaces hidden files."""
-    target = tmp_path / "globtest"
-    target.mkdir()
-    (target / ".hidden").write_text("x\n")
-    (target / "visible.py").write_text("x\n")
-
-    result = GlobTool(hidden_aware=False).call(
-        call_id="call_1",
-        pattern="*",
-        path=str(target),
-    )
-
-    names = {os.path.basename(p) for p in result.content["matches"]}
-    assert ".hidden" in names
-    assert "visible.py" in names
 
 
 # — SearchWebTool —————————————————————————————————————————————————————————

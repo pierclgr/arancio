@@ -1,7 +1,8 @@
 """Action types produced by the prompt manager."""
 
 from abc import ABC
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 
 
 class BaseAction(ABC):
@@ -32,7 +33,12 @@ class PromptAction(BaseAction):
     """Send the raw prompt text to the model.
 
     Attributes:
-        prompt: the raw prompt to send to the model.
+        prompt: the prompt to send to the model, with every resolving
+            @mention already rewritten to its resolved absolute path.
+        mentions: absolute paths resolved from @mention tokens in the
+            prompt, in the order they appear. Empty when the prompt had
+            none.
     """
 
     prompt: str
+    mentions: list[Path] = field(default_factory=list)

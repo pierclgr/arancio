@@ -26,7 +26,7 @@ def test_create_tools_constructs_granted_category_tools() -> None:
         {PermissionCategory.READ: PermissionLevel.ASK}
     )
 
-    assert {tool.name for tool in tools} == {"ReadFileTool", "GlobTool", "GrepTool"}
+    assert {tool.name for tool in tools} == {"ReadFileTool"}
 
 
 def test_create_tools_multiple_categories_unions_tools() -> None:
@@ -40,8 +40,6 @@ def test_create_tools_multiple_categories_unions_tools() -> None:
 
     assert {tool.name for tool in tools} == {
         "ReadFileTool",
-        "GlobTool",
-        "GrepTool",
         "ShellCommandTool",
     }
 
@@ -66,7 +64,7 @@ def test_available_tools_returns_classes_without_instantiating() -> None:
 
     assert all(isinstance(cls, type) for cls in classes)
     names = {cls.__name__ for cls in classes}
-    assert names == {"ReadFileTool", "GlobTool", "GrepTool"}
+    assert names == {"ReadFileTool"}
 
 
 def test_available_tools_empty_returns_no_classes() -> None:

@@ -3,6 +3,8 @@
 from pathlib import Path
 from typing import Type
 
+from dynamic_markdown.types.files.base import DynamicMarkdownFile
+
 from arancio.core.parsers.tool_result.files.read import ReadFileToolResultParser
 from arancio.core.tools.base import BaseTool
 
@@ -13,7 +15,10 @@ class ReadFileTool(BaseTool):
     The tool reads a UTF-8 file, optionally slicing it with ``offset`` and ``limit``,
     and returns each line prefixed with its 1-indexed line number and a tab so the
     output can feed a downstream edit tool. Long lines are truncated past a per-line
-    character cap to keep the model context bounded.
+    character cap to keep the model context bounded. A ``.md`` file is not read
+    raw: it is expanded through :class:`DynamicMarkdownFile` first (``<include>``/
+    ``@path``/``<script>``/``<field>`` tags resolved, with no field source), and the
+    expanded text is what gets sliced and line-numbered.
     """
 
     _default_limit: int = 2000
@@ -37,16 +42,19 @@ class ReadFileTool(BaseTool):
                 ``_default_limit`` and is capped at ``_default_limit``.
 
         Returns:
-            A dict with keys ``content`` (str, ``cat -n``-formatted slice),
-            ``start_line`` (int, 1-indexed first returned line or ``0``),
-            ``end_line`` (int, 1-indexed last returned line or ``0``),
-            ``total_lines`` (int, total line count in the file) and
-            ``truncated_lines`` (int, number of returned lines truncated to
-            the per-line character cap).
+            A dict with keys ``file_path`` (str, canonical absolute path),
+            ``content`` (str, ``cat -n``-formatted slice), ``start_line``
+            (int, 1-indexed first returned line or ``0``), ``end_line``
+            (int, 1-indexed last returned line or ``0``), ``total_lines``
+            (int, total line count in the file) and ``truncated_lines``
+            (int, number of returned lines truncated to the per-line
+            character cap).
 
         Raises:
-            ValueError: when ``file_path`` is not absolute or when
-                ``offset`` or ``limit`` are not positive.
+            ValueError: when ``file_path`` is not absolute, when ``offset``
+                or ``limit`` are not positive, or when a ``.md`` file's
+                dynamic-markdown expansion fails (e.g. an unresolvable
+                ``<field>`` tag or an ``<include>`` cycle).
             FileNotFoundError: when ``file_path`` does not exist.
             IsADirectoryError: when ``file_path`` points to a directory.
         """
@@ -68,7 +76,12 @@ class ReadFileTool(BaseTool):
 
         effective_limit = min(limit or self._default_limit, self._default_limit)
 
-        text = path.read_text(encoding="utf-8", errors="replace")
+        if path.suffix == ".md":
+            markdown_file = DynamicMarkdownFile(path)
+            markdown_file.parse()
+            text = markdown_file.content
+        else:
+            text = path.read_text(encoding="utf-8", errors="replace")
         all_lines = text.splitlines()
         total_lines = len(all_lines)
 
@@ -94,6 +107,7 @@ class ReadFileTool(BaseTool):
         self._session.record_read(path=canonical, mtime=mtime)
 
         return {
+            "file_path": canonical,
             "content": formatted,
             "start_line": start_idx + 1 if selected else 0,
             "end_line": start_idx + len(selected) if selected else 0,

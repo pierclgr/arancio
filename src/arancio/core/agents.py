@@ -285,7 +285,9 @@ class Agent:
         else:
             return tool.call(call_id=call.id, **(call.arguments or {}))
 
-    def run(self, message: Message) -> Iterator[Message]:
+    def run(
+        self, message: Message, prelude: List[Message] | None = None
+    ) -> Iterator[Message]:
         """Run the agent loop starting from the given user message.
 
         The user message, every parsed client message, and every local
@@ -298,12 +300,19 @@ class Agent:
 
         Args:
             message: the initial user message that starts the turn.
+            prelude: messages appended to history right after ``message``,
+                in order, before the turn loop's first request is built, so
+                the model sees them as part of the same turn. Unlike
+                ``message``, each is yielded. Defaults to none.
 
         Yields:
-            Each message produced during the run, including intermediate
-            tool calls and tool results.
+            Each ``prelude`` message, then each message produced during the
+            run, including intermediate tool calls and tool results.
         """
         self._add_message_to_history(message=message)
+        for extra in prelude or []:
+            self._add_message_to_history(extra)
+            yield extra
 
         # backoff wait that grows by the multiplier on each consecutive retry
         retry_wait = self._retry_delay

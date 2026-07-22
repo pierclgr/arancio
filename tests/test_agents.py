@@ -550,6 +550,48 @@ def test_agent_stores_and_returns_reasoning_messages() -> None:
     assert any(isinstance(msg, ReasoningMessage) for msg in agent._message_history)
 
 
+def test_agent_run_prelude_messages_are_appended_and_yielded_before_client_call() -> (
+    None
+):
+    """Prelude messages land in history right after the user message and are yielded."""
+    client = _ReasoningClient()
+    agent = _agent(client=client, permission_manager=_StubManager())
+    call = ToolCallMessage(
+        content='ReadFileTool({"file_path": "/tmp/x.md"})',
+        id="mention_1",
+        name="ReadFileTool",
+        arguments={"file_path": "/tmp/x.md"},
+    )
+    result = ToolResultMessage(content="expanded", id="mention_1")
+
+    response = list(agent.run(UserMessage(content="hello"), prelude=[call, result]))
+
+    assert response == [
+        call,
+        result,
+        ReasoningMessage(
+            item={
+                "id": "rs_1",
+                "type": "reasoning",
+                "summary": [],
+                "encrypted_content": "encrypted",
+            },
+            content="",
+        ),
+        AssistantMessage(content="visible"),
+    ]
+    assert agent._message_history[:3] == [
+        UserMessage(content="hello"),
+        call,
+        result,
+    ]
+    assert client.requests[0].message_list[:3] == [
+        UserMessage(content="hello"),
+        call,
+        result,
+    ]
+
+
 def test_agent_yields_chunks_without_storing_them() -> None:
     """Streaming chunks are yielded but omitted from provider history."""
     client = _StreamingClient()
@@ -952,8 +994,6 @@ def test_agent_full_permission_manager_builds_all_tools() -> None:
         "ReadFileTool",
         "WriteFileTool",
         "EditFileTool",
-        "GlobTool",
-        "GrepTool",
         "ShellCommandTool",
         "SearchWebTool",
         "FetchWebTool",
@@ -969,7 +1009,7 @@ def test_agent_add_permission_rebuilds_catalog() -> None:
 
     agent.add_permission(PermissionCategory.READ)
 
-    assert {"ReadFileTool", "GlobTool", "GrepTool"} <= set(agent._tools)
+    assert {"ReadFileTool"} <= set(agent._tools)
 
 
 def test_agent_remove_permission_rebuilds_catalog() -> None:
@@ -980,7 +1020,7 @@ def test_agent_remove_permission_rebuilds_catalog() -> None:
             {PermissionCategory.READ: PermissionLevel.ASK}
         ),
     )
-    assert set(agent._tools) == {"ReadFileTool", "GlobTool", "GrepTool"}
+    assert set(agent._tools) == {"ReadFileTool"}
 
     agent.remove_permission(PermissionCategory.READ)
 

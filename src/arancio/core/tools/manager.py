@@ -82,9 +82,10 @@ class ToolManager:
         Returns:
             One instance per tool class across the granted categories.
         """
-        return [
-            FetchWebTool(client=self._web_summary_client)
-            if tool_cls is FetchWebTool
-            else tool_cls()
-            for tool_cls in self.available_tools(permissions)
-        ]
+        tools = []
+        for tool_cls in self.available_tools(permissions):
+            if tool_cls is FetchWebTool:
+                tools.append(FetchWebTool(client=self._web_summary_client))
+            else:
+                tools.append(tool_cls())
+        return tools

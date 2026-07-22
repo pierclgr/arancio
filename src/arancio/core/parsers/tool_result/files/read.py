@@ -16,6 +16,7 @@ class ReadFileToolResultParser(BaseToolResultParser):
         Returns:
             The file content followed by line-range and truncation annotations.
         """
+        file_path = output.get("file_path") or ""
         content_block = output.get("content") or ""
         total_lines = output.get("total_lines") or 0
         start_line = output.get("start_line") or 0
@@ -23,6 +24,8 @@ class ReadFileToolResultParser(BaseToolResultParser):
         truncated_lines = output.get("truncated_lines") or 0
 
         parts = []
+        if file_path:
+            parts.append(file_path)
         if content_block:
             parts.append(content_block)
         if total_lines == 0:

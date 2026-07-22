@@ -21,6 +21,7 @@ Before reading the file, please follow these steps:
 
 ## RETURNS
 The tool returns a dict with the following keys:
+  - `file_path` (str): the canonical absolute path that was read.
   - `content` (str): the requested slice of the file formatted as `<lineno><TAB><line>` per line, joined by newlines. Empty when the file is empty or when `offset` is past the last line.
   - `start_line` (int): the 1-indexed line number of the first returned line, or `0` when no lines were returned.
   - `end_line` (int): the 1-indexed line number of the last returned line, or `0` when no lines were returned.

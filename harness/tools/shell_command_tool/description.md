@@ -42,8 +42,8 @@ Before executing the command, please follow these steps:
   macOS/Linux, a new PowerShell process on Windows), so the working directory, environment variables, exported
   functions, and shell aliases set in one call do NOT carry over to the next. Use the `cwd` parameter to set the
   working directory rather than relying on a `cd` from a previous call.
-- You *MUST* avoid using search commands like `find`/`grep` or their PowerShell equivalents. Use instead the dedicated
-  `GrepTool` and `GlobTool` for searching, unless explicitly requested by the user.
+- Use `find` (or `rg --files`) for filename search and `rg`/`grep` for content search inside files; prefer `rg` over
+  `grep` when available, since it is faster and respects `.gitignore` by default.
 - You *MUST* avoid read commands like `cat`/`head`/`tail` or their PowerShell equivalents (e.g. `Get-Content`), and
   use the dedicated `ReadFileTool` to read files, unless explicitly requested by the user.
 - You *MUST NOT* run interactive commands (e.g., `vim`, `less`, `nano`, `ssh` with password prompts, REPLs without
