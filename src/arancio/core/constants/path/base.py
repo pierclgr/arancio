@@ -8,6 +8,7 @@ ARANCIO_DEFAULT_DIR = Path.home() / ".arancio"
 # harness the tools read from; the user places its files here manually
 HARNESS_DIR_ROOT_PATH = ARANCIO_DEFAULT_DIR / "harness"
 TOOLS_HARNESS_PATH = HARNESS_DIR_ROOT_PATH / "tools"
+SYSTEM_PROMPT_HARNESS_PATH = HARNESS_DIR_ROOT_PATH / "SYSTEM_PROMPT.md"
 
 # litellm login storage redirected into the working directory: litellm hardcodes its
 # config dir, so arancio symlinks that dir onto this arancio target
