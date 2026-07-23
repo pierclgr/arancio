@@ -8,3 +8,7 @@ AGENT_DEFAULT_MAX_TURNS: str = AGENT_UNLIMITED_MAX_TURNS
 AGENT_DEFAULT_MAX_RETRIES: int = 5
 AGENT_DEFAULT_TURN_WAIT_TIME: float = 3.0
 AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER: float = 2.0
+# used by SystemPromptBuilder when the harness SYSTEM_PROMPT.md file is missing
+AGENT_DEFAULT_SYSTEM_PROMPT: str = (
+    "You are an helpful assistant assisting the user Pier. Answer his questions."
+)

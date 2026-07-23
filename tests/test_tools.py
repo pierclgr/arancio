@@ -477,9 +477,7 @@ def test_read_tool_expands_md_file_via_dynamic_markdown(tmp_path: Path) -> None:
     result = ReadFileTool().call(call_id="call_1", file_path=str(target))
 
     canonical = str(target.resolve())
-    expanded = DynamicMarkdownFile(target)
-    expanded.parse()
-    expected_lines = expanded.content.splitlines()
+    expected_lines = DynamicMarkdownFile(target).content.splitlines()
     expected_block = "\n".join(
         f"{i:>6}\t{line}" for i, line in enumerate(expected_lines, start=1)
     )
@@ -1055,9 +1053,8 @@ def test_tool_instance_loads_description_from_harness_dir() -> None:
     tool = ShellCommandTool()
     harness_root = Path("harness")
     expected_file = DynamicMarkdownFile(
-        harness_root / "tools/shell_command_tool/description.md"
+        harness_root / "tools/shell_command_tool/description.md", tool=tool
     )
-    expected_file.parse(tool=tool)
     assert tool.description == expected_file.content
 
 
@@ -1075,8 +1072,9 @@ def test_tool_instance_schema_carries_loaded_attrs() -> None:
     tool = ShellCommandTool()
     harness_root = Path("harness")
     tool_dir = harness_root / "tools/shell_command_tool"
-    expected_description_file = DynamicMarkdownFile(tool_dir / "description.md")
-    expected_description_file.parse(tool=tool)
+    expected_description_file = DynamicMarkdownFile(
+        tool_dir / "description.md", tool=tool
+    )
     expected_input_schema_raw = yaml.safe_load(
         (tool_dir / "input_schema.yml").read_text()
     )

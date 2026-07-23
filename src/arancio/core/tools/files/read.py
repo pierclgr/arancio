@@ -77,9 +77,7 @@ class ReadFileTool(BaseTool):
         effective_limit = min(limit or self._default_limit, self._default_limit)
 
         if path.suffix == ".md":
-            markdown_file = DynamicMarkdownFile(path)
-            markdown_file.parse()
-            text = markdown_file.content
+            text = DynamicMarkdownFile(path).content
         else:
             text = path.read_text(encoding="utf-8", errors="replace")
         all_lines = text.splitlines()

@@ -5,11 +5,14 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from dynamic_markdown.types.files.base import DynamicMarkdownFile
 
+from arancio.core.constants.agent import AGENT_DEFAULT_SYSTEM_PROMPT
 from arancio.core.constants.path.base import (
     ARANCIO_DEFAULT_DIR,
     ARANCIO_SETTINGS_FILE,
     LITELLM_CONFIG_DIR,
+    SYSTEM_PROMPT_HARNESS_PATH,
 )
 from arancio.core.messages import ErrorMessage, Message, WarningMessage
 from arancio.settings.settings import Settings
@@ -102,20 +105,16 @@ class StorageManager:
         return target
 
     @staticmethod
-    def save_settings(settings: Settings) -> Path:
+    def save_settings(settings: Settings) -> None:
         """Write the settings to the settings file.
 
         Args:
             settings: the settings to persist.
-
-        Returns:
-            The path the settings were written to.
         """
         ARANCIO_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         ARANCIO_SETTINGS_FILE.write_text(
             yaml.safe_dump(settings.to_dict(), sort_keys=False)
         )
-        return ARANCIO_SETTINGS_FILE
 
     @classmethod
     def load_settings(cls) -> tuple[dict[str, Any] | None, list[Message]]:
@@ -163,3 +162,25 @@ class StorageManager:
             ]
 
         return data, []
+
+    @staticmethod
+    def save_system_prompt() -> None:
+        """Write the default system prompt to the harness file."""
+        SYSTEM_PROMPT_HARNESS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        SYSTEM_PROMPT_HARNESS_PATH.write_text(AGENT_DEFAULT_SYSTEM_PROMPT)
+
+    @classmethod
+    def load_system_prompt(cls) -> DynamicMarkdownFile:
+        """Read the system prompt harness file, seeding it with a default if absent.
+
+        When the harness file is absent, :data:`AGENT_DEFAULT_SYSTEM_PROMPT` is
+        written to disk first (so a first run leaves a populated file behind),
+        mirroring how :meth:`load_settings` seeds ``settings.yml`` with defaults.
+
+        Returns:
+            The parsed dynamic markdown system prompt file.
+        """
+        if not SYSTEM_PROMPT_HARNESS_PATH.is_file():
+            cls.save_system_prompt()
+
+        return DynamicMarkdownFile(SYSTEM_PROMPT_HARNESS_PATH)

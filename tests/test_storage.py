@@ -6,6 +6,7 @@ import pytest
 import yaml
 
 import arancio.storage.manager as storage_mod
+from arancio.core.constants.agent import AGENT_DEFAULT_SYSTEM_PROMPT
 from arancio.core.messages import ErrorMessage, WarningMessage
 from arancio.settings.settings import Settings
 from arancio.storage.manager import StorageManager
@@ -166,12 +167,47 @@ def test_load_settings_returns_raw_data_unvalidated(
 def test_save_settings_writes_serialized_yaml(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """``save_settings`` writes the serialized settings as YAML and returns its path."""
+    """``save_settings`` writes the serialized settings as YAML."""
     settings_file = tmp_path / "settings.yml"
     monkeypatch.setattr(storage_mod, "ARANCIO_SETTINGS_FILE", settings_file)
     settings = Settings.default()
 
-    path = StorageManager().save_settings(settings)
+    StorageManager().save_settings(settings)
 
-    assert path == settings_file
     assert yaml.safe_load(settings_file.read_text()) == settings.to_dict()
+
+
+def test_load_system_prompt_creates_default_file_when_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``load_system_prompt`` seeds the default prompt when the file is absent."""
+    prompt_file = tmp_path / "SYSTEM_PROMPT.md"
+    monkeypatch.setattr(storage_mod, "SYSTEM_PROMPT_HARNESS_PATH", prompt_file)
+
+    result = StorageManager().load_system_prompt()
+
+    assert prompt_file.read_text() == AGENT_DEFAULT_SYSTEM_PROMPT
+    assert result.content == AGENT_DEFAULT_SYSTEM_PROMPT
+
+
+def test_load_system_prompt_reads_back_saved_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``load_system_prompt`` returns the prompt previously persisted to disk."""
+    prompt_file = tmp_path / "SYSTEM_PROMPT.md"
+    prompt_file.write_text("custom prompt")
+    monkeypatch.setattr(storage_mod, "SYSTEM_PROMPT_HARNESS_PATH", prompt_file)
+
+    assert StorageManager().load_system_prompt().content == "custom prompt"
+
+
+def test_save_system_prompt_writes_default_and_creates_parent_dirs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``save_system_prompt`` writes the default prompt, creating parent dirs."""
+    prompt_file = tmp_path / "nested" / "SYSTEM_PROMPT.md"
+    monkeypatch.setattr(storage_mod, "SYSTEM_PROMPT_HARNESS_PATH", prompt_file)
+
+    StorageManager().save_system_prompt()
+
+    assert prompt_file.read_text() == AGENT_DEFAULT_SYSTEM_PROMPT

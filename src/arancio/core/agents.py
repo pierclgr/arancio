@@ -3,7 +3,7 @@
 import time
 from collections.abc import Iterator
 from itertools import count
-from typing import Dict, List, Type
+from typing import Dict, List
 
 from arancio.core.builders.system_prompt import SystemPromptBuilder
 from arancio.core.clients.base import BaseClient
@@ -62,7 +62,7 @@ class Agent:
         self._retry_delay: float = retry_delay
         self._retry_delay_multiplier: float = retry_delay_multiplier
         self._message_history: List[Message] = []
-        self._system_prompt_builder: Type[SystemPromptBuilder] = SystemPromptBuilder
+        self._system_prompt_builder: SystemPromptBuilder = SystemPromptBuilder()
         self._permission_manager: PermissionManager = permission_manager
 
         self._tools: Dict[str, BaseTool] = {}

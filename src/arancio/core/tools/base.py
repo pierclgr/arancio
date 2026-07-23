@@ -32,7 +32,7 @@ class BaseTool(ABC):
             loaded from the harness directory.
         _description_file: the :class:`DynamicMarkdownFile` backing
             :attr:`description`, retained so callers can refresh the
-            description from disk via ``.reload()`` + re-parse.
+            description from disk via ``.reload()``.
         _result_parser: parser converting raw tool output into a tool
             result message.
         _session: shared :class:`ToolSession` for cross-tool
@@ -76,9 +76,8 @@ class BaseTool(ABC):
             )
 
         self._description_file = DynamicMarkdownFile(
-            self._harness_dir / TOOL_DESCRIPTION_FILENAME
+            self._harness_dir / TOOL_DESCRIPTION_FILENAME, tool=self
         )
-        self._description_file.parse(tool=self)
         self.description = self._description_file.content
 
         raw_input_schema = yaml.safe_load(

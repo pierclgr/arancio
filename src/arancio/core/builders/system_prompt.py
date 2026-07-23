@@ -1,47 +1,31 @@
 """System prompt builder loading the prompt from a harness markdown file."""
 
-from typing import ClassVar
-
-from dynamic_markdown.types.files.base import DynamicMarkdownFile
-
 from arancio.core.builders.base import Builder
-from arancio.core.constants.path.base import SYSTEM_PROMPT_HARNESS_PATH
+from arancio.storage.manager import StorageManager
 
 
 class SystemPromptBuilder(Builder):
     """Builder that assembles the system prompt for an agent.
 
-    ``SYSTEM_PROMPT.md`` is read and parsed once, on the first :meth:`build` call, then
-    cached for the rest of the process's lifetime.
+    ``SYSTEM_PROMPT.md`` is read and parsed once, when the builder is instantiated, and
+    cached on the instance for subsequent :meth:`build` calls.
     """
 
-    _prompt: ClassVar[str | None] = None
+    def __init__(self) -> None:
+        """Load and cache the system prompt from the harness file.
 
-    @classmethod
-    def build(cls) -> str:
-        """Build and return the system prompt.
+        Loads ``SYSTEM_PROMPT.md`` via
+        :meth:`~arancio.storage.manager.StorageManager.load_system_prompt`
+        (which seeds it with a default when missing and parses it as
+        dynamic markdown), mirroring how tool descriptions are loaded once
+        in :class:`~arancio.core.tools.base.BaseTool`.
+        """
+        self._prompt: str = StorageManager.load_system_prompt().content
 
-        Loads ``SYSTEM_PROMPT.md`` from the harness directory and parses
-        it as dynamic markdown the first time it is called, mirroring how
-        tool descriptions are loaded once in
-        :class:`~arancio.core.tools.base.BaseTool`; subsequent calls
-        return the cached result.
+    def build(self) -> str:
+        """Return the cached system prompt.
 
         Returns:
             The rendered system prompt string.
-
-        Raises:
-            FileNotFoundError: when the system prompt harness file does
-                not exist.
         """
-        if cls._prompt is None:
-            if not SYSTEM_PROMPT_HARNESS_PATH.is_file():
-                raise FileNotFoundError(
-                    f"System prompt file {SYSTEM_PROMPT_HARNESS_PATH} not found."
-                )
-
-            prompt_file = DynamicMarkdownFile(SYSTEM_PROMPT_HARNESS_PATH)
-            prompt_file.parse()
-            cls._prompt = prompt_file.content
-
-        return cls._prompt
+        return self._prompt
