@@ -30,7 +30,7 @@ requires = ["uv_build>=0.11.11,<0.12"]
 build-backend = "uv_build"
 
 [tool.uv.sources]
-dynamic-markdown = { git = "https://github.com/pierclgr/dynamic-markdown.git", tag = "v0.3.0" }
+dynamic-markdown = { git = "https://github.com/pierclgr/dynamic-markdown.git", tag = "v0.3.1" }
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]

@@ -187,7 +187,7 @@ dev = [
 requires-dist = [
     { name = "botocore", specifier = ">=1.43.15" },
     { name = "ddgs", specifier = ">=9.14.4" },
-    { name = "dynamic-markdown", git = "https://github.com/pierclgr/dynamic-markdown.git?tag=v0.3.0" },
+    { name = "dynamic-markdown", git = "https://github.com/pierclgr/dynamic-markdown.git?tag=v0.3.1" },
     { name = "litellm", specifier = ">=1.83.14" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "requests", specifier = ">=2.33.1" },
@@ -564,8 +564,8 @@ wheels = [
 
 [[package]]
 name = "dynamic-markdown"
-version = "0.3.0"
-source = { git = "https://github.com/pierclgr/dynamic-markdown.git?tag=v0.3.0#d0036f7133534fe85511b39e239f8f351c6dc5e8" }
+version = "0.3.1"
+source = { git = "https://github.com/pierclgr/dynamic-markdown.git?tag=v0.3.1#e976db3ec8c3488366c60c19077e2e3ff0989b32" }
 
 [[package]]
 name = "fake-useragent"
