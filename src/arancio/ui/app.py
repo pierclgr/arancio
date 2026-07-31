@@ -28,6 +28,7 @@ from arancio.prompt.actions.executor import ActionExecutor
 from arancio.prompt.actions.factory import ActionFactory
 from arancio.prompt.manager import PromptManager
 from arancio.settings.manager import SettingsManager
+from arancio.ui.widgets.chatgpt_login import ChatGPTLoginNotice
 
 
 class App(TextualApp):
@@ -48,6 +49,11 @@ class App(TextualApp):
     .tool-call { color: $text-muted; }
     .error { color: $error; }
     .warning { color: $warning; }
+    .chatgpt-login {
+        height: auto; margin: 0 0 1 0; padding: 1;
+        border: round $warning;
+    }
+    .chatgpt-login-code { text-style: bold; }
     QuestionScreen { align: center middle; }
     #question-dialog {
         width: 70%; height: auto; padding: 1 2;
@@ -283,6 +289,18 @@ class App(TextualApp):
         """Remove every rendered message, matching a cleared chat history."""
         self._reset_stream()
         self.query_one("#log", VerticalScroll).remove_children()
+
+    def show_chatgpt_login(self, verification_url: str, user_code: str) -> None:
+        """Show the active ChatGPT device-login link and code.
+
+        Called on the Textual UI thread by :class:`UIController`; the agent
+        worker remains free to wait for LiteLLM's authorization polling.
+
+        Args:
+            verification_url: browser address where the user enters the code.
+            user_code: short code issued for the current login attempt.
+        """
+        self._mount(ChatGPTLoginNotice(verification_url, user_code))
 
     @property
     def working_directory(self) -> Path:

@@ -25,3 +25,22 @@ class PermissionRequest(BaseControllerRequest):
             call: the tool call awaiting a decision.
         """
         self.call = call
+
+
+class ChatGPTLoginRequest(BaseControllerRequest):
+    """Request displaying a ChatGPT device-code login in the frontend.
+
+    Attributes:
+        verification_url: browser address where the user enters the device code.
+        user_code: short code authorizing the current device-login attempt.
+    """
+
+    def __init__(self, verification_url: str, user_code: str) -> None:
+        """Store the ChatGPT device-login details.
+
+        Args:
+            verification_url: browser address where the user enters the code.
+            user_code: short code issued for the current login attempt.
+        """
+        self.verification_url = verification_url
+        self.user_code = user_code

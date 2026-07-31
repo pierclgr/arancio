@@ -1,12 +1,18 @@
-"""Runtime patches for bugs in the pinned LiteLLM version.
+"""Runtime patches for bugs and UI integration gaps in the pinned LiteLLM version.
 
 Temporary monkeypatches applied at import time by
-:mod:`arancio.core.clients.litellm`. Each patch is written to be a no-op
-once the corresponding upstream bug is fixed, so bumping LiteLLM and then
-deleting this module is a safe two-step cleanup.
+:mod:`arancio.core.clients.litellm`. Bug patches are written to be a no-op
+once upstream is fixed; the ChatGPT adapter preserves LiteLLM behavior while
+also forwarding a device code to the UI.
 """
 
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+
 import litellm
+from litellm.llms.chatgpt.authenticator import Authenticator
+from litellm.llms.chatgpt.common_utils import CHATGPT_DEVICE_VERIFY_URL
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
@@ -21,6 +27,49 @@ _MIXED_CHUNK_PATCH_FLAG = "_arancio_mixed_chunk_patched"
 
 # marker so the patch is applied at most once per process
 _FIRST_CHUNK_PATCH_FLAG = "_arancio_first_chunk_patched"
+
+# marker so the patch is applied at most once per process
+_CHATGPT_DEVICE_CODE_PATCH_FLAG = "_arancio_chatgpt_device_code_patched"
+
+_chatgpt_device_code_notifier: ContextVar[Callable[[str, str], None] | None] = (
+    ContextVar("chatgpt_device_code_notifier", default=None)
+)
+
+
+@contextmanager
+def chatgpt_device_code_notifier(
+    notifier: Callable[[str, str], None],
+) -> Iterator[None]:
+    """Use a notifier for a single ChatGPT device-login attempt.
+
+    ``litellm.responses`` can run in different worker threads, so a context
+    variable keeps the notification attached to the client call that started
+    it instead of leaking it to another client.
+
+    Args:
+        notifier: receives the verification URL and user code once LiteLLM
+            creates a device code.
+
+    Yields:
+        Control while the notifier is active for the current context.
+    """
+    token = _chatgpt_device_code_notifier.set(notifier)
+    try:
+        yield
+    finally:
+        _chatgpt_device_code_notifier.reset(token)
+
+
+def notify_chatgpt_device_code(device_code: dict[str, str]) -> None:
+    """Notify the active client that LiteLLM created a ChatGPT device code.
+
+    Args:
+        device_code: LiteLLM's device-code response.
+    """
+    notifier = _chatgpt_device_code_notifier.get()
+    user_code = device_code.get("user_code")
+    if notifier is not None and user_code:
+        notifier(CHATGPT_DEVICE_VERIFY_URL, user_code)
 
 
 def _delta_has_text_and_reasoning(chunk) -> bool:
@@ -183,8 +232,40 @@ def _patch_sync_first_chunk_drop() -> None:
     setattr(cls, _FIRST_CHUNK_PATCH_FLAG, True)
 
 
+def _patch_chatgpt_device_code_notice() -> None:
+    """Publish ChatGPT device codes instead of leaving them on worker stdout.
+
+    LiteLLM's authenticator prints the browser URL and code directly. Arancio runs
+    requests in a Textual worker, so that output is hidden behind the application. This
+    wraps only device-code creation: normal LiteLLM login, printing and polling continue
+    unchanged, while a scoped client callback can also show the details in the UI.
+    """
+    cls = Authenticator
+    if getattr(cls, _CHATGPT_DEVICE_CODE_PATCH_FLAG, False):
+        return
+
+    original = cls._request_device_code
+
+    def _patched(self) -> dict[str, str]:
+        """Create a device code and report it to the active Arancio client.
+
+        Args:
+            self: the LiteLLM ChatGPT authenticator.
+
+        Returns:
+            LiteLLM's unmodified device-code response.
+        """
+        device_code = original(self)
+        notify_chatgpt_device_code(device_code)
+        return device_code
+
+    cls._request_device_code = _patched
+    setattr(cls, _CHATGPT_DEVICE_CODE_PATCH_FLAG, True)
+
+
 def apply() -> None:
     """Apply all LiteLLM runtime patches (idempotent)."""
     _ = litellm  # ensure litellm is imported before patching its internals
     _patch_mixed_reasoning_text_chunk()
     _patch_sync_first_chunk_drop()
+    _patch_chatgpt_device_code_notice()

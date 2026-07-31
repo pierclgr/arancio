@@ -8,7 +8,11 @@ user responds.
 import threading
 
 from arancio.core.controllers.base import Controller
-from arancio.core.controllers.requests import BaseControllerRequest, PermissionRequest
+from arancio.core.controllers.requests import (
+    BaseControllerRequest,
+    ChatGPTLoginRequest,
+    PermissionRequest,
+)
 from arancio.core.controllers.responses import (
     BaseControllerResponse,
     Decision,
@@ -51,6 +55,13 @@ class UIController(Controller):
                 ["yes", "no"],
             )
             return self._to_permission_response(answer)
+        if isinstance(request, ChatGPTLoginRequest):
+            self.app.call_from_thread(
+                self.app.show_chatgpt_login,
+                request.verification_url,
+                request.user_code,
+            )
+            return BaseControllerResponse()
         raise TypeError(f"Unsupported request type: {type(request).__name__}")
 
     def _ask(self, question: str, answers: list[str]) -> str:

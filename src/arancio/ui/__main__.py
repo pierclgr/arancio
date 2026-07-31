@@ -21,8 +21,8 @@ def main() -> None:
     storage.bind_litellm_login_dir()
 
     controller = UIController()
-    client = LiteLLMClient(stream=True)
-    summary_client = LiteLLMClient(stream=False)
+    client = LiteLLMClient(stream=True, controller=controller)
+    summary_client = LiteLLMClient(stream=False, controller=controller)
     # the summary client never thinks (setters take None; the constructor ignores it)
     summary_client.thinking_effort = None
     summary_client.thinking_summary = None

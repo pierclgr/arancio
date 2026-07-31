@@ -18,6 +18,7 @@ from arancio.core.messages import (
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 from arancio.settings.settings import Settings
 from arancio.ui.app import App
+from arancio.ui.widgets.chatgpt_login import ChatGPTLoginNotice
 from arancio.ui.widgets.question import QuestionScreen
 
 
@@ -341,6 +342,21 @@ def test_startup_messages_render_on_mount() -> None:
             assert str(warnings.first().render()) == "careful"
             assert len(errors) == 1
             assert str(errors.first().render()) == "broken"
+
+    asyncio.run(_run())
+
+
+def test_chatgpt_login_notice_uses_its_content_height() -> None:
+    """The login notice does not fill the message pane."""
+
+    async def _run() -> None:
+        app = _app()
+        async with app.run_test() as pilot:
+            app.show_chatgpt_login("https://example.com/device", "ABCD-EFGH")
+            await pilot.pause()
+
+            notice = app.query_one(ChatGPTLoginNotice)
+            assert str(notice.styles.height) == "auto"
 
     asyncio.run(_run())
 

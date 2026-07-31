@@ -14,6 +14,8 @@ from arancio.core.constants.litellm import (
     LITELLM_DEFAULT_THINKING_EFFORT,
     LITELLM_DEFAULT_THINKING_SUMMARY,
 )
+from arancio.core.controllers.base import Controller
+from arancio.core.controllers.requests import ChatGPTLoginRequest
 from arancio.core.messages import Message
 from arancio.core.parsers.response.litellm import LiteLLMResponseParser
 from arancio.core.requests import LiteLLMRequest
@@ -65,6 +67,7 @@ class LiteLLMClient(BaseClient):
         self,
         max_output_tokens: int | None = None,
         stream: bool = False,
+        controller: Controller | None = None,
         *args,
         **kwargs,
     ) -> None:
@@ -89,12 +92,14 @@ class LiteLLMClient(BaseClient):
                 natively streamable so LiteLLM streams it instead of
                 taking its broken fake-stream path; see
                 :meth:`_register_native_streaming`.
+            controller: frontend port receiving ChatGPT device-login notices.
             *args: positional arguments forwarded to :class:`BaseClient`.
             **kwargs: keyword arguments forwarded to :class:`BaseClient`.
         """
         super().__init__(*args, **kwargs)
         self._max_output_tokens = max_output_tokens
         self._stream = stream
+        self._controller = controller
 
     def __repr__(self) -> str:
         """Return a developer-friendly representation of the client.
@@ -156,14 +161,32 @@ class LiteLLMClient(BaseClient):
         if self._max_output_tokens is not None:
             kwargs["max_output_tokens"] = self._max_output_tokens
 
-        if self._stream:
-            self._register_native_streaming(request.model_id)
-            kwargs["stream"] = True
-            stream = litellm.responses(**kwargs)
-            yield from self._response_parser.parse_stream(stream)
-        else:
-            response = litellm.responses(**kwargs)
-            yield from self._response_parser.parse(response)
+        with _litellm_patches.chatgpt_device_code_notifier(
+            self._on_chatgpt_device_code
+        ):
+            if self._stream:
+                self._register_native_streaming(request.model_id)
+                kwargs["stream"] = True
+                stream = litellm.responses(**kwargs)
+                yield from self._response_parser.parse_stream(stream)
+            else:
+                response = litellm.responses(**kwargs)
+                yield from self._response_parser.parse(response)
+
+    def _on_chatgpt_device_code(self, verification_url: str, user_code: str) -> None:
+        """Forward a ChatGPT device code to the configured frontend.
+
+        Args:
+            verification_url: browser address where the user enters the code.
+            user_code: short code for the active ChatGPT login attempt.
+        """
+        if self._controller is not None:
+            self._controller.request(
+                ChatGPTLoginRequest(
+                    verification_url=verification_url,
+                    user_code=user_code,
+                )
+            )
 
     @staticmethod
     def _register_native_streaming(model_id: str) -> None:

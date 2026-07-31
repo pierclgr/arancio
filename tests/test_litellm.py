@@ -445,6 +445,11 @@ def test_streaming_registers_unknown_model(
         model_id=model,
         message_list=[UserMessage(content="hi")],
     )
+    monkeypatch.setattr(
+        litellm_module.litellm,
+        "get_llm_provider",
+        Mock(return_value=(model, "chatgpt", None, None)),
+    )
 
     result = list(LiteLLMClient(stream=True).send_request(request))
 
