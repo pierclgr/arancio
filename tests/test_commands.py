@@ -1,10 +1,12 @@
 """Tests for slash commands."""
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from arancio.commands.base import BaseCommand
+from arancio.commands.cd import CdCommand
 from arancio.commands.clear import ClearCommand
 from arancio.commands.effort import EffortCommand
 from arancio.commands.exit import ExitCommand
@@ -129,6 +131,99 @@ def test_clear_command_clears_history_and_log() -> None:
     assert agent.clear_history_called is True
     assert application.clear_log_called is True
     assert result is None
+
+
+class _CdApplication:
+    """Application stub applying the real working-directory resolution rules."""
+
+    def __init__(self, working_directory: Path) -> None:
+        """Start held at ``working_directory``.
+
+        Args:
+            working_directory: the directory the stub starts in.
+        """
+        self.working_directory = working_directory
+
+    def set_working_directory(self, path: Path | str) -> None:
+        """Resolve and validate ``path``, mirroring ``App.set_working_directory``.
+
+        Args:
+            path: the requested directory, absolute or relative.
+
+        Raises:
+            ValueError: when the resolved path does not exist, or exists but is
+                not a directory.
+        """
+        resolved = Path(path).expanduser()
+        if not resolved.is_absolute():
+            resolved = self.working_directory / resolved
+        resolved = resolved.resolve()
+        if not resolved.exists():
+            raise ValueError(f"{resolved} does not exist")
+        if not resolved.is_dir():
+            raise ValueError(
+                f"{resolved} not a directory: did you mean {resolved.parent}?"
+            )
+        self.working_directory = resolved
+
+
+def test_cd_command_moves_to_an_absolute_path(tmp_path: Path) -> None:
+    """An absolute path is used as-is."""
+    target = tmp_path / "target"
+    target.mkdir()
+    application = _CdApplication(working_directory=tmp_path)
+
+    result = CdCommand.run(application=application, path=str(target))
+
+    assert application.working_directory == target.resolve()
+    assert result == f"Working directory set to {target.resolve()}"
+
+
+def test_cd_command_resolves_a_relative_path_against_the_current_directory(
+    tmp_path: Path,
+) -> None:
+    """A relative path is resolved against the working directory currently set."""
+    nested = tmp_path / "outer" / "inner"
+    nested.mkdir(parents=True)
+    application = _CdApplication(working_directory=tmp_path / "outer")
+
+    result = CdCommand.run(application=application, path="inner")
+
+    assert application.working_directory == nested.resolve()
+    assert result == f"Working directory set to {nested.resolve()}"
+
+
+def test_cd_command_moves_to_a_path_containing_spaces(tmp_path: Path) -> None:
+    """A path with spaces works once the prompt splitter has kept it in one word."""
+    target = tmp_path / "test" / "of path"
+    target.mkdir(parents=True)
+    application = _CdApplication(working_directory=tmp_path)
+
+    result = CdCommand.run(application=application, path="test/of path")
+
+    assert application.working_directory == target.resolve()
+    assert result == f"Working directory set to {target.resolve()}"
+
+
+def test_cd_command_reports_a_missing_path_as_not_existing(tmp_path: Path) -> None:
+    """A path that does not exist reports that it does not exist."""
+    application = _CdApplication(working_directory=tmp_path)
+
+    with pytest.raises(ValueError, match="does not exist"):
+        CdCommand.run(application=application, path="missing")
+
+    assert application.working_directory == tmp_path
+
+
+def test_cd_command_reports_a_file_path_as_not_a_directory(tmp_path: Path) -> None:
+    """A path pointing at an existing file keeps the not-a-directory wording."""
+    (tmp_path / "afile").write_text("x")
+    application = _CdApplication(working_directory=tmp_path)
+
+    with pytest.raises(ValueError, match="not a directory"):
+        CdCommand.run(application=application, path="afile")
+
+    assert application.working_directory == tmp_path
 
 
 class _ModelApplication:

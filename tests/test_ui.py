@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Iterator
+from pathlib import Path
 
 from textual.widgets import Input, Markdown, Static
 
@@ -279,6 +280,31 @@ def test_enter_sends_consecutive_messages() -> None:
     asyncio.run(_run())
 
 
+def test_unclosed_quote_in_a_command_renders_an_error() -> None:
+    """A malformed prompt is reported, not left to kill the worker thread.
+
+    ``PromptManager.resolve_prompt`` raises before the executor is reached, so the error
+    cannot be caught by the executor's own wrapping.
+    """
+
+    async def _run() -> None:
+        app = _app()
+        async with app.run_test() as pilot:
+            prompt = app.query_one("#prompt", Input)
+            prompt.focus()
+            prompt.value = '/cd "my folder'
+
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            errors = app.query(".error")
+            assert len(errors) == 1
+            assert "unbalanced quote" in str(errors.first(Static).render())
+
+    asyncio.run(_run())
+
+
 def test_reset_stream_clears_cross_turn_state() -> None:
     """Resetting clears the suppress set so a new turn's output is not swallowed."""
 
@@ -315,6 +341,35 @@ def test_startup_messages_render_on_mount() -> None:
             assert str(warnings.first().render()) == "careful"
             assert len(errors) == 1
             assert str(errors.first().render()) == "broken"
+
+    asyncio.run(_run())
+
+
+def test_toolbar_shows_the_working_directory_after_the_effort() -> None:
+    """The toolbar renders the working directory right after the effort field."""
+
+    async def _run() -> None:
+        app = _app()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            text = str(app.query_one("#toolbar", Static).render())
+            assert f"effort: medium  ·  {app.working_directory}" in text
+
+    asyncio.run(_run())
+
+
+def test_set_working_directory_updates_toolbar(tmp_path: Path) -> None:
+    """Moving the working directory redraws the toolbar with the new path."""
+
+    async def _run() -> None:
+        app = _app()
+        async with app.run_test() as pilot:
+            app.set_working_directory(tmp_path)
+            await pilot.pause()
+
+            text = str(app.query_one("#toolbar", Static).render())
+            assert f"·  {tmp_path.resolve()}  ·" in text
 
     asyncio.run(_run())
 

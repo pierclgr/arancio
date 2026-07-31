@@ -17,6 +17,61 @@ def test_resolve_prompt_returns_command_arguments_for_slash_command() -> None:
     }
 
 
+def test_resolve_prompt_keeps_a_quoted_argument_with_spaces_together() -> None:
+    """A double-quoted argument stays one word and loses its surrounding quotes."""
+    action_kwargs = PromptManager.resolve_prompt('/cd "test/of path/"')
+
+    assert action_kwargs == {
+        "command_name": "cd",
+        "command_args": ["test/of path/"],
+    }
+
+
+def test_resolve_prompt_keeps_a_single_quoted_argument_with_spaces_together() -> None:
+    """A single-quoted argument is handled like a double-quoted one."""
+    action_kwargs = PromptManager.resolve_prompt("/cd 'my folder'")
+
+    assert action_kwargs == {"command_name": "cd", "command_args": ["my folder"]}
+
+
+def test_resolve_prompt_splits_quoted_and_bare_arguments_together() -> None:
+    """Quoted and bare arguments mix, each arriving as its own word."""
+    action_kwargs = PromptManager.resolve_prompt('/hello-world "Sam Smith" 2')
+
+    assert action_kwargs == {
+        "command_name": "hello-world",
+        "command_args": ["Sam Smith", "2"],
+    }
+
+
+def test_resolve_prompt_keeps_an_apostrophe_inside_a_word_literal() -> None:
+    """A quote that does not start a word is literal and needs no closing."""
+    action_kwargs = PromptManager.resolve_prompt("/hello-world O'Brien")
+
+    assert action_kwargs == {"command_name": "hello-world", "command_args": ["O'Brien"]}
+
+
+def test_resolve_prompt_preserves_backslashes_in_command_arguments() -> None:
+    """Backslashes stay literal, so a Windows path survives splitting."""
+    action_kwargs = PromptManager.resolve_prompt(r"/cd C:\Users\me")
+
+    assert action_kwargs == {"command_name": "cd", "command_args": [r"C:\Users\me"]}
+
+
+def test_resolve_prompt_rejects_an_unclosed_quote() -> None:
+    """A quote opening a word but never closed raises rather than mis-splitting."""
+    with pytest.raises(ValueError, match="unbalanced quote"):
+        PromptManager.resolve_prompt('/cd "my folder')
+
+
+def test_resolve_prompt_returns_empty_arguments_for_a_bare_command() -> None:
+    """A command with no argument text resolves to an empty argument list."""
+    assert PromptManager.resolve_prompt("/clear") == {
+        "command_name": "clear",
+        "command_args": [],
+    }
+
+
 def test_resolve_prompt_returns_prompt_argument_for_plain_prompt() -> None:
     """A prompt without a leading slash resolves to the raw prompt text."""
     action_kwargs = PromptManager.resolve_prompt("normal prompt")

@@ -1,5 +1,8 @@
 """Textual terminal UI streaming the agent's output and gating its tool use."""
 
+import os
+from pathlib import Path
+
 from textual import work
 from textual.app import App as TextualApp
 from textual.app import ComposeResult
@@ -75,6 +78,7 @@ class App(TextualApp):
         """
         super().__init__()
         self._agent = agent
+        self._working_directory: Path = Path.cwd()
         self._action_executor = ActionExecutor(
             agent=agent, application=self, settings_manager=settings_manager
         )
@@ -149,6 +153,12 @@ class App(TextualApp):
             action = ActionFactory.create_action(**resolved_arguments)
             for message in self._action_executor.execute(action):
                 self.call_from_thread(self._handle_message, message)
+        except ValueError as exc:
+            # a malformed prompt (e.g. an unclosed quote) is reported like any
+            # other failure instead of killing the worker thread
+            self.call_from_thread(
+                self._handle_message, ErrorMessage(content=f"Invalid prompt: {exc}")
+            )
         finally:
             self.call_from_thread(self._end_stream)
             self.call_from_thread(self._set_busy, False)
@@ -274,6 +284,49 @@ class App(TextualApp):
         self._reset_stream()
         self.query_one("#log", VerticalScroll).remove_children()
 
+    @property
+    def working_directory(self) -> Path:
+        """Return the app's working directory.
+
+        Returns:
+            The absolute :class:`~pathlib.Path` the app is working in.
+        """
+        return self._working_directory
+
+    def set_working_directory(self, path: Path | str) -> None:
+        """Move the working directory to ``path`` and mirror it to the process.
+
+        The path is expanded and resolved, then validated as an existing
+        directory. On success the app's working directory is updated and
+        ``os.chdir`` is called so the process cwd follows, letting every
+        consumer that reads ``Path.cwd()`` (or passes ``cwd=None`` to
+        ``subprocess.run``) follow the change with no rewiring. The toolbar is
+        redrawn so the displayed directory matches.
+
+        Args:
+            path: the new working directory, absolute or relative (resolved
+                against the current process cwd), with ``~`` expansion.
+
+        Raises:
+            ValueError: when ``path`` does not exist, or exists but is not a
+                directory; the two cases are reported differently, since a
+                missing path and a path pointing at a file need different
+                corrections.
+        """
+        resolved = Path(path).expanduser().resolve()
+        if not resolved.exists():
+            raise ValueError(f"{resolved} does not exist")
+        if not resolved.is_dir():
+            raise ValueError(
+                f"{resolved} not a directory: did you mean {resolved.parent}?"
+            )
+        self._working_directory = resolved
+        os.chdir(resolved)
+        # before the app runs there is no toolbar to update; compose() renders
+        # the current directory itself when it builds one
+        if self.is_running:
+            self.query_one("#toolbar", Static).update(self._toolbar_text())
+
     def set_displayed_model_id(self, model_id: str) -> None:
         """Update the model id shown in the toolbar.
 
@@ -297,9 +350,12 @@ class App(TextualApp):
         """Build the toolbar text (placeholder content; fields TBD).
 
         Returns:
-            The model id, thinking effort and the current running/ready
-            status.
+            The model id, thinking effort, working directory and the current
+            running/ready status.
         """
         status = "working" if self._busy else "ready"
         effort = self._effort if self._effort is not None else "null"
-        return f"model: {self._model_id}  ·  effort: {effort}  ·  {status}"
+        return (
+            f"model: {self._model_id}  ·  effort: {effort}  ·  "
+            f"{self._working_directory}  ·  {status}"
+        )
