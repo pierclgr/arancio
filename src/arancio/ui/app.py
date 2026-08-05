@@ -153,8 +153,8 @@ class App(TextualApp):
         """
         try:
             # resolve the prompt into action arguments, build the action, then run
-            # it: a command is handled locally, any other prompt goes to the
-            # model. both yield a message stream rendered the same way
+            # it: slash and shell commands are handled locally, while a prompt
+            # goes to the model. all yield a message stream rendered the same way
             resolved_arguments = PromptManager.resolve_prompt(text)
             action = ActionFactory.create_action(**resolved_arguments)
             for message in self._action_executor.execute(action):

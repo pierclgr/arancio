@@ -4,11 +4,21 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from arancio.prompt.patterns import COMMAND_PATTERN, MENTION_PATTERN
+from arancio.prompt.patterns import (
+    COMMAND_PATTERN,
+    HIDDEN_SHELL_COMMAND_PATTERN,
+    MENTION_PATTERN,
+    SHELL_COMMAND_PATTERN,
+)
 
 
 class PromptManager:
     """Resolves a raw prompt into the keyword arguments for its action.
+
+    A prompt starting with ``!`` or ``!!`` produces a shell command action
+    whose command is the entire remaining text, without slash-command parsing
+    or mention resolution. ``!`` stores the tool exchange in model history;
+    ``!!`` excludes it.
 
     A prompt starting with ``/`` is parsed as ``/<name> <args...>``: the first word is
     the command name and the remaining words are its arguments, split on whitespace
@@ -37,16 +47,30 @@ class PromptManager:
             prompt: the raw user prompt.
 
         Returns:
-            The ``command_name``/``command_args`` keyword arguments for a command
-            action when the prompt is a slash command, otherwise the ``prompt``
-            (with resolving ``@`` mentions rewritten to absolute paths) and
-            ``mentions`` (their resolved absolute paths, in order) keyword
-            arguments for a prompt action.
+            The ``shell_command``/``add_to_history`` keyword arguments for a
+            shell action, the ``command_name``/``command_args`` arguments for
+            a slash command, or the ``prompt``/``mentions`` arguments for a
+            model prompt.
 
-        A slash command whose arguments open a quote that is never closed makes
-        :meth:`_split_command_args` raise ``ValueError``; ``App._run_agent``
-        renders that as an error message.
+        Raises:
+            ValueError: when a shell prefix has no command or a slash command
+                contains an unclosed quote. ``App._run_agent`` renders this as
+                an error message.
         """
+        for pattern, add_to_history in (
+            (HIDDEN_SHELL_COMMAND_PATTERN, False),
+            (SHELL_COMMAND_PATTERN, True),
+        ):
+            shell_match = pattern.match(prompt)
+            if shell_match is not None:
+                shell_command = shell_match.group(1)
+                if not shell_command.strip():
+                    raise ValueError("shell command is empty")
+                return {
+                    "shell_command": shell_command,
+                    "add_to_history": add_to_history,
+                }
+
         match = COMMAND_PATTERN.match(prompt)
         if match is None:
             rewritten_prompt, mentions = cls._resolve_mentions(prompt)

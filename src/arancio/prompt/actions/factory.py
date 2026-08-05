@@ -2,7 +2,12 @@
 
 from pathlib import Path
 
-from arancio.prompt.actions.types import BaseAction, CommandAction, PromptAction
+from arancio.prompt.actions.types import (
+    BaseAction,
+    CommandAction,
+    PromptAction,
+    ShellCommandAction,
+)
 
 
 class ActionFactory:
@@ -19,14 +24,15 @@ class ActionFactory:
         Args:
             **kwargs: the keyword arguments produced by
                 :meth:`arancio.prompt.manager.PromptManager.resolve_prompt`:
-                ``command_name``/``command_args`` for a command action, or
+                ``shell_command``/``add_to_history`` for a shell action,
+                ``command_name``/``command_args`` for a slash command, or
                 ``prompt``/``mentions`` for a prompt action.
 
         Returns:
-            A command action when ``kwargs`` contains ``command_name``, otherwise a
-            prompt
-            action.
+            The concrete action described by ``kwargs``.
         """
+        if "shell_command" in kwargs:
+            return cls.create_shell_command_action(**kwargs)
         if "command_name" in kwargs:
             return cls.create_command_action(**kwargs)
         return cls.create_prompt_action(**kwargs)
@@ -45,6 +51,25 @@ class ActionFactory:
             A command action for the given name and arguments.
         """
         return CommandAction(name=command_name, args=command_args)
+
+    @classmethod
+    def create_shell_command_action(
+        cls, shell_command: str, add_to_history: bool
+    ) -> ShellCommandAction:
+        """Create a shell command action.
+
+        Args:
+            shell_command: the exact command text following the shell prefix.
+            add_to_history: whether to store the tool call and result in agent
+                history.
+
+        Returns:
+            A shell command action for the given command and history policy.
+        """
+        return ShellCommandAction(
+            command=shell_command,
+            add_to_history=add_to_history,
+        )
 
     @classmethod
     def create_prompt_action(

@@ -19,6 +19,7 @@ from arancio.core.messages import (
     ErrorMessage,
     Message,
     ToolCallMessage,
+    ToolErrorMessage,
     ToolResultMessage,
     UserMessage,
 )
@@ -29,7 +30,7 @@ from arancio.core.tools.manager import ToolManager
 from arancio.core.tools.session import default_session
 from arancio.prompt.actions.executor import ActionExecutor
 from arancio.prompt.actions.factory import ActionFactory
-from arancio.prompt.actions.types import CommandAction, PromptAction
+from arancio.prompt.actions.types import CommandAction, PromptAction, ShellCommandAction
 from arancio.settings.settings import Settings
 
 
@@ -138,6 +139,15 @@ class _RecordingAgent:
         self._reply = reply
         self.received: Message | None = None
         self.received_prelude: list[Message] | None = None
+        self.added_messages: list[Message] = []
+
+    def add_message_to_history(self, message: Message) -> None:
+        """Record a message explicitly appended outside ``run``.
+
+        Args:
+            message: the message added to agent history.
+        """
+        self.added_messages.append(message)
 
     def run(
         self, message: Message, prelude: list[Message] | None = None
@@ -164,6 +174,13 @@ def test_factory_creates_command_action() -> None:
     assert action == CommandAction(name="hello-world", args=["Sam", "1"])
 
 
+def test_factory_creates_hidden_shell_command_action() -> None:
+    """The factory builds a non-history shell action for ``!!`` input."""
+    action = ActionFactory.create_shell_command_action("echo hello", False)
+
+    assert action == ShellCommandAction(command="echo hello", add_to_history=False)
+
+
 def test_factory_creates_prompt_action() -> None:
     """The factory builds a prompt action from the raw prompt."""
     action = ActionFactory.create_prompt_action("normal prompt")
@@ -178,6 +195,15 @@ def test_factory_create_action_dispatches_to_command_action() -> None:
     )
 
     assert action == CommandAction(name="hello-world", args=["Sam", "1"])
+
+
+def test_factory_create_action_dispatches_to_shell_command_action() -> None:
+    """create_action builds a shell action when given shell-command arguments."""
+    action = ActionFactory.create_action(
+        shell_command="echo hello", add_to_history=False
+    )
+
+    assert action == ShellCommandAction(command="echo hello", add_to_history=False)
 
 
 def test_factory_create_action_dispatches_to_prompt_action() -> None:
@@ -199,6 +225,101 @@ def test_execute_command_action_runs_command() -> None:
     messages = list(executor.execute(action))
 
     assert messages == [AssistantMessage(content="Hello World, Sam")]
+
+
+def test_execute_hidden_shell_command_yields_paired_call_and_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hidden shell action yields a matching tool call and direct result pair."""
+    agent = _RecordingAgent(AssistantMessage(content="unused"))
+    executor = ActionExecutor(
+        agent=agent,
+        application=_RecordingApplication(),
+        settings_manager=_RecordingSettingsManager(provider=None, model_name=None),
+    )
+    recorded: dict = {}
+
+    def call_shell(call_id: str, **kwargs) -> ToolResultMessage:
+        recorded.update(call_id=call_id, **kwargs)
+        return ToolResultMessage(content="output", id=call_id)
+
+    monkeypatch.setattr(executor._shell_command_tool, "call", call_shell)
+
+    messages = list(
+        executor.execute(
+            ShellCommandAction(command="echo @notes.md", add_to_history=False)
+        )
+    )
+
+    call, result = messages
+    assert isinstance(call, ToolCallMessage)
+    assert call.name == "ShellCommandTool"
+    assert call.arguments == {"command": "echo @notes.md"}
+    assert call.id == recorded["call_id"]
+    assert recorded["command"] == "echo @notes.md"
+    assert result == ToolResultMessage(content="output", id=call.id)
+    assert agent.received is None
+    assert agent.added_messages == []
+
+
+def test_execute_history_shell_command_stores_paired_call_and_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ``!`` action attributes the stored call and result to the user."""
+    agent = _RecordingAgent(AssistantMessage(content="unused"))
+    executor = ActionExecutor(
+        agent=agent,
+        application=_RecordingApplication(),
+        settings_manager=_RecordingSettingsManager(provider=None, model_name=None),
+    )
+
+    def call_shell(call_id: str, **kwargs) -> ToolResultMessage:
+        return ToolResultMessage(content={"stdout": "ok"}, id=call_id)
+
+    monkeypatch.setattr(executor._shell_command_tool, "call", call_shell)
+
+    messages = list(
+        executor.execute(
+            ShellCommandAction(command="echo /clear @notes.md", add_to_history=True)
+        )
+    )
+
+    call, result = messages
+    assert call.arguments == {"command": "echo /clear @notes.md"}
+    assert result.id == call.id
+    assert agent.added_messages == [
+        UserMessage(content="User explicitly ran the following command:"),
+        call,
+        result,
+    ]
+    assert agent.received is None
+
+
+def test_execute_history_shell_command_stores_tool_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed ``!`` command stores its paired tool error for the model."""
+    agent = _RecordingAgent(AssistantMessage(content="unused"))
+    executor = ActionExecutor(
+        agent=agent,
+        application=_RecordingApplication(),
+        settings_manager=_RecordingSettingsManager(),
+    )
+
+    def call_shell(call_id: str, **kwargs) -> ToolErrorMessage:
+        return ToolErrorMessage(content="failed", id=call_id)
+
+    monkeypatch.setattr(executor._shell_command_tool, "call", call_shell)
+
+    messages = list(
+        executor.execute(ShellCommandAction(command="exit 1", add_to_history=True))
+    )
+
+    assert isinstance(messages[1], ToolErrorMessage)
+    assert agent.added_messages == [
+        UserMessage(content="User explicitly ran the following command:"),
+        *messages,
+    ]
 
 
 def test_execute_command_action_ignores_extra_prompt_words() -> None:

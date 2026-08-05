@@ -592,6 +592,32 @@ def test_agent_run_prelude_messages_are_appended_and_yielded_before_client_call(
     ]
 
 
+def test_agent_explicit_history_messages_precede_the_next_user_prompt() -> None:
+    """User attribution and shell history precede the next model prompt."""
+    client = _ReasoningClient()
+    agent = _agent(client=client, permission_manager=_StubManager())
+    notice = UserMessage(content="User ran the following command:")
+    call = ToolCallMessage(
+        content='ShellCommandTool({"command": "pwd"})',
+        id="shell_1",
+        name="ShellCommandTool",
+        arguments={"command": "pwd"},
+    )
+    result = ToolResultMessage(content={"stdout": "/repo"}, id="shell_1")
+    agent.add_message_to_history(notice)
+    agent.add_message_to_history(call)
+    agent.add_message_to_history(result)
+
+    list(agent.run(UserMessage(content="what directory is this?")))
+
+    assert client.requests[0].message_list[:4] == [
+        notice,
+        call,
+        result,
+        UserMessage(content="what directory is this?"),
+    ]
+
+
 def test_agent_yields_chunks_without_storing_them() -> None:
     """Streaming chunks are yielded but omitted from provider history."""
     client = _StreamingClient()
@@ -847,7 +873,7 @@ def test_agent_repr_includes_configuration_without_history_contents() -> None:
     agent = _agent(
         client=_ReasoningClient(), max_turns=3, permission_manager=_StubManager()
     )
-    agent._add_message_to_history(UserMessage(content="secret"))
+    agent.add_message_to_history(UserMessage(content="secret"))
 
     assert repr(agent) == (
         "Agent("
@@ -865,7 +891,7 @@ def test_agent_repr_includes_configuration_without_history_contents() -> None:
 def test_agent_clear_history_empties_message_history() -> None:
     """clear_history empties the conversation history, as if starting fresh."""
     agent = _agent(client=_ReasoningClient(), permission_manager=_StubManager())
-    agent._add_message_to_history(UserMessage(content="hello"))
+    agent.add_message_to_history(UserMessage(content="hello"))
 
     agent.clear_history()
 
