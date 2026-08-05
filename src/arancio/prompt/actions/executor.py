@@ -24,7 +24,12 @@ from arancio.core.messages import (
 from arancio.core.tools.commands.shell import ShellCommandTool
 from arancio.core.tools.files.read import ReadFileTool
 from arancio.prompt.actions.constants import INJECTABLE_COMMAND_PARAMETERS
-from arancio.prompt.actions.types import BaseAction, CommandAction, PromptAction
+from arancio.prompt.actions.types import (
+    BaseAction,
+    CommandAction,
+    PromptAction,
+    ShellCommandAction,
+)
 from arancio.settings.manager import SettingsManager
 
 if TYPE_CHECKING:
@@ -34,7 +39,10 @@ if TYPE_CHECKING:
 class ActionExecutor:
     """Carries out an action built from the prompt manager's arguments.
 
-    A :class:`arancio.prompt.actions.types.CommandAction` is resolved against
+    A :class:`arancio.prompt.actions.types.ShellCommandAction` runs locally
+    through ``ShellCommandTool``. Its explicit prefix bypasses the normal
+    tool-permission gate. A :class:`arancio.prompt.actions.types.CommandAction`
+    is resolved against
     :data:`arancio.commands.registry.COMMAND_REGISTRY`: its raw prompt words are
     bound to the command's parameter names and run locally. A
     :class:`arancio.prompt.actions.types.PromptAction` is sent to the model
@@ -74,12 +82,36 @@ class ActionExecutor:
         Raises:
             ValueError: when the action is of an unknown type.
         """
+        if isinstance(action, ShellCommandAction):
+            return self._execute_shell_command(action)
         if isinstance(action, CommandAction):
             return self._execute_command(action)
         elif isinstance(action, PromptAction):
             return self._execute_prompt(action)
         else:
             raise ValueError(f"Unknown action type: {type(action)}")
+
+    def _execute_shell_command(self, action: ShellCommandAction) -> Iterator[Message]:
+        """Run a user-provided command through ``ShellCommandTool``.
+
+        The user's explicit shell prefix is sufficient consent, so this path
+        bypasses ``PermissionManager`` and does not require a configured model.
+
+        Args:
+            action: the shell command action to execute.
+
+        Yields:
+            A synthetic tool call followed by its paired result or error.
+        """
+        call_id = f"shell_{uuid.uuid4().hex}"
+        arguments = {"command": action.command}
+        yield ToolCallMessage(
+            content=f"ShellCommandTool({json.dumps(arguments)})",
+            id=call_id,
+            name="ShellCommandTool",
+            arguments=arguments,
+        )
+        yield self._shell_command_tool.call(call_id=call_id, **arguments)
 
     def _execute_command(self, action: CommandAction) -> Iterator[Message]:
         """Bind the action's words to the command's parameters and run it.

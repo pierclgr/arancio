@@ -29,6 +29,20 @@ class CommandAction(BaseAction):
 
 
 @dataclass
+class ShellCommandAction(BaseAction):
+    """Run user-provided text as a shell command.
+
+    Attributes:
+        command: the exact command text following the shell prefix.
+        add_to_history: whether to store the generated tool call and result
+            in the agent's conversation history.
+    """
+
+    command: str
+    add_to_history: bool
+
+
+@dataclass
 class PromptAction(BaseAction):
     """Send the raw prompt text to the model.
 
