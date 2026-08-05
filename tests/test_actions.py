@@ -288,7 +288,7 @@ def test_execute_history_shell_command_stores_paired_call_and_result(
     assert call.arguments == {"command": "echo /clear @notes.md"}
     assert result.id == call.id
     assert agent.added_messages == [
-        UserMessage(content="User ran the following command:"),
+        UserMessage(content="User explicitly ran the following command:"),
         call,
         result,
     ]
@@ -317,7 +317,7 @@ def test_execute_history_shell_command_stores_tool_error(
 
     assert isinstance(messages[1], ToolErrorMessage)
     assert agent.added_messages == [
-        UserMessage(content="User ran the following command:"),
+        UserMessage(content="User explicitly ran the following command:"),
         *messages,
     ]
 
