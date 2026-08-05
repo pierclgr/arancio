@@ -29,6 +29,18 @@ def test_resolve_prompt_returns_hidden_shell_command_verbatim() -> None:
     }
 
 
+def test_resolve_prompt_returns_history_shell_command_verbatim() -> None:
+    """A leading ``!`` makes the entire remainder a stored shell command."""
+    command = '/model gpt-5 @notes.md && printf "%s\\n" "done"'
+
+    action_kwargs = PromptManager.resolve_prompt(f"!{command}")
+
+    assert action_kwargs == {
+        "shell_command": command,
+        "add_to_history": True,
+    }
+
+
 def test_resolve_prompt_hidden_shell_command_stops_further_parsing() -> None:
     """Slash commands and mentions inside ``!!`` remain shell syntax."""
     command = "/model gpt-5 @notes.md"
@@ -45,6 +57,12 @@ def test_resolve_prompt_rejects_empty_hidden_shell_command() -> None:
     """A bare ``!!`` is invalid because it contains no shell command."""
     with pytest.raises(ValueError, match="shell command is empty"):
         PromptManager.resolve_prompt("!!")
+
+
+def test_resolve_prompt_rejects_empty_history_shell_command() -> None:
+    """A bare ``!`` is invalid because it contains no shell command."""
+    with pytest.raises(ValueError, match="shell command is empty"):
+        PromptManager.resolve_prompt("!")
 
 
 def test_resolve_prompt_keeps_a_quoted_argument_with_spaces_together() -> None:

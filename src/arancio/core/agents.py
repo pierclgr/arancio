@@ -258,7 +258,7 @@ class Agent:
         """Empty the conversation history, as if starting a new chat."""
         self._message_history = []
 
-    def _add_message_to_history(self, message: Message) -> None:
+    def add_message_to_history(self, message: Message) -> None:
         """Append a single message to the conversation history.
 
         Args:
@@ -309,9 +309,9 @@ class Agent:
             Each ``prelude`` message, then each message produced during the
             run, including intermediate tool calls and tool results.
         """
-        self._add_message_to_history(message=message)
+        self.add_message_to_history(message=message)
         for extra in prelude or []:
-            self._add_message_to_history(extra)
+            self.add_message_to_history(extra)
             yield extra
 
         # backoff wait that grows by the multiplier on each consecutive retry
@@ -339,7 +339,7 @@ class Agent:
                 for response_message in self._client.send_request(request=request):
                     if not isinstance(response_message, ChunkMessage):
                         received_finalized = True
-                        self._add_message_to_history(message=response_message)
+                        self.add_message_to_history(message=response_message)
                         if isinstance(response_message, ToolCallMessage):
                             tool_calls.append(response_message)
                     yield response_message
@@ -358,19 +358,19 @@ class Agent:
                     authorized, feedback = self._permission_manager.validate(call)
                     if authorized:
                         tool_result = self._run_tool(call)
-                        self._add_message_to_history(tool_result)
+                        self.add_message_to_history(tool_result)
                         yield tool_result
 
                         # a note carries an instruction telling the model to
                         # report the result first, then answer it; send it as a
                         # separate message after the result
                         if feedback:
-                            self._add_message_to_history(feedback)
+                            self.add_message_to_history(feedback)
                             yield feedback
                     else:
                         # denied or not permitted: feed the message back to the
                         # model and surface it to the user so the model can react
-                        self._add_message_to_history(feedback)
+                        self.add_message_to_history(feedback)
                         yield feedback
 
             except Exception as e:

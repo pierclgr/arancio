@@ -96,6 +96,8 @@ class ActionExecutor:
 
         The user's explicit shell prefix is sufficient consent, so this path
         bypasses ``PermissionManager`` and does not require a configured model.
+        Both forms yield the same paired messages; only ``!`` appends them to
+        agent history, preceded by a user-attribution message.
 
         Args:
             action: the shell command action to execute.
@@ -105,13 +107,23 @@ class ActionExecutor:
         """
         call_id = f"shell_{uuid.uuid4().hex}"
         arguments = {"command": action.command}
-        yield ToolCallMessage(
+        call = ToolCallMessage(
             content=f"ShellCommandTool({json.dumps(arguments)})",
             id=call_id,
             name="ShellCommandTool",
             arguments=arguments,
         )
-        yield self._shell_command_tool.call(call_id=call_id, **arguments)
+        if action.add_to_history:
+            self._agent.add_message_to_history(
+                UserMessage(content="User explicitly ran the following command:")
+            )
+            self._agent.add_message_to_history(call)
+        yield call
+
+        result = self._shell_command_tool.call(call_id=call_id, **arguments)
+        if action.add_to_history:
+            self._agent.add_message_to_history(result)
+        yield result
 
     def _execute_command(self, action: CommandAction) -> Iterator[Message]:
         """Bind the action's words to the command's parameters and run it.

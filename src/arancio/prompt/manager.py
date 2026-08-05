@@ -4,16 +4,21 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from arancio.prompt.patterns import COMMAND_PATTERN, MENTION_PATTERN
+from arancio.prompt.patterns import (
+    COMMAND_PATTERN,
+    HIDDEN_SHELL_COMMAND_PATTERN,
+    MENTION_PATTERN,
+    SHELL_COMMAND_PATTERN,
+)
 
 
 class PromptManager:
     """Resolves a raw prompt into the keyword arguments for its action.
 
-    A prompt starting with ``!!`` produces a shell command action whose
-    command is the entire remaining text, without slash-command parsing or
-    mention resolution. The action executes locally without entering model
-    history.
+    A prompt starting with ``!`` or ``!!`` produces a shell command action
+    whose command is the entire remaining text, without slash-command parsing
+    or mention resolution. ``!`` stores the tool exchange in model history;
+    ``!!`` excludes it.
 
     A prompt starting with ``/`` is parsed as ``/<name> <args...>``: the first word is
     the command name and the remaining words are its arguments, split on whitespace
@@ -52,14 +57,19 @@ class PromptManager:
                 contains an unclosed quote. ``App._run_agent`` renders this as
                 an error message.
         """
-        if prompt.startswith("!!"):
-            shell_command = prompt[2:]
-            if not shell_command.strip():
-                raise ValueError("shell command is empty")
-            return {
-                "shell_command": shell_command,
-                "add_to_history": False,
-            }
+        for pattern, add_to_history in (
+            (HIDDEN_SHELL_COMMAND_PATTERN, False),
+            (SHELL_COMMAND_PATTERN, True),
+        ):
+            shell_match = pattern.match(prompt)
+            if shell_match is not None:
+                shell_command = shell_match.group(1)
+                if not shell_command.strip():
+                    raise ValueError("shell command is empty")
+                return {
+                    "shell_command": shell_command,
+                    "add_to_history": add_to_history,
+                }
 
         match = COMMAND_PATTERN.match(prompt)
         if match is None:
