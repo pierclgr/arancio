@@ -3,8 +3,11 @@
 from datetime import date
 from pathlib import Path
 
+from dynamic_markdown.types.files.base import DynamicMarkdownFile
+
 from arancio.core.builders.base import Builder
-from arancio.storage.manager import StorageManager
+from arancio.core.constants.agent import AGENT_DEFAULT_SYSTEM_PROMPT
+from arancio.core.constants.path import SYSTEM_PROMPT_HARNESS_PATH
 
 
 class SystemPromptBuilder(Builder):
@@ -21,24 +24,34 @@ class SystemPromptBuilder(Builder):
     def __init__(self) -> None:
         """Load and cache the system prompt from the harness file.
 
-        Loads ``SYSTEM_PROMPT.md`` via
-        :meth:`~arancio.storage.manager.StorageManager.load_system_prompt`
-        (which seeds it with a default when missing and parses it as
-        dynamic markdown), mirroring how tool descriptions are loaded once
-        in :class:`~arancio.core.tools.base.BaseTool`.
+        Seeds ``SYSTEM_PROMPT.md`` with the default when missing, then parses it as
+        dynamic markdown. This mirrors how tool descriptions are loaded once in
+        :class:`~arancio.core.tools.base.BaseTool`.
         """
-        self._system_prompt: str = StorageManager.load_system_prompt().content
+        self._system_prompt = self._load_system_prompt()
 
     def reload(self) -> None:
         """Refresh the cached system prompt from disk.
 
-        Goes through
-        :meth:`~arancio.storage.manager.StorageManager.load_system_prompt`
-        rather than the parsed file's own ``reload``, so a harness file
-        deleted mid-session is seeded with the default again instead of
+        A harness file deleted mid-session is seeded with the default again instead of
         raising.
         """
-        self._system_prompt = StorageManager.load_system_prompt().content
+        self._system_prompt = self._load_system_prompt()
+
+    @staticmethod
+    def _load_system_prompt() -> str:
+        """Seed and parse the system-prompt harness file.
+
+        Returns:
+            The expanded system prompt content.
+        """
+        if not SYSTEM_PROMPT_HARNESS_PATH.is_file():
+            SYSTEM_PROMPT_HARNESS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            SYSTEM_PROMPT_HARNESS_PATH.write_text(
+                AGENT_DEFAULT_SYSTEM_PROMPT, encoding="utf-8"
+            )
+
+        return DynamicMarkdownFile(SYSTEM_PROMPT_HARNESS_PATH).content
 
     def build(self) -> str:
         """Return the cached system prompt with the current runtime context appended.

@@ -53,6 +53,6 @@ class ModelCommand(BaseCommand):
             settings.model_name = previous_model_name
             raise
         settings_manager.apply()
-        settings_manager.save()
+        settings_manager.save_model_name()
         application.set_displayed_model_id(model_id)
         return f"Model set to {model_id}"

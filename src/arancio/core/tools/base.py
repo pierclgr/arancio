@@ -6,7 +6,7 @@ from typing import Any, Type
 import yaml
 from dynamic_markdown.types.files.base import DynamicMarkdownFile
 
-from arancio.core.constants.path.base import (
+from arancio.core.constants.path import (
     TOOL_DESCRIPTION_FILENAME,
     TOOL_INPUT_SCHEMA_FILENAME,
     TOOLS_HARNESS_PATH,
@@ -14,7 +14,7 @@ from arancio.core.constants.path.base import (
 from arancio.core.messages import ToolResultMessage
 from arancio.core.parsers.tool_result.base import BaseToolResultParser
 from arancio.core.tools.schema import ToolSchema
-from arancio.core.tools.session import ToolSession, default_session
+from arancio.core.tools.session import ToolSession, shared_session
 from arancio.core.utils.naming import camel_to_snake
 
 
@@ -35,16 +35,15 @@ class BaseTool(ABC):
             description from disk via ``.reload()``.
         _result_parser: parser converting raw tool output into a tool
             result message.
-        _session: shared :class:`ToolSession` for cross-tool
-            coordination (e.g. read-first guards). Defaults to the
-            module-level :data:`default_session` singleton; pass an
-            explicit instance to the constructor to override.
+        _session: the process-wide :class:`ToolSession` for cross-tool
+            coordination (e.g. read-first guards), shared by every tool
+            through this class attribute.
     """
 
     _result_parser: Type[BaseToolResultParser] = BaseToolResultParser
-    _session: ToolSession = default_session
+    _session: ToolSession = shared_session
 
-    def __init__(self, session: ToolSession | None = None) -> None:
+    def __init__(self) -> None:
         """Initialize the tool by loading description and input schema from disk.
 
         Reads ``description.md`` and ``input_schema.yml`` from
@@ -55,19 +54,10 @@ class BaseTool(ABC):
         include and script targets resolve against ``description.md``'s
         own directory.
 
-        Args:
-            session: optional :class:`ToolSession` to override the
-                shared :data:`default_session` singleton on this
-                instance. Useful in tests that need an isolated
-                cross-tool state.
-
         Raises:
             FileNotFoundError: when the harness directory for this
                 tool does not exist.
         """
-        if session is not None:
-            self._session = session
-
         self._harness_dir = TOOLS_HARNESS_PATH / camel_to_snake(self.name)
 
         if not self._harness_dir.is_dir():

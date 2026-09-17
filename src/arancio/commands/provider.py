@@ -45,7 +45,7 @@ class ProviderCommand(BaseCommand):
         settings = settings_manager.settings
         settings.provider = provider
         settings_manager.apply()
-        settings_manager.save()
+        settings_manager.save_provider()
         if settings.model_name:
             application.set_displayed_model_id(settings.model_id)
         return f"Provider set to {settings.provider}"

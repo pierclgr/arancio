@@ -1,5 +1,6 @@
-"""Permission value types: autonomy levels and tool categories."""
+"""Permission value types: autonomy levels, tool categories and decisions."""
 
+from dataclasses import dataclass
 from enum import Enum
 
 from arancio.core.tools.commands.shell import ShellCommandTool
@@ -58,3 +59,30 @@ class PermissionCategory(Enum):
             if any(tool.__name__ == tool_name for tool in category.value):
                 return category
         return None
+
+
+class PermissionOutcome(Enum):
+    """How a requested tool call was resolved.
+
+    Attributes:
+        ALLOWED: the call may run.
+        DENIED: the user refused the call.
+        UNAVAILABLE: no granted category builds the requested tool.
+    """
+
+    ALLOWED = "allowed"
+    DENIED = "denied"
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class PermissionDecision:
+    """Resolved permission for one tool call, for the caller to act on.
+
+    Attributes:
+        outcome: how the call was resolved.
+        note: the user's note when allowing, or the reason when denying.
+    """
+
+    outcome: PermissionOutcome
+    note: str | None = None

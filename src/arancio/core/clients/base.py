@@ -40,18 +40,16 @@ class BaseClient(ABC):
 
     def __init__(
         self,
-        token: str | None = None,
         model_id: str | None = None,
         thinking_effort: str | None = None,
         thinking_summary: str | None = None,
     ) -> None:
-        """Initialize the client with an optional token and overrides.
+        """Initialize the client with its per-instance overrides.
+
+        Credentials are not passed here: they are resolved by the underlying
+        transport (e.g. LiteLLM's native env-var lookup).
 
         Args:
-            token: optional access token or API key used by subclasses
-                for authentication; ``None`` defers credential
-                resolution to the underlying transport (e.g. LiteLLM's
-                native env-var lookup).
             model_id: the model identifier to use for outgoing requests;
                 when ``None`` the class default ``_default_model_id`` is
                 kept.
@@ -63,7 +61,6 @@ class BaseClient(ABC):
                 ``"detailed"``); when ``None`` the class default
                 ``_default_thinking_summary`` is kept.
         """
-        self._token = token
         self._model_id: str | None = self._default_model_id
         self._thinking_effort: str | None = self._default_thinking_effort
         self._thinking_summary: str | None = self._default_thinking_summary

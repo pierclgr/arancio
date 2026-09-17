@@ -73,7 +73,7 @@ class PermissionsCommand(BaseCommand):
                 PermissionLevel.NONE
             )
             settings_manager.apply()
-            settings_manager.save()
+            settings_manager.save_permission(resolved_category)
             return f"{resolved_category.name.lower()} permission removed"
 
         try:
@@ -89,7 +89,7 @@ class PermissionsCommand(BaseCommand):
 
         settings_manager.settings.permissions[resolved_category] = new_level
         settings_manager.apply()
-        settings_manager.save()
+        settings_manager.save_permission(resolved_category)
         return (
             f"{resolved_category.name.lower()} permission level set to "
             f"{new_level.value}"

@@ -37,6 +37,23 @@ class UIController(Controller):
         """Initialize the controller with no app attached yet."""
         self.app: App | None = None
 
+    def require_app(self) -> App:
+        """Return the attached app or fail before dispatching to it.
+
+        Every request arrives once the agent is running, long after wiring
+        assigned ``app``, so this states that expectation instead of leaving
+        each dispatch to assume it.
+
+        Returns:
+            The running Textual app.
+
+        Raises:
+            ValueError: when no app has been attached to this controller.
+        """
+        if self.app is None:
+            raise ValueError("No app attached to the controller.")
+        return self.app
+
     def request(self, request: BaseControllerRequest) -> BaseControllerResponse:
         """Dispatch a request to the app and block until the user answers.
 
@@ -56,8 +73,9 @@ class UIController(Controller):
             )
             return self._to_permission_response(answer)
         if isinstance(request, ChatGPTLoginRequest):
-            self.app.call_from_thread(
-                self.app.show_chatgpt_login,
+            app = self.require_app()
+            app.call_from_thread(
+                app.show_chatgpt_login,
                 request.verification_url,
                 request.user_code,
             )
@@ -81,9 +99,8 @@ class UIController(Controller):
             result.append(answer)
             event.set()
 
-        self.app.call_from_thread(
-            self.app.push_screen, QuestionScreen(question, answers), _store
-        )
+        app = self.require_app()
+        app.call_from_thread(app.push_screen, QuestionScreen(question, answers), _store)
         event.wait()
         return result[0]
 

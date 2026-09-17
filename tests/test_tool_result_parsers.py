@@ -1,6 +1,15 @@
-"""Tests for tool result parsers."""
+"""Tests for how each tool's structured output is rendered for the user.
+
+The parsers own two decisions: what the user reads, and whether a call that raised
+nothing is nonetheless a failure. The second one matters most — a shell command exiting
+non-zero returns normally, and only the parser turns it into a
+:class:`ToolErrorMessage`.
+"""
+
+import pytest
 
 from arancio.core.messages import ToolErrorMessage, ToolResultMessage
+from arancio.core.parsers.tool_result.base import BaseToolResultParser
 from arancio.core.parsers.tool_result.commands.shell import ShellCommandToolResultParser
 from arancio.core.parsers.tool_result.files.edit import EditFileToolResultParser
 from arancio.core.parsers.tool_result.files.read import ReadFileToolResultParser
@@ -9,504 +18,186 @@ from arancio.core.parsers.tool_result.web.fetch import FetchWebToolResultParser
 from arancio.core.parsers.tool_result.web.search import SearchWebToolResultParser
 
 
-def test_shell_command_parser_keeps_stdout_successful() -> None:
-    """Stdout-only shell output is a successful tool result."""
-    output = {
-        "stdout": "ok\n",
-        "stderr": "",
-        "exit_code": 0,
-        "timed_out": False,
-        "truncated": False,
-    }
-
-    result = ShellCommandToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="ok",
+def test_read_result_ends_with_the_line_range() -> None:
+    """The footer tells the model which slice of the file it is looking at."""
+    rendered = ReadFileToolResultParser._render(
+        {
+            "file_path": "/tmp/a.txt",
+            "content": "     1\talpha",
+            "start_line": 1,
+            "end_line": 1,
+            "total_lines": 9,
+            "truncated_lines": 0,
+        }
     )
 
+    assert rendered == "/tmp/a.txt\n     1\talpha\n[lines 1-1 of 9]"
 
-def test_shell_command_parser_reports_stderr_without_failing() -> None:
-    """Stderr is displayed but does not fail the result when exit code is zero."""
-    output = {
-        "stdout": "",
-        "stderr": "warning\n",
-        "exit_code": 0,
-        "timed_out": False,
-        "truncated": False,
-    }
 
-    result = ShellCommandToolResultParser.parse(call_id="call_1", output=output)
+@pytest.mark.parametrize(
+    ("output", "expected_footer"),
+    [
+        ({"total_lines": 0}, "[empty file]"),
+        ({"total_lines": 9, "start_line": 0}, "[no lines returned, file has 9 lines]"),
+    ],
+    ids=["empty-file", "slice-past-the-end"],
+)
+def test_read_result_explains_an_absent_slice(
+    output: dict, expected_footer: str
+) -> None:
+    """An empty read says why it is empty rather than rendering nothing."""
+    assert ReadFileToolResultParser._render(output) == expected_footer
 
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="warning",
+
+def test_read_result_counts_capped_lines() -> None:
+    """Long lines that were cut are reported, so the model knows text is missing."""
+    rendered = ReadFileToolResultParser._render(
+        {
+            "content": "x",
+            "start_line": 1,
+            "end_line": 1,
+            "total_lines": 1,
+            "truncated_lines": 2,
+        }
     )
 
+    assert rendered.endswith("[2 long lines truncated]")
 
-def test_shell_command_parser_marks_non_zero_exit_code_as_error() -> None:
-    """Non-zero shell exit codes fail the tool result."""
-    output = {
-        "stdout": "",
-        "stderr": "fatal\n",
-        "exit_code": 2,
-        "timed_out": False,
-        "truncated": False,
-    }
 
-    result = ShellCommandToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolErrorMessage(
-        content=output,
-        id="call_1",
-        display_text="fatal\n[exit code 2]",
+@pytest.mark.parametrize(
+    ("action", "verb"),
+    [("created", "Created"), ("overwritten", "Overwrote"), ("something", "Wrote")],
+)
+def test_write_result_names_what_happened(action: str, verb: str) -> None:
+    """The verb distinguishes a new file from a clobbered one."""
+    rendered = WriteFileToolResultParser._render(
+        {
+            "file_path": "/tmp/a.txt",
+            "bytes_written": 6,
+            "total_lines": 1,
+            "action": action,
+        }
     )
 
+    assert rendered == f"{verb} /tmp/a.txt (6 bytes, 1 lines)"
 
-def test_shell_command_parser_marks_timeout_as_error() -> None:
-    """Timed-out shell commands fail the tool result."""
-    output = {
-        "stdout": "partial\n",
-        "stderr": "",
-        "exit_code": -1,
-        "timed_out": True,
-        "truncated": False,
-    }
 
-    result = ShellCommandToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolErrorMessage(
-        content=output,
-        id="call_1",
-        display_text="partial\n[timed out]\n[exit code -1]",
+def test_edit_result_pluralizes_and_appends_the_diff() -> None:
+    """The summary line is followed by the diff the user needs to review."""
+    rendered = EditFileToolResultParser._render(
+        {
+            "file_path": "/tmp/a.txt",
+            "replacements": 2,
+            "bytes_before": 10,
+            "bytes_after": 12,
+            "diff": "-old\n+new",
+        }
     )
 
+    assert rendered == "Edited /tmp/a.txt (2 replacements, 10 → 12 bytes)\n-old\n+new"
 
-def test_shell_command_parser_honors_explicit_error_flag() -> None:
-    """Explicit tool execution errors are preserved by the shell parser."""
-    output = "Error while executing ShellCommandTool: boom"
 
-    result = ShellCommandToolResultParser.parse(
-        call_id="call_1",
-        output=output,
-        is_error=True,
+def test_edit_result_uses_the_singular_for_one_replacement() -> None:
+    """One replacement reads as one, not as ``1 replacements``."""
+    rendered = EditFileToolResultParser._render(
+        {
+            "file_path": "/tmp/a.txt",
+            "replacements": 1,
+            "bytes_before": 1,
+            "bytes_after": 1,
+        }
     )
 
-    assert result == ToolErrorMessage(
-        content=output,
-        id="call_1",
+    assert "1 replacement," in rendered
+
+
+def test_shell_result_stacks_output_then_status() -> None:
+    """Both streams are shown, then the annotations that explain the outcome."""
+    rendered = ShellCommandToolResultParser._render(
+        {
+            "stdout": "out\n",
+            "stderr": "err\n",
+            "exit_code": 3,
+            "timed_out": False,
+            "truncated": True,
+        }
     )
 
+    assert rendered == "out\nerr\n[exit code 3]\n[output truncated]"
 
-def test_read_tool_parser_formats_successful_slice() -> None:
-    """Read tool output is rendered with the file path and a slice footer."""
-    output = {
-        "file_path": "/abs/file.txt",
-        "content": "     1\thello\n     2\tworld",
-        "start_line": 1,
-        "end_line": 2,
-        "total_lines": 2,
-        "truncated_lines": 0,
-    }
 
-    result = ReadFileToolResultParser.parse(call_id="call_1", output=output)
+@pytest.mark.parametrize(
+    "output",
+    [
+        {"stdout": "", "stderr": "", "exit_code": 1, "timed_out": False},
+        {"stdout": "", "stderr": "", "exit_code": -1, "timed_out": True},
+    ],
+    ids=["non-zero-exit", "timed-out"],
+)
+def test_a_shell_command_that_ran_can_still_be_an_error(output: dict) -> None:
+    """The tool raised nothing, so only the parser can mark this a failure."""
+    message = ShellCommandToolResultParser.parse(call_id="c1", output=output)
 
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="/abs/file.txt\n     1\thello\n     2\tworld\n[lines 1-2 of 2]",
+    assert isinstance(message, ToolErrorMessage)
+
+
+def test_a_clean_shell_command_is_a_plain_result() -> None:
+    """Exit code zero stays a result, not an error."""
+    message = ShellCommandToolResultParser.parse(
+        call_id="c1", output={"stdout": "ok", "stderr": "", "exit_code": 0}
     )
 
+    assert type(message) is ToolResultMessage
 
-def test_read_tool_parser_marks_empty_file() -> None:
-    """Empty files are surfaced with the file path and an explicit marker."""
-    output = {
-        "file_path": "/abs/file.txt",
-        "content": "",
-        "start_line": 0,
-        "end_line": 0,
-        "total_lines": 0,
-        "truncated_lines": 0,
-    }
 
-    result = ReadFileToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="/abs/file.txt\n[empty file]",
+def test_search_result_numbers_each_hit_and_counts_them() -> None:
+    """Every hit gets a number, and the footer repeats the query."""
+    rendered = SearchWebToolResultParser._render(
+        {
+            "query": "python",
+            "results": [{"title": "T", "url": "https://a", "excerpt": "E"}],
+            "timed_out": False,
+        }
     )
 
+    assert rendered == '1. T\n   https://a\n   E\n\n[1 result for "python"]'
 
-def test_read_tool_parser_marks_offset_past_end() -> None:
-    """Offsets past the last line yield the file path and a descriptive marker."""
-    output = {
-        "file_path": "/abs/file.txt",
-        "content": "",
-        "start_line": 0,
-        "end_line": 0,
-        "total_lines": 5,
-        "truncated_lines": 0,
-    }
 
-    result = ReadFileToolResultParser.parse(call_id="call_1", output=output)
+def test_search_result_says_so_when_there_is_nothing() -> None:
+    """An empty result list is stated, not rendered as blank."""
+    assert SearchWebToolResultParser._render({"results": []}) == "[no results]"
 
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="/abs/file.txt\n[no lines returned, file has 5 lines]",
+
+def test_a_timed_out_search_is_an_error_with_a_marker() -> None:
+    """A timeout both annotates the text and fails the call."""
+    message = SearchWebToolResultParser.parse(
+        call_id="c1", output={"query": "q", "results": [], "timed_out": True}
     )
 
+    assert isinstance(message, ToolErrorMessage)
+    assert message.display_text == "[no results]\n[timed out]"
 
-def test_read_tool_parser_reports_truncated_lines() -> None:
-    """Truncated lines are reported in a trailing footer line."""
-    output = {
-        "file_path": "/abs/file.txt",
-        "content": "     1\thello… [line truncated]",
-        "start_line": 1,
-        "end_line": 1,
-        "total_lines": 1,
-        "truncated_lines": 1,
-    }
 
-    result = ReadFileToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text=(
-            "/abs/file.txt\n     1\thello… [line truncated]\n[lines 1-1 of 1]\n"
-            "[1 long lines truncated]"
-        ),
+def test_fetch_result_footers_the_source() -> None:
+    """The answer is followed by where it came from."""
+    rendered = FetchWebToolResultParser._render(
+        {"answer": "42", "title": "T", "url": "https://a", "truncated": True}
     )
 
+    assert rendered == "42\n\n[T — https://a]\n[content truncated]"
 
-def test_read_tool_parser_honors_explicit_error_flag() -> None:
-    """Explicit tool execution errors are preserved by the read parser."""
-    output = "Error while executing ReadFileTool: boom"
 
-    result = ReadFileToolResultParser.parse(
-        call_id="call_1",
-        output=output,
-        is_error=True,
+def test_fetch_result_states_an_empty_answer() -> None:
+    """A blank answer is labelled rather than shown as nothing."""
+    assert FetchWebToolResultParser._render({"answer": ""}) == "[no answer]"
+
+
+def test_non_dict_output_is_passed_through_unrendered() -> None:
+    """An error string from a tool becomes the content and the display text."""
+    message = BaseToolResultParser.parse(
+        call_id="c1", output="Error while executing X: boom", is_error=True
     )
 
-    assert result == ToolErrorMessage(
-        content=output,
-        id="call_1",
-    )
-
-
-def test_write_tool_parser_reports_created() -> None:
-    """Created files are rendered with the ``Created`` verb."""
-    output = {
-        "file_path": "/abs/new.txt",
-        "bytes_written": 12,
-        "action": "created",
-        "total_lines": 2,
-    }
-
-    result = WriteFileToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="Created /abs/new.txt (12 bytes, 2 lines)",
-    )
-
-
-def test_write_tool_parser_reports_overwritten() -> None:
-    """Overwritten files are rendered with the ``Overwrote`` verb."""
-    output = {
-        "file_path": "/abs/file.txt",
-        "bytes_written": 5,
-        "action": "overwritten",
-        "total_lines": 1,
-    }
-
-    result = WriteFileToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="Overwrote /abs/file.txt (5 bytes, 1 lines)",
-    )
-
-
-def test_write_tool_parser_honors_explicit_error_flag() -> None:
-    """Explicit tool execution errors are preserved by the write parser."""
-    output = "Error while executing WriteFileTool: boom"
-
-    result = WriteFileToolResultParser.parse(
-        call_id="call_1",
-        output=output,
-        is_error=True,
-    )
-
-    assert result == ToolErrorMessage(
-        content=output,
-        id="call_1",
-    )
-
-
-def test_edit_tool_parser_reports_single_replacement() -> None:
-    """A single replacement is rendered with the singular noun."""
-    output = {
-        "file_path": "/abs/file.py",
-        "replacements": 1,
-        "bytes_before": 12,
-        "bytes_after": 13,
-        "action": "edited",
-    }
-
-    result = EditFileToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="Edited /abs/file.py (1 replacement, 12 → 13 bytes)",
-    )
-
-
-def test_edit_tool_parser_reports_plural_replacements() -> None:
-    """Multiple replacements are rendered with the plural noun."""
-    output = {
-        "file_path": "/abs/file.py",
-        "replacements": 3,
-        "bytes_before": 30,
-        "bytes_after": 33,
-        "action": "edited",
-    }
-
-    result = EditFileToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="Edited /abs/file.py (3 replacements, 30 → 33 bytes)",
-    )
-
-
-def test_edit_tool_parser_appends_diff() -> None:
-    """A unified diff in the output is appended below the summary line."""
-    diff = "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@\n-x = 1\n+x = 2"
-    output = {
-        "file_path": "/abs/file.py",
-        "replacements": 1,
-        "bytes_before": 5,
-        "bytes_after": 5,
-        "action": "edited",
-        "diff": diff,
-    }
-
-    result = EditFileToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text=f"Edited /abs/file.py (1 replacement, 5 → 5 bytes)\n{diff}",
-    )
-
-
-def test_edit_tool_parser_honors_explicit_error_flag() -> None:
-    """Explicit tool execution errors are preserved by the edit parser."""
-    output = "Error while executing EditFileTool: boom"
-
-    result = EditFileToolResultParser.parse(
-        call_id="call_1",
-        output=output,
-        is_error=True,
-    )
-
-    assert result == ToolErrorMessage(
-        content=output,
-        id="call_1",
-    )
-
-
-# — SearchWebToolResultParser ——————————————————————————————————————————
-
-
-def test_search_web_parser_formats_results_with_footer() -> None:
-    """Successful results render as a numbered list plus the query footer."""
-    output = {
-        "query": "pytorch",
-        "results": [
-            {
-                "url": "https://pytorch.org/docs/",
-                "title": "PyTorch docs",
-                "excerpt": "Docs excerpt.",
-            },
-            {
-                "url": "https://pytorch.org/tutorials/",
-                "title": "PyTorch tutorials",
-                "excerpt": "Tut excerpt.",
-            },
-        ],
-        "timed_out": False,
-    }
-
-    result = SearchWebToolResultParser.parse(call_id="call_1", output=output)
-
-    expected_content = (
-        "1. PyTorch docs\n"
-        "   https://pytorch.org/docs/\n"
-        "   Docs excerpt.\n"
-        "\n"
-        "2. PyTorch tutorials\n"
-        "   https://pytorch.org/tutorials/\n"
-        "   Tut excerpt.\n"
-        "\n"
-        '[2 results for "pytorch"]'
-    )
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text=expected_content,
-    )
-
-
-def test_search_web_parser_singular_noun() -> None:
-    """A single result uses the singular ``result`` noun in the footer."""
-    output = {
-        "query": "only one",
-        "results": [
-            {"url": "https://x", "title": "T", "excerpt": "E"},
-        ],
-        "timed_out": False,
-    }
-
-    result = SearchWebToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text=('1. T\n   https://x\n   E\n\n[1 result for "only one"]'),
-    )
-
-
-def test_search_web_parser_empty_results() -> None:
-    """Empty result list renders the ``[no results]`` marker."""
-    output = {"query": "no hits", "results": [], "timed_out": False}
-
-    result = SearchWebToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="[no results]",
-    )
-
-
-def test_search_web_parser_timeout() -> None:
-    """Timeout dicts are surfaced as tool errors with the ``[timed out]`` tag."""
-    output = {"query": "slow", "results": [], "timed_out": True}
-
-    result = SearchWebToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolErrorMessage(
-        content=output,
-        id="call_1",
-        display_text="[no results]\n[timed out]",
-    )
-
-
-def test_search_web_parser_explicit_error_flag() -> None:
-    """Explicit tool execution errors are preserved by the web search parser."""
-    output = "Error while executing SearchWebTool: rate limited"
-
-    result = SearchWebToolResultParser.parse(
-        call_id="call_1",
-        output=output,
-        is_error=True,
-    )
-
-    assert result == ToolErrorMessage(
-        content=output,
-        id="call_1",
-    )
-
-
-# — FetchWebToolResultParser ———————————————————————————————————————————
-
-
-def test_fetch_web_parser_formats_answer_with_footer() -> None:
-    """Successful output renders the answer plus a title/url footer."""
-    output = {
-        "url": "https://x/final",
-        "query": "what does it cover?",
-        "title": "Title",
-        "content_type": None,
-        "retrieved_at": "2026-01-01T00:00:00+00:00",
-        "answer": "The page covers X.",
-        "truncated": False,
-    }
-
-    result = FetchWebToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="The page covers X.\n\n[Title — https://x/final]",
-    )
-
-
-def test_fetch_web_parser_appends_truncated_marker() -> None:
-    """Truncated content adds a ``[content truncated]`` marker to the footer."""
-    output = {
-        "url": "https://x",
-        "query": "q",
-        "title": "T",
-        "content_type": None,
-        "retrieved_at": "2026-01-01T00:00:00+00:00",
-        "answer": "answer",
-        "truncated": True,
-    }
-
-    result = FetchWebToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="answer\n\n[T — https://x]\n[content truncated]",
-    )
-
-
-def test_fetch_web_parser_empty_answer_marker() -> None:
-    """An empty answer renders the ``[no answer]`` marker."""
-    output = {
-        "url": "https://x",
-        "query": "q",
-        "title": None,
-        "content_type": None,
-        "retrieved_at": "2026-01-01T00:00:00+00:00",
-        "answer": "",
-        "truncated": False,
-    }
-
-    result = FetchWebToolResultParser.parse(call_id="call_1", output=output)
-
-    assert result == ToolResultMessage(
-        content=output,
-        id="call_1",
-        display_text="[no answer]\n\n[https://x]",
-    )
-
-
-def test_fetch_web_parser_explicit_error_flag() -> None:
-    """Explicit tool execution errors are preserved by the web fetch parser."""
-    output = "Error while executing FetchWebTool: failed to fetch https://x"
-
-    result = FetchWebToolResultParser.parse(
-        call_id="call_1",
-        output=output,
-        is_error=True,
-    )
-
-    assert result == ToolErrorMessage(
-        content=output,
-        id="call_1",
-    )
+    assert isinstance(message, ToolErrorMessage)
+    assert message.content == "Error while executing X: boom"
+    assert message.display_text == message.content

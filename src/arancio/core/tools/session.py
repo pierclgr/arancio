@@ -49,13 +49,24 @@ class ToolSession:
         recorded = self._reads.get(path)
         return recorded is not None and recorded == current_mtime
 
+    def snapshot(self) -> dict[str, float]:
+        """Return every recorded read as a path-to-modification-time mapping.
+
+        The mapping is a copy, so a caller reading it never observes later
+        reads and cannot mutate the session through it.
+
+        Returns:
+            A copy of the recorded reads.
+        """
+        return dict(self._reads)
+
     def clear(self) -> None:
         """Drop all recorded reads.
 
-        Tests rely on this hook to start each case from a clean slate, since the module-
-        level :data:`default_session` lives for the whole process.
+        A new or replaced chat starts from a clean slate, since the module-level
+        :data:`shared_session` lives for the whole process.
         """
         self._reads.clear()
 
 
-default_session: ToolSession = ToolSession()
+shared_session: ToolSession = ToolSession()

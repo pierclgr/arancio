@@ -1,213 +1,176 @@
-"""Tests for the storage manager."""
+"""Tests for the file-I/O layer the session log and settings are built on.
+
+``StorageManager`` is deliberately dumb: it does no validation and holds no policy. What
+it does own is the append-and-recover primitives the session recorder relies on, and two
+methods that write outside the manager's ``root`` through module constants — which is
+why ``conftest`` redirects those.
+"""
 
 from pathlib import Path
 
 import pytest
 import yaml
 
-import arancio.storage.manager as storage_mod
-from arancio.core.constants.agent import AGENT_DEFAULT_SYSTEM_PROMPT
+import arancio.storage.manager as storage_module
 from arancio.core.messages import ErrorMessage, WarningMessage
 from arancio.settings.settings import Settings
 from arancio.storage.manager import StorageManager
 
 
-def test_make_dir_creates_nested_directory_under_root(tmp_path: Path) -> None:
-    """make_dir creates a nested directory (and parents) under the root."""
-    storage = StorageManager(root=tmp_path)
+def test_a_relative_directory_is_created_under_the_root(tmp_path: Path) -> None:
+    """A relative path is the only case the root applies to."""
+    storage = StorageManager(root=tmp_path / "arancio")
 
-    result = storage.make_dir("foo", "bar")
+    created = storage.make_dir("sessions/2026")
 
-    assert result == tmp_path / "foo" / "bar"
-    assert result.is_dir()
+    assert created == tmp_path / "arancio" / "sessions" / "2026"
+    assert created.is_dir()
 
 
-def test_bind_litellm_login_dir_symlinks_when_absent(tmp_path: Path) -> None:
-    """An absent config dir is created as a symlink to ``<root>/litellm``."""
-    root = tmp_path / "arancio"
+def test_an_absolute_directory_bypasses_the_root(tmp_path: Path) -> None:
+    """An absolute path is used as given, which is how the constants escape."""
+    storage = StorageManager(root=tmp_path / "arancio")
+
+    created = storage.make_dir(tmp_path / "elsewhere")
+
+    assert created == tmp_path / "elsewhere"
+
+
+def test_creating_a_file_twice_is_refused(tmp_path: Path) -> None:
+    """Exclusive creation is what stops a session log overwriting another.
+
+    The recorder uses it for the first line of a new log, so a collision has to fail
+    rather than silently truncate an existing chat.
+    """
+    path = tmp_path / "a.jsonl"
+    StorageManager.create_file(path, "first")
+
+    with pytest.raises(FileExistsError):
+        StorageManager.create_file(path, "second")
+
+    assert path.read_text() == "first\n"
+
+
+def test_lines_are_appended_with_their_terminator(tmp_path: Path) -> None:
+    """Each record is one line, so the newline is the storage layer's job."""
+    path = tmp_path / "a.jsonl"
+    StorageManager.create_file(path, "one")
+    StorageManager.append_line(path, "two")
+
+    assert StorageManager.read_lines(path) == ["one", "two"]
+
+
+def test_a_missing_file_has_no_size(tmp_path: Path) -> None:
+    """The recovery offset of the first write has to be zero, not an error."""
+    assert StorageManager.file_size(tmp_path / "absent.jsonl") == 0
+
+
+def test_truncating_drops_everything_past_the_offset(tmp_path: Path) -> None:
+    """This is how a half-written record is rolled back before a retry."""
+    path = tmp_path / "a.jsonl"
+    StorageManager.create_file(path, "keep")
+    offset = StorageManager.file_size(path)
+    StorageManager.append_line(path, "drop")
+
+    StorageManager.truncate_file(path, offset)
+
+    assert StorageManager.read_lines(path) == ["keep"]
+
+
+def test_removing_an_absent_file_is_not_an_error(tmp_path: Path) -> None:
+    """Cleanup after a failed first write must not fail in turn."""
+    StorageManager.remove_file(tmp_path / "absent.jsonl")
+
+
+def test_a_missing_settings_file_is_created_and_reported(tmp_path: Path) -> None:
+    """A first run leaves a populated file behind but hands back no content.
+
+    Returning ``None`` rather than the defaults is deliberate: deciding what "missing"
+    falls back to belongs to the settings manager.
+    """
+    data, messages = StorageManager.load_settings()
+
+    assert data is None
+    assert isinstance(messages[0], WarningMessage)
+    assert storage_module.ARANCIO_SETTINGS_FILE.exists()
+
+
+@pytest.mark.parametrize(
+    "contents",
+    ["", "- a\n- b\n", "key: [unclosed\n"],
+    ids=["empty", "top-level-list", "syntax-error"],
+)
+def test_an_unusable_settings_file_is_reported_and_left_alone(contents: str) -> None:
+    """A broken file is never rewritten, so its error resurfaces until fixed."""
+    storage_module.ARANCIO_SETTINGS_FILE.write_text(contents)
+
+    data, messages = StorageManager.load_settings()
+
+    assert data is None
+    assert isinstance(messages[0], ErrorMessage)
+    assert storage_module.ARANCIO_SETTINGS_FILE.read_text() == contents
+
+
+def test_a_well_formed_settings_file_is_returned_unvalidated() -> None:
+    """Field-level checking happens later; this layer only parses."""
+    storage_module.ARANCIO_SETTINGS_FILE.write_text("max_retries: not-a-number\n")
+
+    data, messages = StorageManager.load_settings()
+
+    assert data == {"max_retries": "not-a-number"}
+    assert messages == []
+
+
+def test_saved_settings_round_trip_through_yaml() -> None:
+    """What the manager writes is what a later load parses back."""
+    StorageManager.save_settings(Settings.default())
+
+    written = yaml.safe_load(storage_module.ARANCIO_SETTINGS_FILE.read_text())
+
+    assert written["max_turns"] == "inf"
+    assert written["permissions"] == {
+        "read": "ask",
+        "write": "ask",
+        "web": "ask",
+        "execute": "ask",
+    }
+
+
+def test_an_absent_litellm_config_dir_becomes_a_symlink(tmp_path: Path) -> None:
+    """LiteLLM hardcodes its config path, so it is redirected by symlink."""
+    storage = StorageManager(root=tmp_path / "arancio")
     config_dir = tmp_path / "config" / "litellm"
 
-    target = StorageManager(root=root).bind_litellm_login_dir(
-        litellm_config_dir=config_dir
-    )
+    target = storage.bind_litellm_login_dir(litellm_config_dir=config_dir)
 
-    assert target == root / "litellm"
-    assert target.is_dir()
     assert config_dir.is_symlink()
     assert config_dir.resolve() == target.resolve()
 
 
-def test_bind_litellm_login_dir_migrates_existing_dir(tmp_path: Path) -> None:
-    """An existing real config dir is migrated into the target, then symlinked."""
-    root = tmp_path / "arancio"
+def test_an_existing_login_directory_is_migrated_not_discarded(
+    tmp_path: Path,
+) -> None:
+    """A real sign-in already on disk has to survive the redirect."""
+    storage = StorageManager(root=tmp_path / "arancio")
     config_dir = tmp_path / "config" / "litellm"
     (config_dir / "chatgpt").mkdir(parents=True)
-    (config_dir / "chatgpt" / "auth.json").write_text("{}")
+    (config_dir / "chatgpt" / "auth.json").write_text("{token}")
 
-    target = StorageManager(root=root).bind_litellm_login_dir(
-        litellm_config_dir=config_dir
-    )
+    target = storage.bind_litellm_login_dir(litellm_config_dir=config_dir)
 
+    assert (target / "chatgpt" / "auth.json").read_text() == "{token}"
+    assert (config_dir / "chatgpt" / "auth.json").read_text() == "{token}"
     assert config_dir.is_symlink()
-    assert (target / "chatgpt" / "auth.json").read_text() == "{}"
-    # the migrated login stays reachable through the symlink
-    assert (config_dir / "chatgpt" / "auth.json").read_text() == "{}"
 
 
-def test_bind_litellm_login_dir_noop_when_already_symlink(tmp_path: Path) -> None:
-    """An already-symlinked config dir is left untouched."""
-    root = tmp_path / "arancio"
-    storage = StorageManager(root=root)
-    target = storage.make_dir("litellm")
+def test_an_already_bound_config_dir_is_left_alone(tmp_path: Path) -> None:
+    """Re-binding on every launch must be a no-op, not a repeated migration."""
+    storage = StorageManager(root=tmp_path / "arancio")
     config_dir = tmp_path / "config" / "litellm"
-    config_dir.parent.mkdir(parents=True)
-    config_dir.symlink_to(target, target_is_directory=True)
+    first = storage.bind_litellm_login_dir(litellm_config_dir=config_dir)
+    (first / "marker").write_text("x")
 
-    result = storage.bind_litellm_login_dir(litellm_config_dir=config_dir)
+    second = storage.bind_litellm_login_dir(litellm_config_dir=config_dir)
 
-    assert result == target
-    assert config_dir.is_symlink()
-    assert config_dir.resolve() == target.resolve()
-
-
-def test_load_settings_creates_default_file_when_absent(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """``load_settings`` writes the defaults and signals ``None`` when absent."""
-    settings_file = tmp_path / "settings.yml"
-    monkeypatch.setattr(storage_mod, "ARANCIO_SETTINGS_FILE", settings_file)
-
-    data, messages = StorageManager().load_settings()
-
-    assert settings_file.exists()
-    assert yaml.safe_load(settings_file.read_text()) == Settings.default().to_dict()
-    assert data is None
-    assert len(messages) == 1
-    assert isinstance(messages[0], WarningMessage)
-
-
-def test_load_settings_reads_back_saved_settings(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """``load_settings`` returns the settings previously persisted to disk."""
-    monkeypatch.setattr(storage_mod, "ARANCIO_SETTINGS_FILE", tmp_path / "settings.yml")
-    settings = Settings.default()
-    settings.provider = "openai"
-    settings.model_name = "gpt-4o"
-
-    StorageManager().save_settings(settings)
-
-    data, messages = StorageManager().load_settings()
-
-    assert data == settings.to_dict()
-    assert messages == []
-
-
-def test_load_settings_reports_error_for_empty_file(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """An existing but empty file signals ``None`` and an error, untouched."""
-    settings_file = tmp_path / "settings.yml"
-    settings_file.write_text("")
-    monkeypatch.setattr(storage_mod, "ARANCIO_SETTINGS_FILE", settings_file)
-
-    data, messages = StorageManager().load_settings()
-
-    assert data is None
-    assert len(messages) == 1
-    assert isinstance(messages[0], ErrorMessage)
-    assert settings_file.read_text() == ""
-
-
-def test_load_settings_reports_error_for_malformed_yaml(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Malformed YAML syntax signals ``None`` and an error, untouched."""
-    settings_file = tmp_path / "settings.yml"
-    settings_file.write_text("key: [unclosed")
-    monkeypatch.setattr(storage_mod, "ARANCIO_SETTINGS_FILE", settings_file)
-
-    data, messages = StorageManager().load_settings()
-
-    assert data is None
-    assert len(messages) == 1
-    assert isinstance(messages[0], ErrorMessage)
-    assert settings_file.read_text() == "key: [unclosed"
-
-
-def test_load_settings_reports_error_for_non_mapping_top_level(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A YAML file whose top level isn't a mapping signals ``None`` and an error."""
-    settings_file = tmp_path / "settings.yml"
-    settings_file.write_text("- a\n- b\n")
-    monkeypatch.setattr(storage_mod, "ARANCIO_SETTINGS_FILE", settings_file)
-
-    data, messages = StorageManager().load_settings()
-
-    assert data is None
-    assert len(messages) == 1
-    assert isinstance(messages[0], ErrorMessage)
-
-
-def test_load_settings_returns_raw_data_unvalidated(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A well-formed file's data is returned as-is; validation isn't storage's job."""
-    settings_file = tmp_path / "settings.yml"
-    settings_file.write_text("provider: notreal\nmax_turns: -3\n")
-    monkeypatch.setattr(storage_mod, "ARANCIO_SETTINGS_FILE", settings_file)
-
-    data, messages = StorageManager().load_settings()
-
-    assert data == {"provider": "notreal", "max_turns": -3}
-    assert messages == []
-
-
-def test_save_settings_writes_serialized_yaml(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """``save_settings`` writes the serialized settings as YAML."""
-    settings_file = tmp_path / "settings.yml"
-    monkeypatch.setattr(storage_mod, "ARANCIO_SETTINGS_FILE", settings_file)
-    settings = Settings.default()
-
-    StorageManager().save_settings(settings)
-
-    assert yaml.safe_load(settings_file.read_text()) == settings.to_dict()
-
-
-def test_load_system_prompt_creates_default_file_when_absent(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """``load_system_prompt`` seeds the default prompt when the file is absent."""
-    prompt_file = tmp_path / "SYSTEM_PROMPT.md"
-    monkeypatch.setattr(storage_mod, "SYSTEM_PROMPT_HARNESS_PATH", prompt_file)
-
-    result = StorageManager().load_system_prompt()
-
-    assert prompt_file.read_text() == AGENT_DEFAULT_SYSTEM_PROMPT
-    assert result.content == AGENT_DEFAULT_SYSTEM_PROMPT
-
-
-def test_load_system_prompt_reads_back_saved_prompt(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """``load_system_prompt`` returns the prompt previously persisted to disk."""
-    prompt_file = tmp_path / "SYSTEM_PROMPT.md"
-    prompt_file.write_text("custom prompt")
-    monkeypatch.setattr(storage_mod, "SYSTEM_PROMPT_HARNESS_PATH", prompt_file)
-
-    assert StorageManager().load_system_prompt().content == "custom prompt"
-
-
-def test_save_system_prompt_writes_default_and_creates_parent_dirs(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """``save_system_prompt`` writes the default prompt, creating parent dirs."""
-    prompt_file = tmp_path / "nested" / "SYSTEM_PROMPT.md"
-    monkeypatch.setattr(storage_mod, "SYSTEM_PROMPT_HARNESS_PATH", prompt_file)
-
-    StorageManager().save_system_prompt()
-
-    assert prompt_file.read_text() == AGENT_DEFAULT_SYSTEM_PROMPT
+    assert second == first
+    assert (second / "marker").read_text() == "x"

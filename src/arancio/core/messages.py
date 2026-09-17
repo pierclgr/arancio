@@ -6,25 +6,37 @@ from typing import Any, ClassVar
 class Message:
     """Base normalized conversation message.
 
+    A message states whether it belongs in the model's context. Where it goes
+    otherwise is each consumer's own call: core owns neither the UI nor a
+    session, so it describes the message rather than routing it.
+
     Attributes:
         role: the role of the message.
         content: the raw content of the message, consumed by the agent.
         display_text: what is shown to the user through the UI; defaults to
             ``content`` when not specified.
+        in_history: whether the message is part of the model's context.
     """
 
     role: ClassVar[str]
 
-    def __init__(self, content: Any, display_text: Any = None) -> None:
-        """Store the message content and its UI display text.
+    def __init__(
+        self,
+        content: Any,
+        display_text: Any = None,
+        in_history: bool = True,
+    ) -> None:
+        """Store the message content, its UI display text and its routing flags.
 
         Args:
             content: the raw content of the message, consumed by the agent.
             display_text: what is shown to the user through the UI; defaults
                 to ``content`` when not specified.
+            in_history: whether the message is part of the model's context.
         """
         self.content = content
         self.display_text = content if display_text is None else display_text
+        self.in_history = in_history
 
     def __eq__(self, other: object) -> bool:
         """Compare messages by exact type and attribute values.
@@ -71,11 +83,32 @@ class ChunkMessage(Message):
 class ErrorMessage(Message):
     """Runtime error surfaced to the agent consumer.
 
+    An error reports what went wrong in this run, not what the conversation
+    was, so it stays out of the model's context unless a caller says otherwise.
+    :class:`ToolErrorMessage` is the exception and keeps the tool-result
+    default, since a failed call is the outcome the model asked for.
+
     Attributes:
         role: the role of the message.
     """
 
     role: ClassVar[str] = "error"
+
+    def __init__(
+        self,
+        content: Any,
+        display_text: Any = None,
+        in_history: bool = False,
+    ) -> None:
+        """Store the error, kept out of model context by default.
+
+        Args:
+            content: the raw content of the message, consumed by the agent.
+            display_text: what is shown to the user through the UI; defaults
+                to ``content`` when not specified.
+            in_history: whether the message is part of the model's context.
+        """
+        super().__init__(content, display_text, in_history)
 
 
 class WarningMessage(Message):
@@ -107,6 +140,7 @@ class ToolCallMessage(Message):
         name: str,
         arguments: dict,
         display_text: Any = None,
+        in_history: bool = True,
     ) -> None:
         """Store the tool-call identity alongside the base message fields.
 
@@ -117,8 +151,9 @@ class ToolCallMessage(Message):
             arguments: keyword arguments for the tool, parsed from JSON.
             display_text: what is shown to the user through the UI; defaults
                 to ``content`` when not specified.
+            in_history: whether the message is part of the model's context.
         """
-        super().__init__(content, display_text)
+        super().__init__(content, display_text, in_history)
         self.id = id
         self.name = name
         self.arguments = arguments
@@ -139,6 +174,7 @@ class ReasoningMessage(Message):
         content: Any,
         item: dict[str, Any],
         display_text: Any = None,
+        in_history: bool = True,
     ) -> None:
         """Store the provider-native reasoning item alongside base fields.
 
@@ -147,8 +183,9 @@ class ReasoningMessage(Message):
             item: provider-native reasoning item to round-trip unchanged.
             display_text: what is shown to the user through the UI; defaults
                 to ``content`` when not specified.
+            in_history: whether the message is part of the model's context.
         """
-        super().__init__(content, display_text)
+        super().__init__(content, display_text, in_history)
         self.item = item
 
 
@@ -182,16 +219,28 @@ class ToolResultMessage(Message):
 
     role: ClassVar[str] = "tool_result"
 
-    def __init__(self, content: Any, id: str, display_text: Any = None) -> None:
+    def __init__(
+        self,
+        content: Any,
+        id: str,
+        display_text: Any = None,
+        in_history: bool = True,
+    ) -> None:
         """Store the answered tool-call id alongside the base message fields.
+
+        A tool result is the outcome the model asked for, so ``in_history``
+        defaults to ``True`` here, and that default is what keeps
+        :class:`ToolErrorMessage` in model history: its MRO reaches
+        :class:`ErrorMessage`, which defaults to ``False``, only afterwards.
 
         Args:
             content: the raw content of the message, consumed by the agent.
             id: identifier of the tool call this result responds to.
             display_text: what is shown to the user through the UI; defaults
                 to ``content`` when not specified.
+            in_history: whether the message is part of the model's context.
         """
-        super().__init__(content, display_text)
+        super().__init__(content, display_text, in_history)
         self.id = id
 
 

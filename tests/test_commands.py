@@ -1,10 +1,17 @@
-"""Tests for slash commands."""
+"""Tests for the slash commands and the argument coercion they share.
+
+Commands are the only place a user changes the running configuration, and each one has
+to do three things together: change the live objects, persist the change as a global
+default, and refresh what the toolbar shows.
+"""
 
 from pathlib import Path
-from typing import Any
 
 import pytest
+import yaml
+from fakes import RecordingApp, ScriptedClient
 
+import arancio.storage.manager as storage_module
 from arancio.commands.base import BaseCommand
 from arancio.commands.cd import CdCommand
 from arancio.commands.clear import ClearCommand
@@ -14,749 +21,255 @@ from arancio.commands.hello_world import HelloWorldCommand
 from arancio.commands.model import ModelCommand
 from arancio.commands.permissions import PermissionsCommand
 from arancio.commands.provider import ProviderCommand
-from arancio.core.constants.litellm import LITELLM_PROVIDER_NAMES
+from arancio.commands.registry import COMMAND_REGISTRY
+from arancio.core.agents import Agent
+from arancio.core.messages import UserMessage
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
+from arancio.sessions.manager import SessionManager
+from arancio.sessions.session import SessionConfiguration
+from arancio.settings.manager import SettingsManager
+from arancio.settings.settings import Settings
 
 
-class _RecordingApplication:
-    """Application stub recording whether it was asked to exit or clear the log."""
+@pytest.fixture
+def configured(settings_manager: SettingsManager) -> SettingsManager:
+    """Return a settings manager loaded with a usable provider and model.
 
-    def __init__(self) -> None:
-        """Start with no recorded exit or log clear."""
-        self.exit_called = False
-        self.clear_log_called = False
+    Args:
+        settings_manager: the manager under test.
 
-    def exit(self) -> None:
-        """Record that an exit was requested."""
-        self.exit_called = True
-
-    def clear_log(self) -> None:
-        """Record that the log was asked to be cleared."""
-        self.clear_log_called = True
-
-
-class _RecordingAgent:
-    """Agent stub recording whether its history was asked to be cleared."""
-
-    def __init__(self) -> None:
-        """Start with no recorded history clear."""
-        self.clear_history_called = False
-
-    def clear_history(self) -> None:
-        """Record that the history was asked to be cleared."""
-        self.clear_history_called = True
+    Returns:
+        The same manager, loaded from a complete settings file.
+    """
+    data = Settings.default().to_dict()
+    data.update(provider="openai", model_name="gpt-4o")
+    storage_module.ARANCIO_SETTINGS_FILE.write_text(yaml.safe_dump(data))
+    settings_manager.load()
+    return settings_manager
 
 
-class _IntArgCommand(BaseCommand):
-    """Test command whose single argument must be an int."""
+@pytest.fixture
+def app(tmp_path: Path) -> RecordingApp:
+    """Return a fake app rooted in the test's temporary directory.
 
-    name = "int-arg"
-    description = "Echo an integer argument."
+    Args:
+        tmp_path: pytest's per-test temporary directory.
 
-    @classmethod
-    def execute(cls, application: Any, count: int) -> int:
-        """Return the received count unchanged.
-
-        Args:
-            application: the running application (unused).
-            count: the integer argument bound to the prompt word.
-
-        Returns:
-            The received count.
-        """
-        return count
+    Returns:
+        A recording app.
+    """
+    return RecordingApp(working_directory=tmp_path)
 
 
-def test_hello_world_greets_the_name_the_given_number_of_times() -> None:
-    """The int argument is coerced from its keyword and applied."""
-    result = HelloWorldCommand.run(name="Sam", times="2")
+def _persisted() -> dict:
+    """Read back what a command persisted to the settings file.
 
-    assert result == "Hello World, Sam\nHello World, Sam"
-
-
-def test_hello_world_defaults_times_when_omitted() -> None:
-    """The optional times argument defaults to a single greeting."""
-    result = HelloWorldCommand.run(name="Sam")
-
-    assert result == "Hello World, Sam"
+    Returns:
+        The parsed settings mapping.
+    """
+    return yaml.safe_load(storage_module.ARANCIO_SETTINGS_FILE.read_text())
 
 
-def test_hello_world_ignores_unneeded_application_argument() -> None:
-    """An application argument the command does not declare is absorbed by kwargs."""
-    result = HelloWorldCommand.run(application=_RecordingApplication(), name="Sam")
-
-    assert result == "Hello World, Sam"
-
-
-def test_hello_world_requires_the_mandatory_argument() -> None:
-    """A missing mandatory argument fails."""
-    with pytest.raises(TypeError):
-        HelloWorldCommand.run()
+def test_every_registered_name_resolves_to_a_command() -> None:
+    """The registry is the only lookup, so a broken entry breaks the command."""
+    assert COMMAND_REGISTRY["quit"] is ExitCommand
+    assert all(
+        issubclass(command, BaseCommand) for command in COMMAND_REGISTRY.values()
+    )
+    assert {command.name for command in COMMAND_REGISTRY.values()} <= set(
+        COMMAND_REGISTRY
+    )
 
 
-def test_run_coerces_argument_to_annotated_type() -> None:
-    """A numeric string is coerced to the parameter's int annotation."""
-    assert _IntArgCommand.run(application=_RecordingApplication(), count="5") == 5
+def test_a_typed_argument_is_coerced_from_its_prompt_word() -> None:
+    """Prompt words are strings, so an ``int`` parameter needs converting."""
+    assert HelloWorldCommand.run(name="Ada", times="2") == (
+        "Hello World, Ada\nHello World, Ada"
+    )
 
 
-def test_run_rejects_argument_that_cannot_be_coerced() -> None:
-    """A value that cannot convert to the annotated type raises TypeError."""
-    with pytest.raises(TypeError):
-        _IntArgCommand.run(application=_RecordingApplication(), count="abc")
+def test_an_uncoercible_argument_is_reported_by_name() -> None:
+    """The message names the argument, so the user knows which word to fix."""
+    with pytest.raises(TypeError, match="times"):
+        HelloWorldCommand.run(name="Ada", times="lots")
 
 
-def test_int_arg_command_rejects_unexpected_keyword_argument() -> None:
-    """A command without a kwargs catch-all rejects an unknown keyword argument."""
-    with pytest.raises(TypeError):
-        _IntArgCommand.run(application=_RecordingApplication(), count="5", extra="oops")
+def test_cd_moves_the_working_directory(app: RecordingApp, tmp_path: Path) -> None:
+    """The app owns the directory; the command only asks it to move."""
+    (tmp_path / "sub").mkdir()
+
+    result = CdCommand.execute(path="sub", application=app)
+
+    assert app.working_directory == (tmp_path / "sub").resolve()
+    assert result == f"Working directory set to {app.working_directory}"
 
 
-def test_exit_command_quits_the_application() -> None:
-    """The exit command exits the application and returns nothing."""
-    application = _RecordingApplication()
-
-    result = ExitCommand.run(application=application)
-
-    assert result is None
-    assert application.exit_called is True
+def test_cd_into_a_missing_directory_is_refused(app: RecordingApp) -> None:
+    """The executor turns this into an error message rather than crashing."""
+    with pytest.raises(ValueError):
+        CdCommand.execute(path="nowhere", application=app)
 
 
-def test_clear_command_clears_history_and_log() -> None:
-    """The clear command empties the agent's history and the app's log silently."""
-    agent = _RecordingAgent()
-    application = _RecordingApplication()
+def test_model_applies_and_persists_the_new_name(
+    configured: SettingsManager, app: RecordingApp, client: ScriptedClient
+) -> None:
+    """One command has to change the client, the file and the toolbar together."""
+    result = ModelCommand.execute(
+        model_name="gpt-5", application=app, settings_manager=configured
+    )
 
-    result = ClearCommand.run(agent=agent, application=application)
-
-    assert agent.clear_history_called is True
-    assert application.clear_log_called is True
-    assert result is None
-
-
-class _CdApplication:
-    """Application stub applying the real working-directory resolution rules."""
-
-    def __init__(self, working_directory: Path) -> None:
-        """Start held at ``working_directory``.
-
-        Args:
-            working_directory: the directory the stub starts in.
-        """
-        self.working_directory = working_directory
-
-    def set_working_directory(self, path: Path | str) -> None:
-        """Resolve and validate ``path``, mirroring ``App.set_working_directory``.
-
-        Args:
-            path: the requested directory, absolute or relative.
-
-        Raises:
-            ValueError: when the resolved path does not exist, or exists but is
-                not a directory.
-        """
-        resolved = Path(path).expanduser()
-        if not resolved.is_absolute():
-            resolved = self.working_directory / resolved
-        resolved = resolved.resolve()
-        if not resolved.exists():
-            raise ValueError(f"{resolved} does not exist")
-        if not resolved.is_dir():
-            raise ValueError(
-                f"{resolved} not a directory: did you mean {resolved.parent}?"
-            )
-        self.working_directory = resolved
+    assert result == "Model set to openai/gpt-5"
+    assert client.model_id == "openai/gpt-5"
+    assert _persisted()["model_name"] == "gpt-5"
+    assert app.displayed_model_ids == ["openai/gpt-5"]
 
 
-def test_cd_command_moves_to_an_absolute_path(tmp_path: Path) -> None:
-    """An absolute path is used as-is."""
-    target = tmp_path / "target"
-    target.mkdir()
-    application = _CdApplication(working_directory=tmp_path)
+def test_model_without_a_provider_leaves_the_name_untouched(
+    settings_manager: SettingsManager, app: RecordingApp
+) -> None:
+    """A half-applied change would leave the settings inconsistent."""
+    with pytest.raises(ValueError):
+        ModelCommand.execute(
+            model_name="gpt-5", application=app, settings_manager=settings_manager
+        )
 
-    result = CdCommand.run(application=application, path=str(target))
-
-    assert application.working_directory == target.resolve()
-    assert result == f"Working directory set to {target.resolve()}"
+    assert settings_manager.settings.model_name is None
 
 
-def test_cd_command_resolves_a_relative_path_against_the_current_directory(
+def test_provider_is_normalized_before_it_is_stored(
+    configured: SettingsManager, app: RecordingApp
+) -> None:
+    """The provider becomes half of a model id, so its case must be settled."""
+    result = ProviderCommand.execute(
+        provider="Anthropic", application=app, settings_manager=configured
+    )
+
+    assert result == "Provider set to anthropic"
+    assert _persisted()["provider"] == "anthropic"
+
+
+def test_an_unknown_provider_is_refused(
+    configured: SettingsManager, app: RecordingApp
+) -> None:
+    """LiteLLM resolves credentials from the provider, so a typo must not stick."""
+    with pytest.raises(ValueError):
+        ProviderCommand.execute(
+            provider="not-a-provider", application=app, settings_manager=configured
+        )
+
+
+def test_effort_accepts_the_word_null_as_no_thinking(
+    configured: SettingsManager, app: RecordingApp
+) -> None:
+    """There is no other way to type "none" into a text argument."""
+    result = EffortCommand.execute(
+        level="NULL", application=app, settings_manager=configured
+    )
+
+    assert result == "Thinking effort set to null"
+    assert configured.settings.thinking_effort is None
+    assert app.displayed_efforts == [None]
+
+
+def test_effort_without_a_model_changes_nothing(
+    settings_manager: SettingsManager, app: RecordingApp
+) -> None:
+    """Effort belongs to a model, so it is refused before anything is written."""
+    with pytest.raises(ValueError):
+        EffortCommand.execute(
+            level="high", application=app, settings_manager=settings_manager
+        )
+
+
+def test_permissions_without_a_level_reports_the_current_one(
+    configured: SettingsManager,
+) -> None:
+    """The read form is how a user checks what the agent may do."""
+    result = PermissionsCommand.execute(category="READ", settings_manager=configured)
+
+    assert result == "read permission level: ask"
+
+
+def test_permissions_reports_a_revoked_category_differently(
+    configured: SettingsManager,
+) -> None:
+    """Saying the level is none would mislead: the tools do not exist at all."""
+    configured.settings.permissions[PermissionCategory.WEB] = PermissionLevel.NONE
+
+    assert (
+        PermissionsCommand.execute(category="web", settings_manager=configured)
+        == "No web permission set"
+    )
+
+
+def test_permissions_sets_and_persists_a_level(configured: SettingsManager) -> None:
+    """A granted level has to survive into the next session."""
+    result = PermissionsCommand.execute(
+        category="write", level="AUTO", settings_manager=configured
+    )
+
+    assert result == "write permission level set to auto"
+    assert configured.settings.permissions[PermissionCategory.WRITE] is (
+        PermissionLevel.AUTO
+    )
+    assert _persisted()["permissions"]["write"] == "auto"
+
+
+def test_permissions_removes_a_grant_with_the_word_null(
+    configured: SettingsManager,
+) -> None:
+    """Revoking is what stops the tools being built at all."""
+    result = PermissionsCommand.execute(
+        category="execute", level="null", settings_manager=configured
+    )
+
+    assert result == "execute permission removed"
+    assert _persisted()["permissions"]["execute"] is None
+
+
+@pytest.mark.parametrize(
+    ("category", "level"),
+    [("netwrk", "auto"), ("read", "sometimes")],
+    ids=["bad-category", "bad-level"],
+)
+def test_permissions_rejects_what_it_cannot_resolve(
+    configured: SettingsManager, category: str, level: str
+) -> None:
+    """The error lists the valid options, since the user typed a free word."""
+    with pytest.raises(ValueError, match="Valid"):
+        PermissionsCommand.execute(
+            category=category, level=level, settings_manager=configured
+        )
+
+
+def test_clear_starts_a_new_chat_everywhere_at_once(
+    configured: SettingsManager,
+    app: RecordingApp,
+    agent: Agent,
+    session_manager: SessionManager,
     tmp_path: Path,
 ) -> None:
-    """A relative path is resolved against the working directory currently set."""
-    nested = tmp_path / "outer" / "inner"
-    nested.mkdir(parents=True)
-    application = _CdApplication(working_directory=tmp_path / "outer")
+    """Four things hold chat state, and ``/clear`` has to reset all four."""
+    first = session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+    agent.add_message_to_history(UserMessage(content="earlier"))
+    configured.settings.model_name = "gpt-5"
 
-    result = CdCommand.run(application=application, path="inner")
-
-    assert application.working_directory == nested.resolve()
-    assert result == f"Working directory set to {nested.resolve()}"
-
-
-def test_cd_command_moves_to_a_path_containing_spaces(tmp_path: Path) -> None:
-    """A path with spaces works once the prompt splitter has kept it in one word."""
-    target = tmp_path / "test" / "of path"
-    target.mkdir(parents=True)
-    application = _CdApplication(working_directory=tmp_path)
-
-    result = CdCommand.run(application=application, path="test/of path")
-
-    assert application.working_directory == target.resolve()
-    assert result == f"Working directory set to {target.resolve()}"
-
-
-def test_cd_command_reports_a_missing_path_as_not_existing(tmp_path: Path) -> None:
-    """A path that does not exist reports that it does not exist."""
-    application = _CdApplication(working_directory=tmp_path)
-
-    with pytest.raises(ValueError, match="does not exist"):
-        CdCommand.run(application=application, path="missing")
-
-    assert application.working_directory == tmp_path
-
-
-def test_cd_command_reports_a_file_path_as_not_a_directory(tmp_path: Path) -> None:
-    """A path pointing at an existing file keeps the not-a-directory wording."""
-    (tmp_path / "afile").write_text("x")
-    application = _CdApplication(working_directory=tmp_path)
-
-    with pytest.raises(ValueError, match="not a directory"):
-        CdCommand.run(application=application, path="afile")
-
-    assert application.working_directory == tmp_path
-
-
-class _ModelApplication:
-    """Application stub recording the model id or effort it was asked to display."""
-
-    def __init__(self) -> None:
-        """Start with no displayed model id or effort."""
-        self.displayed_model_id: str | None = None
-        self.displayed_effort: str | None = None
-
-    def set_displayed_effort(self, effort: str | None) -> None:
-        """Record the effort the toolbar was asked to display.
-
-        Args:
-            effort: the effort to display, or ``None`` when thinking is
-                disabled.
-        """
-        self.displayed_effort = effort
-
-    def set_displayed_model_id(self, model_id: str) -> None:
-        """Record the model id the toolbar was asked to display.
-
-        Args:
-            model_id: the model id to display.
-        """
-        self.displayed_model_id = model_id
-
-
-class _FakeModelSettings:
-    """Minimal settings stub exposing the fields the model command reads/writes."""
-
-    def __init__(self, provider: str | None, model_name: str | None) -> None:
-        """Store the initial provider and model name.
-
-        Args:
-            provider: the initial provider, or ``None`` to leave it unset.
-            model_name: the initial model name, or ``None`` to leave it unset.
-        """
-        self.provider = provider
-        self.model_name = model_name
-
-    @property
-    def provider(self) -> str | None:
-        """Return the currently configured provider.
-
-        Returns:
-            The lowercased provider prefix, or ``None`` when not yet
-            configured.
-        """
-        return self._provider
-
-    @provider.setter
-    def provider(self, value: str | None) -> None:
-        """Validate and set the provider, matched case-insensitively.
-
-        Mirrors the real :attr:`Settings.provider` setter.
-
-        Args:
-            value: the provider name, in any case, or ``None`` to unset it.
-
-        Raises:
-            ValueError: when ``value`` is not a valid LiteLLM provider name.
-        """
-        if value is None:
-            self._provider = None
-            return
-        lowered = value.lower()
-        if lowered not in LITELLM_PROVIDER_NAMES:
-            raise ValueError(f"Unknown provider: {value!r}.")
-        self._provider = lowered
-
-    @property
-    def model_id(self) -> str:
-        """Build the model id from the current provider and model name.
-
-        Returns:
-            The joined ``provider/model_name`` model id.
-
-        Raises:
-            ValueError: when the provider is not configured.
-            ValueError: when the model name is not configured.
-        """
-        if not self.provider:
-            raise ValueError("No provider configured.")
-        if not self.model_name:
-            raise ValueError("No model name configured.")
-        return f"{self.provider}/{self.model_name}"
-
-
-class _FakeSettingsManager:
-    """Settings-manager stub recording ``apply``/``save`` calls without disk I/O."""
-
-    def __init__(
-        self, provider: str | None = "openai", model_name: str | None = "gpt-4o"
-    ) -> None:
-        """Build a settings stub with the given provider and model name.
-
-        Args:
-            provider: the initial provider, or ``None`` to leave it unset.
-            model_name: the initial model name, or ``None`` to leave it unset.
-        """
-        self.settings = _FakeModelSettings(provider, model_name)
-        self.applied = False
-        self.saved = False
-
-    def apply(self) -> None:
-        """Record that the settings were applied to the live objects."""
-        self.applied = True
-
-    def save(self) -> None:
-        """Record that the settings were persisted to disk."""
-        self.saved = True
-
-
-def test_model_command_sets_model_name_and_confirms() -> None:
-    """The model command applies the new name and confirms the full model id."""
-    application = _ModelApplication()
-    settings_manager = _FakeSettingsManager()
-
-    result = ModelCommand.run(
-        application=application, settings_manager=settings_manager, model_name="gpt-5"
+    ClearCommand.execute(
+        agent=agent,
+        application=app,
+        settings_manager=configured,
+        session_manager=session_manager,
     )
 
-    assert settings_manager.settings.model_name == "gpt-5"
-    assert settings_manager.applied is True
-    assert settings_manager.saved is True
-    assert application.displayed_model_id == "openai/gpt-5"
-    assert result == "Model set to openai/gpt-5"
-
-
-def test_model_command_requires_a_configured_provider() -> None:
-    """Setting the model name without a provider configured raises, unpersisted."""
-    settings_manager = _FakeSettingsManager(provider=None, model_name="gpt-4o")
-
-    with pytest.raises(ValueError):
-        ModelCommand.run(
-            application=_ModelApplication(),
-            settings_manager=settings_manager,
-            model_name="gpt-5",
-        )
-
-    assert settings_manager.applied is False
-    assert settings_manager.saved is False
-    # model_name is restored to its previous value rather than left dangling
-    assert settings_manager.settings.model_name == "gpt-4o"
-
-
-def test_provider_command_sets_provider_and_confirms() -> None:
-    """Setting the provider applies, persists and refreshes the toolbar's model id."""
-    application = _ModelApplication()
-    settings_manager = _FakeSettingsManager(provider="openai", model_name="gpt-4o")
-
-    result = ProviderCommand.run(
-        application=application, settings_manager=settings_manager, provider="anthropic"
-    )
-
-    assert settings_manager.settings.provider == "anthropic"
-    assert settings_manager.applied is True
-    assert settings_manager.saved is True
-    assert application.displayed_model_id == "anthropic/gpt-4o"
-    assert result == "Provider set to anthropic"
-
-
-def test_provider_command_without_model_name_skips_toolbar_update() -> None:
-    """Setting the provider alone still applies/persists, without a model id to show."""
-    application = _ModelApplication()
-    settings_manager = _FakeSettingsManager(provider=None, model_name=None)
-
-    result = ProviderCommand.run(
-        application=application, settings_manager=settings_manager, provider="openai"
-    )
-
-    assert settings_manager.settings.provider == "openai"
-    assert settings_manager.applied is True
-    assert settings_manager.saved is True
-    assert application.displayed_model_id is None
-    assert result == "Provider set to openai"
-
-
-def test_provider_command_keeps_model_name_unchanged() -> None:
-    """Setting the provider does not touch the current model name."""
-    settings_manager = _FakeSettingsManager(provider="openai", model_name="gpt-4o")
-
-    ProviderCommand.run(
-        application=_ModelApplication(),
-        settings_manager=settings_manager,
-        provider="anthropic",
-    )
-
-    assert settings_manager.settings.model_name == "gpt-4o"
-
-
-def test_provider_command_normalizes_case_in_confirmation() -> None:
-    """The confirmation and toolbar use the resolved, lowercased provider."""
-    application = _ModelApplication()
-    settings_manager = _FakeSettingsManager(provider="openai", model_name="gpt-4o")
-
-    result = ProviderCommand.run(
-        application=application, settings_manager=settings_manager, provider="OpenAI"
-    )
-
-    assert settings_manager.settings.provider == "openai"
-    assert application.displayed_model_id == "openai/gpt-4o"
-    assert result == "Provider set to openai"
-
-
-def test_provider_command_rejects_invalid_provider() -> None:
-    """An unrecognized provider raises, unpersisted, leaving the old value intact."""
-    application = _ModelApplication()
-    settings_manager = _FakeSettingsManager(provider="openai", model_name="gpt-4o")
-
-    with pytest.raises(ValueError):
-        ProviderCommand.run(
-            application=application,
-            settings_manager=settings_manager,
-            provider="not-a-real-provider",
-        )
-
-    assert settings_manager.applied is False
-    assert settings_manager.saved is False
-    assert settings_manager.settings.provider == "openai"
-    assert application.displayed_model_id is None
-
-
-class _FakeEffortSettings:
-    """Minimal settings stub exposing the fields the effort command reads/writes."""
-
-    def __init__(
-        self,
-        thinking_effort: str = "medium",
-        provider: str | None = "openai",
-        model_name: str | None = "gpt-4o",
-    ) -> None:
-        """Store the initial thinking effort, provider and model name.
-
-        Args:
-            thinking_effort: the initial thinking effort.
-            provider: the initial provider, or ``None`` to leave it unset.
-            model_name: the initial model name, or ``None`` to leave it unset.
-        """
-        self.thinking_effort = thinking_effort
-        self.provider = provider
-        self.model_name = model_name
-
-    @property
-    def model_id(self) -> str:
-        """Build the model id from the current provider and model name.
-
-        Returns:
-            The joined ``provider/model_name`` model id.
-
-        Raises:
-            ValueError: when the provider is not configured.
-            ValueError: when the model name is not configured.
-        """
-        if not self.provider:
-            raise ValueError("No provider configured.")
-        if not self.model_name:
-            raise ValueError("No model name configured.")
-        return f"{self.provider}/{self.model_name}"
-
-
-class _FakeEffortSettingsManager:
-    """Settings-manager stub recording ``apply``/``save`` calls without disk I/O."""
-
-    def __init__(
-        self,
-        thinking_effort: str = "medium",
-        provider: str | None = "openai",
-        model_name: str | None = "gpt-4o",
-    ) -> None:
-        """Build a settings stub with the given thinking effort, provider and name.
-
-        Args:
-            thinking_effort: the initial thinking effort.
-            provider: the initial provider, or ``None`` to leave it unset.
-            model_name: the initial model name, or ``None`` to leave it unset.
-        """
-        self.settings = _FakeEffortSettings(thinking_effort, provider, model_name)
-        self.applied = False
-        self.saved = False
-
-    def apply(self) -> None:
-        """Record that the settings were applied to the live objects."""
-        self.applied = True
-
-    def save(self) -> None:
-        """Record that the settings were persisted to disk."""
-        self.saved = True
-
-
-def test_effort_command_sets_thinking_effort_and_confirms() -> None:
-    """The effort command applies the new value, refreshes the toolbar and confirms."""
-    application = _ModelApplication()
-    settings_manager = _FakeEffortSettingsManager()
-
-    result = EffortCommand.run(
-        application=application, settings_manager=settings_manager, level="high"
-    )
-
-    assert settings_manager.settings.thinking_effort == "high"
-    assert settings_manager.applied is True
-    assert settings_manager.saved is True
-    assert application.displayed_effort == "high"
-    assert result == "Thinking effort set to high"
-
-
-def test_effort_command_accepts_any_free_form_value() -> None:
-    """Any text is accepted as the effort level, with no fixed set enforced."""
-    settings_manager = _FakeEffortSettingsManager()
-
-    result = EffortCommand.run(
-        application=_ModelApplication(),
-        settings_manager=settings_manager,
-        level="ultra-mega",
-    )
-
-    assert settings_manager.settings.thinking_effort == "ultra-mega"
-    assert result == "Thinking effort set to ultra-mega"
-
-
-@pytest.mark.parametrize("keyword", ["null", "NULL", "Null"])
-def test_effort_command_null_disables_thinking(keyword: str) -> None:
-    """The word "null", in any case, sets the thinking effort to None."""
-    application = _ModelApplication()
-    settings_manager = _FakeEffortSettingsManager()
-
-    result = EffortCommand.run(
-        application=application, settings_manager=settings_manager, level=keyword
-    )
-
-    assert settings_manager.settings.thinking_effort is None
-    assert application.displayed_effort is None
-    assert result == "Thinking effort set to null"
-
-
-def test_effort_command_requires_a_configured_model() -> None:
-    """Setting the effort without a configured model raises, unpersisted."""
-    application = _ModelApplication()
-    settings_manager = _FakeEffortSettingsManager(provider=None, model_name=None)
-
-    with pytest.raises(ValueError):
-        EffortCommand.run(
-            application=application, settings_manager=settings_manager, level="high"
-        )
-
-    assert settings_manager.applied is False
-    assert settings_manager.saved is False
-    assert settings_manager.settings.thinking_effort == "medium"
-    assert application.displayed_effort is None
-
-
-class _FakePermissionsSettings:
-    """Minimal settings stub exposing the field the permissions command reads/writes."""
-
-    def __init__(
-        self, permissions: dict[PermissionCategory, PermissionLevel] | None = None
-    ) -> None:
-        """Store the initial permission grants.
-
-        Args:
-            permissions: the initial category-to-level mapping, or ``None``
-                to default every category to :attr:`PermissionLevel.ASK`.
-        """
-        self.permissions = permissions or {
-            category: PermissionLevel.ASK for category in PermissionCategory
-        }
-
-
-class _FakePermissionsSettingsManager:
-    """Settings-manager stub recording ``apply``/``save`` calls without disk I/O."""
-
-    def __init__(
-        self, permissions: dict[PermissionCategory, PermissionLevel] | None = None
-    ) -> None:
-        """Build a settings stub with the given permission grants.
-
-        Args:
-            permissions: the initial category-to-level mapping, or ``None``
-                to default every category to :attr:`PermissionLevel.ASK`.
-        """
-        self.settings = _FakePermissionsSettings(permissions)
-        self.applied = False
-        self.saved = False
-
-    def apply(self) -> None:
-        """Record that the settings were applied to the live objects."""
-        self.applied = True
-
-    def save(self) -> None:
-        """Record that the settings were persisted to disk."""
-        self.saved = True
-
-
-def test_permissions_command_reports_current_level_without_a_level_argument() -> None:
-    """Omitting the level reports the category's currently set level, unpersisted."""
-    settings_manager = _FakePermissionsSettingsManager()
-
-    result = PermissionsCommand.run(category="read", settings_manager=settings_manager)
-
-    assert result == "read permission level: ask"
-    assert settings_manager.applied is False
-    assert settings_manager.saved is False
-
-
-def test_permissions_command_sets_level_and_confirms() -> None:
-    """Giving both arguments replaces the level, applies and persists it."""
-    settings_manager = _FakePermissionsSettingsManager()
-
-    result = PermissionsCommand.run(
-        category="read", level="auto", settings_manager=settings_manager
-    )
-
-    assert result == "read permission level set to auto"
-    assert (
-        settings_manager.settings.permissions[PermissionCategory.READ]
-        == PermissionLevel.AUTO
-    )
-    assert settings_manager.applied is True
-    assert settings_manager.saved is True
-
-
-@pytest.mark.parametrize("category", ["READ", "Read", "read"])
-def test_permissions_command_category_name_is_case_insensitive(
-    category: str,
-) -> None:
-    """The permission category name is matched case-insensitively."""
-    settings_manager = _FakePermissionsSettingsManager()
-
-    result = PermissionsCommand.run(
-        category=category, settings_manager=settings_manager
-    )
-
-    assert result == "read permission level: ask"
-
-
-@pytest.mark.parametrize("level", ["AUTO", "Auto", "auto"])
-def test_permissions_command_level_is_case_insensitive(level: str) -> None:
-    """The permission level is matched case-insensitively."""
-    settings_manager = _FakePermissionsSettingsManager()
-
-    result = PermissionsCommand.run(
-        category="read", level=level, settings_manager=settings_manager
-    )
-
-    assert result == "read permission level set to auto"
-
-
-def test_permissions_command_rejects_unknown_permission() -> None:
-    """An unknown permission category raises, unpersisted."""
-    settings_manager = _FakePermissionsSettingsManager()
-
-    with pytest.raises(ValueError):
-        PermissionsCommand.run(category="nope", settings_manager=settings_manager)
-
-    assert settings_manager.applied is False
-    assert settings_manager.saved is False
-
-
-def test_permissions_command_rejects_unknown_level() -> None:
-    """An unknown permission level raises, unpersisted."""
-    settings_manager = _FakePermissionsSettingsManager()
-
-    with pytest.raises(ValueError, match="null, ask, auto"):
-        PermissionsCommand.run(
-            category="read", level="nope", settings_manager=settings_manager
-        )
-
-    assert settings_manager.applied is False
-    assert settings_manager.saved is False
-    assert (
-        settings_manager.settings.permissions[PermissionCategory.READ]
-        == PermissionLevel.ASK
-    )
-
-
-@pytest.mark.parametrize("keyword", ["null", "NULL", "Null"])
-def test_permissions_command_null_removes_the_grant(keyword: str) -> None:
-    """The word "null", in any case, removes the category's grant."""
-    settings_manager = _FakePermissionsSettingsManager()
-
-    result = PermissionsCommand.run(
-        category="read", level=keyword, settings_manager=settings_manager
-    )
-
-    assert result == "read permission removed"
-    assert (
-        settings_manager.settings.permissions[PermissionCategory.READ]
-        is PermissionLevel.NONE
-    )
-    assert settings_manager.applied is True
-    assert settings_manager.saved is True
-
-
-def test_permissions_command_null_is_idempotent_when_already_none() -> None:
-    """Removing an already-ungranted category succeeds without raising."""
-    settings_manager = _FakePermissionsSettingsManager(
-        permissions={
-            PermissionCategory.READ: PermissionLevel.NONE,
-            PermissionCategory.WRITE: PermissionLevel.ASK,
-            PermissionCategory.WEB: PermissionLevel.ASK,
-            PermissionCategory.EXECUTE: PermissionLevel.ASK,
-        }
-    )
-
-    result = PermissionsCommand.run(
-        category="read", level="null", settings_manager=settings_manager
-    )
-
-    assert result == "read permission removed"
-    assert (
-        settings_manager.settings.permissions[PermissionCategory.READ]
-        is PermissionLevel.NONE
-    )
-
-
-def test_permissions_command_reports_unset_for_an_ungranted_category() -> None:
-    """Reading a category at NONE reports that, not an error."""
-    settings_manager = _FakePermissionsSettingsManager(
-        permissions={
-            PermissionCategory.READ: PermissionLevel.NONE,
-            PermissionCategory.WRITE: PermissionLevel.ASK,
-            PermissionCategory.WEB: PermissionLevel.ASK,
-            PermissionCategory.EXECUTE: PermissionLevel.ASK,
-        }
-    )
-
-    result = PermissionsCommand.run(category="read", settings_manager=settings_manager)
-
-    assert result == "No read permission set"
-
-
-def test_base_command_cannot_be_instantiated() -> None:
-    """BaseCommand is abstract and cannot be instantiated directly."""
-    with pytest.raises(TypeError):
-        BaseCommand()
+    assert session_manager.require_current() is not first
+    assert configured.settings.model_name == "gpt-4o"
+    assert app.cleared == 1
+
+
+def test_exit_asks_the_app_to_quit(app: RecordingApp) -> None:
+    """Quitting is the app's to do; the command only requests it."""
+    assert ExitCommand.execute(application=app) is None
+    assert app.exited is True

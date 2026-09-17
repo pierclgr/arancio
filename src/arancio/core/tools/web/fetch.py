@@ -36,7 +36,7 @@ class FetchWebTool(BaseTool):
     _max_content_chars: int = 50_000
     _result_parser: Type[FetchWebToolResultParser] = FetchWebToolResultParser
 
-    def __init__(self, client: BaseClient, session=None) -> None:
+    def __init__(self, client: BaseClient) -> None:
         """Initialize the tool with an externally built summarization client.
 
         Args:
@@ -44,10 +44,8 @@ class FetchWebTool(BaseTool):
                 page content. Built and configured by the caller so
                 summarization can run on a cheap model separate from the
                 agent's client.
-            session: optional :class:`ToolSession` override forwarded to the base
-                class (unused by this read-only tool).
         """
-        super().__init__(session=session)
+        super().__init__()
         self._client = client
 
     @property

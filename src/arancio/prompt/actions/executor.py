@@ -30,6 +30,8 @@ from arancio.prompt.actions.types import (
     PromptAction,
     ShellCommandAction,
 )
+from arancio.sessions.manager import SessionManager
+from arancio.sessions.session import SessionConfiguration
 from arancio.settings.manager import SettingsManager
 
 if TYPE_CHECKING:
@@ -56,7 +58,11 @@ class ActionExecutor:
     _shell_command_tool: ShellCommandTool = ShellCommandTool()
 
     def __init__(
-        self, agent: Agent, application: App, settings_manager: SettingsManager
+        self,
+        agent: Agent,
+        application: App,
+        settings_manager: SettingsManager,
+        session_manager: SessionManager,
     ) -> None:
         """Store the objects used to carry out actions.
 
@@ -65,10 +71,14 @@ class ActionExecutor:
             application: the running app a command acts on.
             settings_manager: the settings manager a command can use to apply
                 and persist settings changes.
+            session_manager: the manager owning the active chat; every write
+                goes through its ``session_recorder``, and ``/clear`` receives the
+                manager itself.
         """
-        self._agent = agent
-        self._application = application
-        self._settings_manager = settings_manager
+        self._agent: Agent = agent
+        self._application: App = application
+        self._settings_manager: SettingsManager = settings_manager
+        self._session_manager: SessionManager = session_manager
 
     def execute(self, action: BaseAction) -> Iterator[Message]:
         """Execute the action, producing its output messages.
@@ -112,18 +122,65 @@ class ActionExecutor:
             id=call_id,
             name="ShellCommandTool",
             arguments=arguments,
+            in_history=action.add_to_history,
         )
+        command_error = self._session_manager.session_recorder.command(
+            raw_input=action.raw_input,
+            name="shell",
+            args=[action.command],
+        )
+        attribution_error = None
         if action.add_to_history:
-            self._agent.add_message_to_history(
-                UserMessage(content="User explicitly ran the following command:")
+            attribution = UserMessage(
+                content="User explicitly ran the following command:"
             )
+            self._agent.add_message_to_history(attribution)
             self._agent.add_message_to_history(call)
+            # the user never saw this line: it exists so the model does not
+            # read the synthetic call as its own decision
+            attribution_error = self._session_manager.session_recorder.message(
+                attribution, visible=False
+            )
+        call_error = self._session_manager.session_recorder.message(call)
         yield call
+        yield from self._yield_notices(command_error, attribution_error, call_error)
 
         result = self._shell_command_tool.call(call_id=call_id, **arguments)
+        result.in_history = action.add_to_history
         if action.add_to_history:
             self._agent.add_message_to_history(result)
+        result_error = self._session_manager.session_recorder.message(result)
         yield result
+        yield from self._yield_notices(result_error)
+
+    @staticmethod
+    def _yield_notices(*notices: ErrorMessage | None) -> Iterator[Message]:
+        """Yield each persistence notice a recorder write actually produced.
+
+        Args:
+            notices: the results of recorder writes, ``None`` when the write
+                landed on disk.
+
+        Yields:
+            Every notice that is not ``None``, in the order given.
+        """
+        for notice in notices:
+            if notice:
+                yield notice
+
+    def _yield_error(self, content: str) -> Iterator[Message]:
+        """Record an error the executor itself reports, then yield it.
+
+        Args:
+            content: the error text shown to the user and saved in the session.
+
+        Yields:
+            The error, followed by the persistence notice when saving it failed.
+        """
+        error = ErrorMessage(content=content)
+        save_error = self._session_manager.session_recorder.message(error)
+        yield error
+        yield from self._yield_notices(save_error)
 
     def _execute_command(self, action: CommandAction) -> Iterator[Message]:
         """Bind the action's words to the command's parameters and run it.
@@ -140,21 +197,57 @@ class ActionExecutor:
         """
         command = COMMAND_REGISTRY.get(action.name)
         if command is None:
-            yield ErrorMessage(content=f"Command not found: {action.name}")
+            yield from self._yield_error(f"Command not found: {action.name}")
             return
 
         try:
             kwargs = self._build_command_kwargs(command, action.args)
-            result = command.run(**kwargs)
         except Exception as exc:
-            yield ErrorMessage(
-                content=f"Error while executing command {action.name}: {exc}"
+            yield from self._yield_error(
+                f"Error while executing command {action.name}: {exc}"
             )
             return
 
-        if result is None:
+        command_error = (
+            self._session_manager.session_recorder.command(
+                raw_input=action.raw_input,
+                name=action.name,
+                args=action.args,
+            )
+            if action.name == "clear"
+            else None
+        )
+        try:
+            result = command.run(**kwargs)
+        except Exception as exc:
+            yield from self._yield_error(
+                f"Error while executing command {action.name}: {exc}"
+            )
+            yield from self._yield_notices(command_error)
             return
-        yield AssistantMessage(content=result) if isinstance(result, str) else result
+
+        if command_error is None:
+            command_error = self._session_manager.session_recorder.command(
+                raw_input=action.raw_input,
+                name=action.name,
+                args=action.args,
+            )
+
+        state_error = self._session_effect_of(action)
+
+        if result is None:
+            yield from self._yield_notices(command_error, state_error)
+            return
+        message = (
+            AssistantMessage(content=result) if isinstance(result, str) else result
+        )
+        if isinstance(message, AssistantMessage):
+            message.in_history = False
+            result_error = self._session_manager.session_recorder.message(message)
+        else:
+            result_error = None
+        yield message
+        yield from self._yield_notices(command_error, state_error, result_error)
 
     def _build_command_kwargs(
         self, command: Type[BaseCommand], args: list[str]
@@ -213,10 +306,45 @@ class ActionExecutor:
         try:
             self._settings_manager.settings.model_id
         except ValueError as exc:
-            yield ErrorMessage(content=f"Error sending message: {exc}")
+            yield from self._yield_error(f"Error sending message: {exc}")
             return
         prelude = self._resolve_mentions(action.mentions)
-        yield from self._agent.run(UserMessage(content=action.prompt), prelude=prelude)
+        message = UserMessage(
+            content=action.prompt,
+            display_text=action.raw_input,
+        )
+        # the agent appends this to model history but never yields it back, so
+        # the caller that built it is the one that records it
+        save_error = self._session_manager.session_recorder.message(message)
+        yield from self._yield_notices(save_error)
+        yield from self._session_manager.session_recorder.record_stream(
+            self._agent.run(message, prelude=prelude)
+        )
+
+    def _session_effect_of(self, action: CommandAction) -> ErrorMessage | None:
+        """Persist whatever session state a successful local command changed.
+
+        Only the executor knows which command changes what, so the mapping lives
+        here; the write itself is a direct recorder call.
+
+        Args:
+            action: the successfully executed local command.
+
+        Returns:
+            A persistence error notice, or ``None`` when no session state
+            changed or the write succeeded.
+        """
+        if action.name == "cd":
+            return self._session_manager.session_recorder.working_directory(
+                self._application.working_directory
+            )
+        changes_configuration = action.name in {"provider", "model", "effort"}
+        changes_permission = action.name == "permissions" and len(action.args) > 1
+        if not (changes_configuration or changes_permission):
+            return None
+        return self._session_manager.session_recorder.configuration(
+            SessionConfiguration.from_settings(self._settings_manager.settings)
+        )
 
     @classmethod
     def _resolve_mentions(cls, mentions: list[Path]) -> list[Message]:

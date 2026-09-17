@@ -1,29 +1,26 @@
 """On-disk storage management for the arancio working directory."""
 
+import os
 import shutil
 from pathlib import Path
 from typing import Any
 
 import yaml
-from dynamic_markdown.types.files.base import DynamicMarkdownFile
 
-from arancio.core.constants.agent import AGENT_DEFAULT_SYSTEM_PROMPT
-from arancio.core.constants.path.base import (
+from arancio.core.constants.path import (
     ARANCIO_DEFAULT_DIR,
-    ARANCIO_SETTINGS_FILE,
-    LITELLM_CONFIG_DIR,
-    SYSTEM_PROMPT_HARNESS_PATH,
 )
 from arancio.core.messages import ErrorMessage, Message, WarningMessage
+from arancio.settings.constants import ARANCIO_SETTINGS_FILE
 from arancio.settings.settings import Settings
+from arancio.storage.constants import ARANCIO_LITELLM_DIR, LITELLM_CONFIG_DIR
 
 
 class StorageManager:
     """Manage arancio's persistent on-disk storage.
 
-    Handles generic directory creation and the dedicated arancio working
-    directory (default ``~/.arancio``), under which arancio keeps everything it
-    persists across runs (login information, harness, future settings, …).
+    Handles generic directory creation and file operations for arancio's
+    dedicated paths, which are defined by path constants.
 
     Attributes:
         _root: the arancio working directory all dedicated paths hang off.
@@ -33,9 +30,8 @@ class StorageManager:
         """Initialize the manager with the working directory root.
 
         Args:
-            root: the arancio working directory. Defaults to
-                :data:`ARANCIO_DEFAULT_DIR` (``~/.arancio``); tests pass a
-                temporary path for isolation.
+            root: the base directory used by generic directory creation.
+                Defaults to :data:`ARANCIO_DEFAULT_DIR` (``~/.arancio``).
         """
         self._root = root
 
@@ -49,25 +45,139 @@ class StorageManager:
 
     @property
     def root(self) -> Path:
-        """Return the arancio working directory root.
+        """Return the base directory used by generic directory creation.
 
         Returns:
-            The working directory all dedicated paths hang off.
+            The configured base directory.
         """
         return self._root
 
-    def make_dir(self, *parts: str) -> Path:
-        """Create and return a directory under the working directory root.
+    def make_dir(self, path: str | Path) -> Path:
+        """Create and return a directory at a relative or full path.
 
         Args:
-            *parts: path components appended to the root.
+            path: the directory path. Relative paths are resolved under the
+                configured root.
 
         Returns:
             The created (or already existing) directory.
         """
-        path = self._root.joinpath(*parts)
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        directory = Path(path)
+        if not directory.is_absolute():
+            directory = self._root / directory
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    def find_files(self, directory: Path, pattern: str) -> list[Path]:
+        """Return files below a directory matching a glob pattern.
+
+        Args:
+            directory: the directory tree to search.
+            pattern: the filename glob pattern to match.
+
+        Returns:
+            Matching paths in deterministic path order.
+        """
+        return sorted(directory.rglob(pattern))
+
+    @staticmethod
+    def read_lines(path: Path) -> list[str]:
+        """Read a UTF-8 text file as raw lines.
+
+        Args:
+            path: the text file to read.
+
+        Returns:
+            The file's lines without their terminating newlines.
+        """
+        return path.read_text(encoding="utf-8").splitlines()
+
+    @staticmethod
+    def file_size(path: Path) -> int:
+        """Return the current byte length of a file.
+
+        Args:
+            path: the file to inspect.
+
+        Returns:
+            The file's current size in bytes, or zero when it does not exist.
+        """
+        return path.stat().st_size if path.exists() else 0
+
+    @staticmethod
+    def append_line(path: Path, line: str) -> None:
+        """Append and sync one UTF-8 text line.
+
+        Args:
+            path: the text file to append.
+            line: text without a trailing newline.
+        """
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("ab") as file:
+            file.write(line.encode("utf-8") + b"\n")
+            file.flush()
+            os.fsync(file.fileno())
+
+    @staticmethod
+    def create_file(path: Path, line: str | None = None) -> None:
+        """Create and sync a new UTF-8 text file, optionally with its first line.
+
+        Args:
+            path: the new file path, which must not already exist.
+            line: optional text without a trailing newline.
+        """
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("xb") as file:
+            if line is not None:
+                file.write(line.encode("utf-8") + b"\n")
+            file.flush()
+            os.fsync(file.fileno())
+
+    @staticmethod
+    def truncate_file(path: Path, offset: int) -> None:
+        """Discard every byte in a file after ``offset``.
+
+        Args:
+            path: the file to truncate.
+            offset: the retained byte length from the beginning of the file.
+        """
+        with path.open("r+b") as file:
+            file.truncate(offset)
+            file.flush()
+            os.fsync(file.fileno())
+
+    @staticmethod
+    def remove_file(path: Path) -> None:
+        """Remove a file when it exists.
+
+        Args:
+            path: the file to remove.
+        """
+        if path.exists():
+            path.unlink()
+
+    @staticmethod
+    def write_file(path: Path, content: str) -> None:
+        """Create parent directories and replace a UTF-8 text file's content.
+
+        Args:
+            path: the text file to create or replace.
+            content: the complete UTF-8 text content to write.
+        """
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    @staticmethod
+    def save_settings(settings: Settings) -> None:
+        """Serialize and save settings to the global settings file.
+
+        Args:
+            settings: the settings snapshot to persist.
+        """
+        StorageManager.write_file(
+            ARANCIO_SETTINGS_FILE,
+            yaml.safe_dump(settings.to_dict(), sort_keys=False),
+        )
 
     def bind_litellm_login_dir(
         self, litellm_config_dir: Path = LITELLM_CONFIG_DIR
@@ -77,7 +187,7 @@ class StorageManager:
         LiteLLM hardcodes its config directory (``~/.config/litellm``) and
         offers no override, so everything it writes there (per-provider login
         state, e.g. ChatGPT OAuth tokens) is redirected by symlinking that
-        directory onto ``<root>/litellm``. Any pre-existing real directory is
+        directory onto :data:`ARANCIO_LITELLM_DIR`. Any pre-existing real directory is
         migrated (its entries moved into the target) before being replaced by
         the symlink, so existing logins are preserved. An already-symlinked
         config directory is left untouched.
@@ -88,9 +198,9 @@ class StorageManager:
                 tests pass a temporary path for isolation.
 
         Returns:
-            The working-directory subdirectory LiteLLM's storage now resolves to.
+            The directory LiteLLM's storage now resolves to.
         """
-        target = self.make_dir("litellm")
+        target = self.make_dir(ARANCIO_LITELLM_DIR)
 
         if litellm_config_dir.is_symlink():
             return target
@@ -103,18 +213,6 @@ class StorageManager:
         litellm_config_dir.parent.mkdir(parents=True, exist_ok=True)
         litellm_config_dir.symlink_to(target, target_is_directory=True)
         return target
-
-    @staticmethod
-    def save_settings(settings: Settings) -> None:
-        """Write the settings to the settings file.
-
-        Args:
-            settings: the settings to persist.
-        """
-        ARANCIO_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        ARANCIO_SETTINGS_FILE.write_text(
-            yaml.safe_dump(settings.to_dict(), sort_keys=False)
-        )
 
     @classmethod
     def load_settings(cls) -> tuple[dict[str, Any] | None, list[Message]]:
@@ -162,25 +260,3 @@ class StorageManager:
             ]
 
         return data, []
-
-    @staticmethod
-    def save_system_prompt() -> None:
-        """Write the default system prompt to the harness file."""
-        SYSTEM_PROMPT_HARNESS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        SYSTEM_PROMPT_HARNESS_PATH.write_text(AGENT_DEFAULT_SYSTEM_PROMPT)
-
-    @classmethod
-    def load_system_prompt(cls) -> DynamicMarkdownFile:
-        """Read the system prompt harness file, seeding it with a default if absent.
-
-        When the harness file is absent, :data:`AGENT_DEFAULT_SYSTEM_PROMPT` is
-        written to disk first (so a first run leaves a populated file behind),
-        mirroring how :meth:`load_settings` seeds ``settings.yml`` with defaults.
-
-        Returns:
-            The parsed dynamic markdown system prompt file.
-        """
-        if not SYSTEM_PROMPT_HARNESS_PATH.is_file():
-            cls.save_system_prompt()
-
-        return DynamicMarkdownFile(SYSTEM_PROMPT_HARNESS_PATH)

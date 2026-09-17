@@ -44,7 +44,7 @@ class EffortCommand(BaseCommand):
         new_effort = None if level.lower() == "null" else level
         settings_manager.settings.thinking_effort = new_effort
         settings_manager.apply()
-        settings_manager.save()
+        settings_manager.save_thinking_effort()
         application.set_displayed_effort(new_effort)
         return (
             f"Thinking effort set to {new_effort if new_effort is not None else 'null'}"

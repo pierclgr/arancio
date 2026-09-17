@@ -65,15 +65,16 @@ class LiteLLMClient(BaseClient):
 
     def __init__(
         self,
+        controller: Controller,
         max_output_tokens: int | None = None,
         stream: bool = False,
-        controller: Controller | None = None,
         *args,
         **kwargs,
     ) -> None:
-        """Initialize the client with an optional output-token cap.
+        """Initialize the client with its frontend port and optional caps.
 
         Args:
+            controller: frontend port receiving ChatGPT device-login notices.
             max_output_tokens: per-request cap forwarded as
                 ``max_output_tokens`` to ``litellm.responses``. Useful
                 with credit-gated routers (e.g. OpenRouter) which
@@ -92,7 +93,6 @@ class LiteLLMClient(BaseClient):
                 natively streamable so LiteLLM streams it instead of
                 taking its broken fake-stream path; see
                 :meth:`_register_native_streaming`.
-            controller: frontend port receiving ChatGPT device-login notices.
             *args: positional arguments forwarded to :class:`BaseClient`.
             **kwargs: keyword arguments forwarded to :class:`BaseClient`.
         """
@@ -180,13 +180,12 @@ class LiteLLMClient(BaseClient):
             verification_url: browser address where the user enters the code.
             user_code: short code for the active ChatGPT login attempt.
         """
-        if self._controller is not None:
-            self._controller.request(
-                ChatGPTLoginRequest(
-                    verification_url=verification_url,
-                    user_code=user_code,
-                )
+        self._controller.request(
+            ChatGPTLoginRequest(
+                verification_url=verification_url,
+                user_code=user_code,
             )
+        )
 
     @staticmethod
     def _register_native_streaming(model_id: str) -> None:

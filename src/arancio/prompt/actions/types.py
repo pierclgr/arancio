@@ -22,10 +22,12 @@ class CommandAction(BaseAction):
     Attributes:
         name: the command name parsed from the prompt.
         args: the command arguments parsed from the prompt.
+        raw_input: the exact text the user submitted before parsing.
     """
 
     name: str
     args: list[str]
+    raw_input: str
 
 
 @dataclass
@@ -36,10 +38,12 @@ class ShellCommandAction(BaseAction):
         command: the exact command text following the shell prefix.
         add_to_history: whether to store the generated tool call and result
             in the agent's conversation history.
+        raw_input: the exact text the user submitted before parsing.
     """
 
     command: str
     add_to_history: bool
+    raw_input: str
 
 
 @dataclass
@@ -49,10 +53,12 @@ class PromptAction(BaseAction):
     Attributes:
         prompt: the prompt to send to the model, with every resolving
             @mention already rewritten to its resolved absolute path.
+        raw_input: the exact text the user submitted before parsing.
         mentions: absolute paths resolved from @mention tokens in the
             prompt, in the order they appear. Empty when the prompt had
             none.
     """
 
     prompt: str
+    raw_input: str
     mentions: list[Path] = field(default_factory=list)

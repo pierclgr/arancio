@@ -21,9 +21,15 @@ from arancio.core.messages import (
     ToolCallMessage,
     ToolErrorMessage,
     ToolResultMessage,
+    UserMessage,
 )
 from arancio.core.permissions.manager import PermissionManager
-from arancio.core.permissions.types import PermissionCategory, PermissionLevel
+from arancio.core.permissions.types import (
+    PermissionCategory,
+    PermissionDecision,
+    PermissionLevel,
+    PermissionOutcome,
+)
 from arancio.core.tools.base import BaseTool
 from arancio.core.tools.schema import ToolSchema
 
@@ -35,6 +41,7 @@ class Agent:
         self,
         client: BaseClient,
         permission_manager: PermissionManager,
+        message_history: List[Message] | None = None,
         max_turns: int | str = AGENT_DEFAULT_MAX_TURNS,
         max_retries: int = AGENT_DEFAULT_MAX_RETRIES,
         retry_delay: float = AGENT_DEFAULT_TURN_WAIT_TIME,
@@ -46,6 +53,9 @@ class Agent:
             client: the LLM client used to send requests.
             permission_manager: the permission manager that creates the agent's
                 tools and gates each tool call.
+            message_history: the model context the agent starts from, copied so
+                the caller keeps no handle on it. Defaults to none, an empty
+                history; a restored session passes its saved messages here.
             max_turns: the maximum number of loop turns before aborting, or
                 ``"inf"`` (the default) for no limit: the loop runs until the
                 model stops requesting tools.
@@ -61,7 +71,7 @@ class Agent:
         self._max_retries: int = max_retries
         self._retry_delay: float = retry_delay
         self._retry_delay_multiplier: float = retry_delay_multiplier
-        self._message_history: List[Message] = []
+        self._message_history: List[Message] = list(message_history or [])
         self._system_prompt_builder: SystemPromptBuilder = SystemPromptBuilder()
         self._permission_manager: PermissionManager = permission_manager
 
@@ -203,7 +213,7 @@ class Agent:
     def _refresh_tools(self) -> None:
         """Rebuild the tool catalog from the permission manager's grants."""
         self._tools = {
-            tool.name: tool for tool in self._permission_manager.get_allowed_tools
+            tool.name: tool for tool in self._permission_manager.allowed_tools
         }
 
     def add_permission(
@@ -266,6 +276,66 @@ class Agent:
         """
         self._message_history.append(message)
 
+    @staticmethod
+    def _permission_message(
+        call: ToolCallMessage, decision: PermissionDecision
+    ) -> Message | None:
+        """Build the model-facing message a resolved permission decision needs.
+
+        Args:
+            call: the tool call the decision resolves.
+            decision: the permission decision to word for the model.
+
+        Returns:
+            The note wrapped in a report-then-answer instruction when the call
+            is allowed with one, the tool error describing the denial or the
+            missing tool when it is refused, and ``None`` for a plain allow.
+        """
+        if decision.outcome is PermissionOutcome.ALLOWED:
+            if not decision.note:
+                return None
+
+            # the note instructs the model to report the result first, then
+            # answer it, so it is sent after the result
+            instruction = (
+                f"While running tool {call.id}: {call.name}, user also noted: "
+                f"{decision.note}. First report tool calling result, then "
+                f"answer user note."
+            )
+            return UserMessage(content=instruction, display_text=decision.note)
+
+        # a missing tool must not read as a user denial: the model asked for a
+        # tool that is not part of this run at all
+        if decision.outcome is PermissionOutcome.UNAVAILABLE:
+            return ToolErrorMessage(
+                content=f"Tool {call.name} does not exist.", id=call.id
+            )
+
+        content = f"Tool call {call.name} denied by user."
+        if decision.note:
+            content += f" Additional information from user: {decision.note}"
+        return ToolErrorMessage(content=content, id=call.id)
+
+    def _emit(self, message: Message) -> Iterator[Message]:
+        """Append a message to history and emit it.
+
+        Args:
+            message: the finalized message to append and emit.
+
+        Yields:
+            The message itself.
+        """
+        self.add_message_to_history(message)
+        yield message
+
+    def restore_history(self, messages: List[Message]) -> None:
+        """Replace model history with messages restored from a session.
+
+        Args:
+            messages: the restored model-context messages in original order.
+        """
+        self._message_history = list(messages)
+
     def _run_tool(self, call: ToolCallMessage) -> ToolResultMessage:
         """Execute a tool call and return a ToolResultMessage.
 
@@ -307,12 +377,13 @@ class Agent:
 
         Yields:
             Each ``prelude`` message, then each message produced during the
-            run, including intermediate tool calls and tool results.
+            run, including intermediate tool calls and tool results. The
+            initial ``message`` is appended to history but never yielded, since
+            the caller already holds it.
         """
-        self.add_message_to_history(message=message)
+        self.add_message_to_history(message)
         for extra in prelude or []:
-            self.add_message_to_history(extra)
-            yield extra
+            yield from self._emit(extra)
 
         # backoff wait that grows by the multiplier on each consecutive retry
         retry_wait = self._retry_delay
@@ -337,12 +408,13 @@ class Agent:
                 )
 
                 for response_message in self._client.send_request(request=request):
-                    if not isinstance(response_message, ChunkMessage):
-                        received_finalized = True
-                        self.add_message_to_history(message=response_message)
-                        if isinstance(response_message, ToolCallMessage):
-                            tool_calls.append(response_message)
-                    yield response_message
+                    if isinstance(response_message, ChunkMessage):
+                        yield response_message
+                        continue
+                    received_finalized = True
+                    if isinstance(response_message, ToolCallMessage):
+                        tool_calls.append(response_message)
+                    yield from self._emit(response_message)
 
                 # a completed stream is a successful turn: reset the
                 # consecutive-error tracking and the backoff wait
@@ -355,23 +427,15 @@ class Agent:
 
                 # call the tools if tools are requested
                 for call in tool_calls:
-                    authorized, feedback = self._permission_manager.validate(call)
-                    if authorized:
-                        tool_result = self._run_tool(call)
-                        self.add_message_to_history(tool_result)
-                        yield tool_result
+                    decision = self._permission_manager.validate(call)
+                    feedback = self._permission_message(call, decision)
+                    if decision.outcome is PermissionOutcome.ALLOWED:
+                        yield from self._emit(self._run_tool(call))
 
-                        # a note carries an instruction telling the model to
-                        # report the result first, then answer it; send it as a
-                        # separate message after the result
-                        if feedback:
-                            self.add_message_to_history(feedback)
-                            yield feedback
-                    else:
-                        # denied or not permitted: feed the message back to the
-                        # model and surface it to the user so the model can react
-                        self.add_message_to_history(feedback)
-                        yield feedback
+                    # the note follows the result; a refusal is fed back to the
+                    # model and surfaced to the user so the model can react
+                    if feedback:
+                        yield from self._emit(feedback)
 
             except Exception as e:
                 # always surface the error to the consumer for visibility, but

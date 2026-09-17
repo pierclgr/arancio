@@ -3,13 +3,13 @@
 from arancio.core.controllers.base import Controller
 from arancio.core.controllers.requests import PermissionRequest
 from arancio.core.controllers.responses import Decision
-from arancio.core.messages import (
-    Message,
-    ToolCallMessage,
-    ToolErrorMessage,
-    UserMessage,
+from arancio.core.messages import ToolCallMessage
+from arancio.core.permissions.types import (
+    PermissionCategory,
+    PermissionDecision,
+    PermissionLevel,
+    PermissionOutcome,
 )
-from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 from arancio.core.tools.base import BaseTool
 from arancio.core.tools.manager import ToolManager
 
@@ -98,18 +98,6 @@ class PermissionManager:
             raise ValueError(f"No permission granted for category {category}.")
         self._permissions[category] = PermissionLevel.NONE
 
-    def get_category_permission(self, category: PermissionCategory) -> PermissionLevel:
-        """Return the permission level for the given category.
-
-        Args:
-            category: the category to look up.
-
-        Returns:
-            The category's level; :attr:`PermissionLevel.NONE` when not
-            granted.
-        """
-        return self._permissions[category]
-
     def set_permission_level(
         self, category: PermissionCategory, level: PermissionLevel
     ) -> None:
@@ -133,7 +121,7 @@ class PermissionManager:
         self._permissions = permissions
 
     @property
-    def get_allowed_tools(self) -> list[BaseTool]:
+    def allowed_tools(self) -> list[BaseTool]:
         """Create the tools the agent may access from the current grants.
 
         Returns:
@@ -142,13 +130,13 @@ class PermissionManager:
         """
         return self._tool_manager.create_tools(self._permissions)
 
-    def validate(self, call: ToolCallMessage) -> tuple[bool, Message | None]:
+    def validate(self, call: ToolCallMessage) -> PermissionDecision:
         """Decide whether a requested tool call may execute.
 
         Allows ``auto`` grants without asking and asks the user through the
         controller for ``ask`` grants. A call whose category is at
-        :attr:`PermissionLevel.NONE` (or maps to no category) is denied with a
-        not-permitted error. The
+        :attr:`PermissionLevel.NONE` (or maps to no category) resolves as
+        unavailable. The
         controller's :class:`~arancio.core.controllers.responses.PermissionResponse`
         either allows the call (optionally with a note for the model) or denies
         it (optionally with a reason for the model).
@@ -157,43 +145,26 @@ class PermissionManager:
             call: the tool call the agent wants to execute.
 
         Returns:
-            An ``(allowed, message)`` pair. ``message`` is a
-            :class:`~arancio.core.messages.UserMessage` wrapping the note in a
-            report-then-answer instruction when the call is allowed with one, a
-            :class:`~arancio.core.messages.ToolErrorMessage` describing the denial
-            or not-permitted reason when the call is refused, and ``None`` for a
-            plain allow.
+            The :class:`~arancio.core.permissions.types.PermissionDecision`
+            resolving the call. The caller runs the tool and turns the decision
+            into the messages the model sees.
         """
+        # unavailable case
         if not self._tool_manager.is_tool_available(call.name, self._permissions):
-            message = f"Tool {call.name} does not exist."
-            return False, ToolErrorMessage(
-                content=message,
-                id=call.id,
-            )
+            return PermissionDecision(outcome=PermissionOutcome.UNAVAILABLE)
 
         category = PermissionCategory.for_tool(call.name)
 
         # automatic case
         if self._permissions[category] is PermissionLevel.AUTO:
-            return True, None
+            return PermissionDecision(outcome=PermissionOutcome.ALLOWED)
 
-        # ask case: delegate to the controller and map its response
+        # ask case: delegate to the controller and map its response; a deny
+        # keeps the user's reason on the decision, the caller words the refusal
         response = self._controller.request(PermissionRequest(call))
-        if response.decision is Decision.ALLOW:
-            if response.message:
-                instruction = (
-                    f"While running tool {call.id}: {call.name}, user also "
-                    f"noted: {response.message}. First report tool calling result, "
-                    f"then answer user note."
-                )
-                return True, UserMessage(
-                    content=instruction, display_text=response.message
-                )
-            return True, None
-
-        # denied case
-        content = f"Tool call {call.name} denied by user."
-        if response.message:
-            content += f" Additional information from user: {response.message}"
-
-        return False, ToolErrorMessage(content=content, id=call.id)
+        outcome = (
+            PermissionOutcome.ALLOWED
+            if response.decision is Decision.ALLOW
+            else PermissionOutcome.DENIED
+        )
+        return PermissionDecision(outcome=outcome, note=response.message or None)

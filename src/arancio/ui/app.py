@@ -27,6 +27,7 @@ from arancio.core.messages import (
 from arancio.prompt.actions.executor import ActionExecutor
 from arancio.prompt.actions.factory import ActionFactory
 from arancio.prompt.manager import PromptManager
+from arancio.sessions.manager import SessionManager
 from arancio.settings.manager import SettingsManager
 from arancio.ui.widgets.chatgpt_login import ChatGPTLoginNotice
 
@@ -69,6 +70,7 @@ class App(TextualApp):
         agent: Agent,
         model_id: str,
         settings_manager: SettingsManager,
+        session_manager: SessionManager,
         startup_messages: list[Message] | None = None,
     ) -> None:
         """Initialize the app with the agent it drives and the model label.
@@ -78,15 +80,20 @@ class App(TextualApp):
             model_id: the model identifier shown in the toolbar.
             settings_manager: the manager used to apply and persist settings
                 changes made through commands (e.g. ``/model``, ``/effort``).
+            session_manager: the active persistent chat session.
             startup_messages: messages to render once on mount (e.g. settings
                 validation warnings/errors produced while loading
                 ``settings.yml``). Defaults to none.
         """
         super().__init__()
         self._agent = agent
+        self._session_manager = session_manager
         self._working_directory: Path = Path.cwd()
         self._action_executor = ActionExecutor(
-            agent=agent, application=self, settings_manager=settings_manager
+            agent=agent,
+            application=self,
+            settings_manager=settings_manager,
+            session_manager=session_manager,
         )
         self._model_id = model_id
         self._effort = settings_manager.settings.thinking_effort
@@ -114,6 +121,9 @@ class App(TextualApp):
         # keep the log pinned to the bottom as streamed content grows, until
         # the user scrolls up
         self.query_one("#log", VerticalScroll).anchor()
+        if self._session_manager.current:
+            for message in self._session_manager.visible_messages():
+                self._mount(self._render(message))
         for message in self._startup_messages:
             self._mount(self._render(message))
 
@@ -156,15 +166,18 @@ class App(TextualApp):
             # it: slash and shell commands are handled locally, while a prompt
             # goes to the model. all yield a message stream rendered the same way
             resolved_arguments = PromptManager.resolve_prompt(text)
-            action = ActionFactory.create_action(**resolved_arguments)
+            action = ActionFactory.create_action(raw_input=text, **resolved_arguments)
             for message in self._action_executor.execute(action):
                 self.call_from_thread(self._handle_message, message)
         except ValueError as exc:
             # a malformed prompt (e.g. an unclosed quote) is reported like any
-            # other failure instead of killing the worker thread
-            self.call_from_thread(
-                self._handle_message, ErrorMessage(content=f"Invalid prompt: {exc}")
-            )
+            # other failure instead of killing the worker thread, and saved so a
+            # resumed log keeps the only trace of that turn
+            error = ErrorMessage(content=f"Invalid prompt: {exc}")
+            save_error = self._session_manager.session_recorder.message(error)
+            self.call_from_thread(self._handle_message, error)
+            if save_error:
+                self.call_from_thread(self._handle_message, save_error)
         finally:
             self.call_from_thread(self._end_stream)
             self.call_from_thread(self._set_busy, False)

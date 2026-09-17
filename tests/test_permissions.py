@@ -1,350 +1,188 @@
-"""Tests for the permission system: categories, grants and the manager."""
+"""Tests for permission grants, the tool catalog they build and the ask path.
+
+A category at ``NONE`` is not a call that gets refused — it is a tool that is never
+built, so the model is never told it exists. That distinction is what these tests pin
+down, alongside the two ways a decision reaches the user.
+"""
 
 import pytest
+from fakes import ScriptedController
 
-from arancio.core.clients.litellm import LiteLLMClient
-from arancio.core.controllers.requests import BaseControllerRequest, PermissionRequest
-from arancio.core.controllers.responses import (
-    BaseControllerResponse,
-    Decision,
-    PermissionResponse,
-)
-from arancio.core.messages import ToolCallMessage, ToolErrorMessage, UserMessage
+from arancio.core.controllers.requests import PermissionRequest
+from arancio.core.controllers.responses import Decision
+from arancio.core.messages import ToolCallMessage
 from arancio.core.permissions.manager import PermissionManager
-from arancio.core.permissions.types import PermissionCategory, PermissionLevel
+from arancio.core.permissions.types import (
+    PermissionCategory,
+    PermissionLevel,
+    PermissionOutcome,
+)
 from arancio.core.tools.manager import ToolManager
 
 
-class _FakeController:
-    """Controller stub returning a preset response and recording requests.
+def _call(name: str = "ReadFileTool") -> ToolCallMessage:
+    """Build a tool call for the named tool.
 
-    Attributes:
-        requests: the requests passed to :meth:`request`, in order.
+    Args:
+        name: the tool class name the model is asking for.
+
+    Returns:
+        A tool call message with no arguments.
     """
-
-    def __init__(self, response: PermissionResponse | None = None) -> None:
-        """Store the canned response (``None`` means ``request`` must not run).
-
-        Args:
-            response: the response to return; when ``None`` any call to
-                :meth:`request` fails the test.
-        """
-        self._response = response
-        self.requests: list[BaseControllerRequest] = []
-
-    def request(self, request: BaseControllerRequest) -> BaseControllerResponse:
-        """Record the request and return the canned response.
-
-        Args:
-            request: the request to record.
-
-        Returns:
-            The canned response supplied at construction.
-
-        Raises:
-            AssertionError: when no response was configured.
-        """
-        self.requests.append(request)
-        if self._response is None:
-            raise AssertionError("controller.request must not be called")
-        return self._response
+    return ToolCallMessage(content="", id="c1", name=name, arguments={})
 
 
 def _manager(
-    permissions: dict[PermissionCategory, PermissionLevel] | None = None,
-    controller: _FakeController | None = None,
+    tool_manager: ToolManager,
+    controller: ScriptedController,
+    **levels: PermissionLevel,
 ) -> PermissionManager:
-    """Build a permission manager backed by a real tool manager.
+    """Build a permission manager with named categories overridden.
 
     Args:
-        permissions: optional category-to-level grants forwarded to the
-            manager.
-        controller: optional controller stub; defaults to one that fails if
-            asked (so AUTO/absent paths assert no prompt happens).
+        tool_manager: the manager that builds granted tools.
+        controller: the controller resolving ``ASK`` calls.
+        **levels: category name (lowercase) to level, overriding ``ASK``.
 
     Returns:
-        A :class:`PermissionManager` whose tool manager carries a summary
-        client.
+        A permission manager over a complete grant map.
     """
-    summary_client = LiteLLMClient(
-        model_id="ollama_chat/deepseek-v4-flash:cloud", stream=False
-    )
+    grants = {category: PermissionLevel.ASK for category in PermissionCategory}
+    for name, level in levels.items():
+        grants[PermissionCategory[name.upper()]] = level
     return PermissionManager(
-        ToolManager(web_summary_client=summary_client),
-        controller or _FakeController(),
-        permissions,
+        tool_manager=tool_manager, controller=controller, permissions=grants
     )
 
 
-def _call(name: str) -> ToolCallMessage:
-    """Build a tool call message for the named tool.
+def test_a_manager_without_grants_asks_for_everything(
+    permission_manager: PermissionManager,
+) -> None:
+    """Omitting the grants means every category is at ``ASK``, never absent."""
+    assert permission_manager.validate(_call()).outcome is PermissionOutcome.ALLOWED
 
-    Args:
-        name: the tool class name the call targets.
 
-    Returns:
-        A tool call message with empty arguments.
+def test_an_auto_category_never_reaches_the_user(
+    tool_manager: ToolManager, controller: ScriptedController
+) -> None:
+    """An ``AUTO`` grant is the point where the controller is skipped entirely."""
+    manager = _manager(tool_manager, controller, read=PermissionLevel.AUTO)
+
+    decision = manager.validate(_call())
+
+    assert decision.outcome is PermissionOutcome.ALLOWED
+    assert controller.requests == []
+
+
+def test_an_ask_category_puts_the_call_to_the_user(
+    tool_manager: ToolManager, controller: ScriptedController
+) -> None:
+    """The user sees the actual call they are approving."""
+    manager = _manager(tool_manager, controller)
+
+    manager.validate(_call())
+
+    assert len(controller.requests) == 1
+    request = controller.requests[0]
+    assert isinstance(request, PermissionRequest)
+    assert request.call.name == "ReadFileTool"
+
+
+def test_a_denial_carries_the_user_note(tool_manager: ToolManager) -> None:
+    """The reason the user typed travels with the decision to the agent."""
+    controller = ScriptedController([(Decision.DENY, "not that file")])
+    manager = _manager(tool_manager, controller)
+
+    decision = manager.validate(_call())
+
+    assert decision.outcome is PermissionOutcome.DENIED
+    assert decision.note == "not that file"
+
+
+def test_an_empty_note_is_normalized_away(tool_manager: ToolManager) -> None:
+    """A blank message is no message, so the agent does not word an empty note."""
+    controller = ScriptedController([(Decision.ALLOW, "")])
+    manager = _manager(tool_manager, controller)
+
+    assert manager.validate(_call()).note is None
+
+
+def test_a_tool_in_a_revoked_category_is_unavailable(
+    tool_manager: ToolManager, controller: ScriptedController
+) -> None:
+    """``NONE`` reads as "no such tool", which is what the model is told."""
+    manager = _manager(tool_manager, controller, read=PermissionLevel.NONE)
+
+    decision = manager.validate(_call())
+
+    assert decision.outcome is PermissionOutcome.UNAVAILABLE
+    assert controller.requests == []
+
+
+def test_an_unknown_tool_name_is_unavailable(
+    permission_manager: PermissionManager, controller: ScriptedController
+) -> None:
+    """A tool that does not exist resolves without asking anyone."""
+    decision = permission_manager.validate(_call("NoSuchTool"))
+
+    assert decision.outcome is PermissionOutcome.UNAVAILABLE
+    assert controller.requests == []
+
+
+def test_a_revoked_category_builds_none_of_its_tools(
+    tool_manager: ToolManager, controller: ScriptedController
+) -> None:
+    """The tools are not merely refused at call time — they are never created."""
+    manager = _manager(tool_manager, controller, write=PermissionLevel.NONE)
+
+    names = {type(tool).__name__ for tool in manager.allowed_tools}
+
+    assert "WriteFileTool" not in names
+    assert "EditFileTool" not in names
+    assert "ReadFileTool" in names
+
+
+def test_every_granted_category_contributes_its_tools(
+    permission_manager: PermissionManager,
+) -> None:
+    """All four categories at ``ASK`` build the complete catalog.
+
+    Asserted as a set: a category's tools are a frozenset, so their order is
+    not stable between runs.
     """
-    return ToolCallMessage(content="", id="call_1", name=name, arguments={})
+    names = {type(tool).__name__ for tool in permission_manager.allowed_tools}
+
+    assert names == {
+        "ReadFileTool",
+        "WriteFileTool",
+        "EditFileTool",
+        "SearchWebTool",
+        "FetchWebTool",
+        "ShellCommandTool",
+    }
 
 
-def test_for_tool_reverse_lookup() -> None:
-    """for_tool resolves known tool names and returns None for unknown ones."""
-    assert PermissionCategory.for_tool("ReadFileTool") is PermissionCategory.READ
-    assert PermissionCategory.for_tool("WriteFileTool") is PermissionCategory.WRITE
-    assert PermissionCategory.for_tool("FetchWebTool") is PermissionCategory.WEB
-    assert PermissionCategory.for_tool("ShellCommandTool") is PermissionCategory.EXECUTE
-    assert PermissionCategory.for_tool("EchoTool") is None
-
-
-def test_get_allowed_tools_delegates_to_tool_manager() -> None:
-    """get_allowed_tools returns whatever the tool manager builds from the grants."""
-
-    class _RecordingToolManager:
-        """Tool manager stub recording the permissions it was asked to build."""
-
-        def __init__(self) -> None:
-            self.received: dict[PermissionCategory, PermissionLevel] | None = None
-
-        def create_tools(
-            self, permissions: dict[PermissionCategory, PermissionLevel]
-        ) -> list[str]:
-            """Record the permissions and return a sentinel tool list.
-
-            Args:
-                permissions: the grants passed by the manager.
-
-            Returns:
-                A one-element sentinel list.
-            """
-            self.received = permissions
-            return ["sentinel"]
-
-    permissions = {PermissionCategory.READ: PermissionLevel.ASK}
-    tool_manager = _RecordingToolManager()
-    manager = PermissionManager(tool_manager, _FakeController(), permissions)
-
-    assert manager.get_allowed_tools == ["sentinel"]
-    assert tool_manager.received == permissions
-
-
-def test_validate_auto_true_without_asking() -> None:
-    """AUTO grants allow the call and never ask the controller."""
-    manager = _manager({PermissionCategory.EXECUTE: PermissionLevel.AUTO})
-
-    assert manager.validate(_call("ShellCommandTool")) == (True, None)
-
-
-def test_validate_ask_allows_on_allow_decision() -> None:
-    """An ALLOW response with no message allows the call with no message."""
-    controller = _FakeController(PermissionResponse(decision=Decision.ALLOW))
-    manager = _manager({PermissionCategory.WRITE: PermissionLevel.ASK}, controller)
-
-    assert manager.validate(_call("WriteFileTool")) == (True, None)
-    assert isinstance(controller.requests[0], PermissionRequest)
-    assert controller.requests[0].call.name == "WriteFileTool"
-
-
-def test_validate_ask_allows_with_note() -> None:
-    """An ALLOW response with a message wraps it in a report-then-answer note."""
-    controller = _FakeController(
-        PermissionResponse(decision=Decision.ALLOW, message="be careful")
-    )
-    manager = _manager({PermissionCategory.WRITE: PermissionLevel.ASK}, controller)
-
-    allowed, message = manager.validate(_call("WriteFileTool"))
-
-    assert allowed is True
-    assert isinstance(message, UserMessage)
-    assert message.display_text == "be careful"
-    assert "be careful" in message.content
-
-
-@pytest.mark.parametrize("note", [None, ""])
-def test_validate_ask_allows_with_empty_note(note: str | None) -> None:
-    """An ALLOW response with no/empty message allows with no message."""
-    controller = _FakeController(
-        PermissionResponse(decision=Decision.ALLOW, message=note)
-    )
-    manager = _manager({PermissionCategory.WRITE: PermissionLevel.ASK}, controller)
-
-    assert manager.validate(_call("WriteFileTool")) == (True, None)
-
-
-def test_validate_ask_denies_without_reason() -> None:
-    """A DENY response with no message returns a bare denial tool error."""
-    controller = _FakeController(PermissionResponse(decision=Decision.DENY))
-    manager = _manager({PermissionCategory.WRITE: PermissionLevel.ASK}, controller)
-
-    content = "Tool call WriteFileTool denied by user."
-    assert manager.validate(_call("WriteFileTool")) == (
-        False,
-        ToolErrorMessage(content=content, id="call_1"),
-    )
-
-
-def test_validate_ask_denies_with_reason() -> None:
-    """A DENY response with a message appends it to the denial as the reason."""
-    controller = _FakeController(
-        PermissionResponse(decision=Decision.DENY, message="use the read tool instead")
-    )
-    manager = _manager({PermissionCategory.WRITE: PermissionLevel.ASK}, controller)
-
-    allowed, message = manager.validate(_call("WriteFileTool"))
-
-    assert allowed is False
-    assert isinstance(message, ToolErrorMessage)
-    assert message.id == "call_1"
-    assert "use the read tool instead" in message.content
-
-
-def test_validate_none_category_denies() -> None:
-    """Calls to a category at NONE are denied without asking the controller."""
-    manager = _manager(
-        {
-            PermissionCategory.READ: PermissionLevel.ASK,
-            PermissionCategory.WRITE: PermissionLevel.NONE,
-            PermissionCategory.WEB: PermissionLevel.NONE,
-            PermissionCategory.EXECUTE: PermissionLevel.NONE,
-        }
-    )
-
-    content = "Tool WriteFileTool does not exist."
-    assert manager.validate(_call("WriteFileTool")) == (
-        False,
-        ToolErrorMessage(content=content, id="call_1"),
-    )
-
-
-def test_validate_uncategorized_denies() -> None:
-    """Calls to tools that map to no category are denied."""
-    manager = _manager({PermissionCategory.READ: PermissionLevel.AUTO})
-
-    content = "Tool EchoTool does not exist."
-    assert manager.validate(_call("EchoTool")) == (
-        False,
-        ToolErrorMessage(content=content, id="call_1"),
-    )
-
-
-def test_add_and_remove() -> None:
-    """Removing a grant revokes access and re-adding it restores access."""
-    manager = _manager()
-
-    manager.remove_permission(PermissionCategory.WEB)
-    assert (
-        manager.get_category_permission(PermissionCategory.WEB) is PermissionLevel.NONE
-    )
-    content = "Tool SearchWebTool does not exist."
-    assert manager.validate(_call("SearchWebTool")) == (
-        False,
-        ToolErrorMessage(content=content, id="call_1"),
-    )
-
-    manager.add_permission(PermissionCategory.WEB, PermissionLevel.AUTO)
-    assert manager.validate(_call("SearchWebTool")) == (True, None)
-
-
-def test_add_permission_defaults_to_ask() -> None:
-    """add_permission grants at the ASK level when no level is given."""
-    manager = _manager()
-    manager.remove_permission(PermissionCategory.READ)
-
-    manager.add_permission(PermissionCategory.READ)
-
-    assert manager.get_category_permission(PermissionCategory.READ) is (
-        PermissionLevel.ASK
-    )
-
-
-def test_set_permission_level_changes_existing_grant() -> None:
-    """set_permission_level updates the level of an existing grant in place."""
-    manager = _manager({PermissionCategory.READ: PermissionLevel.ASK})
-
-    manager.set_permission_level(PermissionCategory.READ, PermissionLevel.AUTO)
-
-    assert (
-        manager.get_category_permission(PermissionCategory.READ) is PermissionLevel.AUTO
-    )
-
-
-def test_set_permission_level_grants_ungranted_category() -> None:
-    """set_permission_level can grant a category that was at NONE."""
-    manager = _manager(
-        {
-            PermissionCategory.READ: PermissionLevel.ASK,
-            PermissionCategory.WRITE: PermissionLevel.NONE,
-            PermissionCategory.WEB: PermissionLevel.NONE,
-            PermissionCategory.EXECUTE: PermissionLevel.NONE,
-        }
-    )
-
-    manager.set_permission_level(PermissionCategory.WEB, PermissionLevel.AUTO)
-
-    assert (
-        manager.get_category_permission(PermissionCategory.WEB) is PermissionLevel.AUTO
-    )
-    assert manager.validate(_call("SearchWebTool")) == (True, None)
-
-
-def test_get_category_permission_ungranted_returns_none() -> None:
-    """get_category_permission returns NONE for a category with no grant."""
-    manager = _manager(
-        {
-            PermissionCategory.READ: PermissionLevel.ASK,
-            PermissionCategory.WRITE: PermissionLevel.NONE,
-            PermissionCategory.WEB: PermissionLevel.NONE,
-            PermissionCategory.EXECUTE: PermissionLevel.NONE,
-        }
-    )
-
-    assert (
-        manager.get_category_permission(PermissionCategory.WEB) is PermissionLevel.NONE
-    )
-
-
-def test_add_permission_raises_when_already_granted() -> None:
-    """add_permission raises when the category is already granted."""
-    manager = _manager({PermissionCategory.READ: PermissionLevel.ASK})
+def test_granting_a_category_twice_is_refused(
+    tool_manager: ToolManager, controller: ScriptedController
+) -> None:
+    """Re-granting is a caller mistake, not a silent no-op."""
+    manager = _manager(tool_manager, controller, web=PermissionLevel.AUTO)
 
     with pytest.raises(ValueError):
-        manager.add_permission(PermissionCategory.READ)
+        manager.add_permission(PermissionCategory.WEB)
 
 
-def test_remove_permission_raises_when_not_granted() -> None:
-    """remove_permission raises when the category is already at NONE."""
-    manager = _manager()
-    manager.remove_permission(PermissionCategory.WEB)
+def test_revoking_an_ungranted_category_is_refused(
+    tool_manager: ToolManager, controller: ScriptedController
+) -> None:
+    """Revoking what was never granted is likewise surfaced."""
+    manager = _manager(tool_manager, controller, web=PermissionLevel.NONE)
 
     with pytest.raises(ValueError):
         manager.remove_permission(PermissionCategory.WEB)
 
 
-def test_explicit_empty_dict_grants_nothing() -> None:
-    """An explicit empty permissions dict grants no category, unlike None."""
-    manager = _manager({})
-
-    assert manager.get_allowed_tools == []
-
-
-def test_repr_lists_all_categories_and_levels() -> None:
-    """The repr maps every category to its level, in insertion order."""
-    manager = _manager(
-        {
-            PermissionCategory.READ: PermissionLevel.ASK,
-            PermissionCategory.WRITE: PermissionLevel.AUTO,
-            PermissionCategory.WEB: PermissionLevel.NONE,
-            PermissionCategory.EXECUTE: PermissionLevel.NONE,
-        }
-    )
-
-    expected = "PermissionManager(READ=ASK, WRITE=AUTO, WEB=NONE, EXECUTE=NONE)"
-    assert repr(manager) == expected
-
-
-def test_no_permissions_arg_grants_all_categories_at_ask() -> None:
-    """Omitting permissions grants every category at ASK (the default manager)."""
-    manager = _manager()
-
-    for category in PermissionCategory:
-        assert manager.get_category_permission(category) is PermissionLevel.ASK
+def test_a_category_maps_to_tool_classes_not_names() -> None:
+    """The mapping is by class, so renaming a tool cannot silently ungate it."""
+    assert PermissionCategory.for_tool("WriteFileTool") is PermissionCategory.WRITE
+    assert PermissionCategory.for_tool("NoSuchTool") is None
