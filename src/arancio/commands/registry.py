@@ -23,5 +23,6 @@ COMMAND_REGISTRY: Dict[str, Type[BaseCommand]] = {
     PermissionsCommand.name: PermissionsCommand,
     ProviderCommand.name: ProviderCommand,
     ClearCommand.name: ClearCommand,
+    "new": ClearCommand,
     CdCommand.name: CdCommand,
 }

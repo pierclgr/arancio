@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Type
 
 from arancio.commands.base import BaseCommand
+from arancio.commands.clear import ClearCommand
 from arancio.commands.registry import COMMAND_REGISTRY
 from arancio.core.agents import Agent
 from arancio.core.messages import (
@@ -208,13 +209,17 @@ class ActionExecutor:
             )
             return
 
+        # the clear command replaces the open chat, so its line is written
+        # before it runs, while the chat it was typed in is still the one being
+        # recorded; keyed on the class so every alias of it is covered
+        already_recorded = command is ClearCommand
         command_error = (
             self._session_manager.session_recorder.command(
                 raw_input=action.raw_input,
                 name=action.name,
                 args=action.args,
             )
-            if action.name == "clear"
+            if already_recorded
             else None
         )
         try:
@@ -226,7 +231,7 @@ class ActionExecutor:
             yield from self._yield_notices(command_error)
             return
 
-        if command_error is None:
+        if not already_recorded:
             command_error = self._session_manager.session_recorder.command(
                 raw_input=action.raw_input,
                 name=action.name,

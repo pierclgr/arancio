@@ -261,16 +261,22 @@ def test_a_session_that_stopped_mid_tool_call_is_closed_on_reopen(
     assert "may or may not have completed" in closing.content
 
 
+@pytest.mark.parametrize("command_name", ["clear", "new"])
 def test_clearing_a_chat_starts_a_separate_log(
+    command_name: str,
     wired: tuple[ActionExecutor, SessionManager, StorageManager, ScriptedClient],
 ) -> None:
-    """A new chat must not inherit the old one's messages or its read guard."""
+    """A new chat must not inherit the old one's messages or its read guard.
+
+    Runs once per registered name of the clear command, aliases included.
+    """
     executor, session_manager, storage_manager, _ = wired
     first = session_manager.require_current()
     session_manager.session_recorder.message(UserMessage(content="old chat"))
     shared_session.record_read("/tmp/earlier.txt", 1.0)
+    action = CommandAction(name=command_name, args=[], raw_input=f"/{command_name}")
 
-    list(executor.execute(CommandAction(name="clear", args=[], raw_input="/clear")))
+    list(executor.execute(action))
 
     second = session_manager.require_current()
     assert second.id != first.id
@@ -278,25 +284,21 @@ def test_clearing_a_chat_starts_a_separate_log(
     assert shared_session.is_known("/tmp/earlier.txt") is False
     records = [json.loads(line) for line in first.path.read_text().splitlines()]
     assert any(record.get("content") == "old chat" for record in records)
-    assert any(record.get("raw_input") == "/clear" for record in records)
+    assert any(record.get("raw_input") == f"/{command_name}" for record in records)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "/clear records its command line twice. The executor writes it before "
-        "running the command, then re-writes it because it reads the write's "
-        "return value - None on success - as 'not written yet'. The second "
-        "write lands in the new session, so a fresh chat opens showing /clear "
-        "as its first line."
-    ),
-)
+@pytest.mark.parametrize("command_name", ["clear", "new"])
 def test_a_cleared_chat_opens_empty(
+    command_name: str,
     wired: tuple[ActionExecutor, SessionManager, StorageManager, ScriptedClient],
 ) -> None:
-    """A new chat starts with nothing in it, including no trace of /clear."""
-    executor, session_manager, _, _ = wired
+    """A new chat starts with nothing in it, including no trace of the command.
 
-    list(executor.execute(CommandAction(name="clear", args=[], raw_input="/clear")))
+    Runs once per registered name of the clear command, aliases included.
+    """
+    executor, session_manager, _, _ = wired
+    action = CommandAction(name=command_name, args=[], raw_input=f"/{command_name}")
+
+    list(executor.execute(action))
 
     assert _contents(session_manager.visible_messages()) == []
