@@ -23,6 +23,7 @@ from arancio.core.messages import (
 )
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 from arancio.core.tools.session import ToolSession
+from arancio.sessions.checksum import SessionChecksum
 from arancio.sessions.codec import message_from_record, message_to_record
 from arancio.sessions.manager import SessionManager
 from arancio.sessions.session import Session, SessionConfiguration
@@ -352,3 +353,77 @@ def test_loading_an_unknown_session_is_refused(
     """A stale id from a deleted file is a clear error, not an empty chat."""
     with pytest.raises(ValueError):
         session_manager.load("nosuchsession")
+
+
+def test_a_clean_flush_writes_a_checksum_covering_the_log(
+    session_manager: SessionManager, tmp_path: Path
+) -> None:
+    """The checksum says the file is exactly what the last flush left."""
+    session = session_manager.create(
+        working_directory=tmp_path, configuration=_configuration()
+    )
+
+    assert SessionChecksum.path(session.path).exists()
+    assert SessionChecksum.verify(session.path) is True
+
+
+def test_a_missing_checksum_lists_the_session_as_unverified_and_load_heals_it(
+    session_manager: SessionManager, storage_manager: StorageManager, tmp_path: Path
+) -> None:
+    """No checksum means "not checked", and a clean load proves the log good."""
+    session = session_manager.create(
+        working_directory=tmp_path, configuration=_configuration()
+    )
+    SessionChecksum.path(session.path).unlink()
+
+    manager = SessionManager(storage_manager, root=storage_manager.root)
+    entry = manager.registry.get(session.id)
+
+    assert entry.status == "unverified"
+    assert not SessionChecksum.path(session.path).exists()
+
+    manager.load(session.id)
+
+    assert entry.status == "healthy"
+    assert SessionChecksum.verify(session.path) is True
+
+
+def test_a_stale_checksum_marks_the_session_damaged_but_load_heals_it(
+    session_manager: SessionManager, storage_manager: StorageManager, tmp_path: Path
+) -> None:
+    """A checksum write that died mid-flush must not lock out a healthy log."""
+    session = session_manager.create(
+        working_directory=tmp_path, configuration=_configuration()
+    )
+    SessionChecksum.path(session.path).write_text("0" * 64)
+
+    manager = SessionManager(storage_manager, root=storage_manager.root)
+    entry = manager.registry.get(session.id)
+
+    assert entry.status == "damaged"
+    assert "checksum" in entry.damage_reason
+
+    manager.load(session.id)
+
+    assert entry.status == "healthy"
+    assert SessionChecksum.verify(session.path) is True
+    reopened = SessionManager(storage_manager, root=storage_manager.root)
+    assert reopened.registry.get(session.id).status == "healthy"
+
+
+def test_an_orphan_checksum_file_is_ignored(
+    session_manager: SessionManager, storage_manager: StorageManager, tmp_path: Path
+) -> None:
+    """Checksums of logs that no longer exist must not surface as sessions."""
+    session = session_manager.create(
+        working_directory=tmp_path, configuration=_configuration()
+    )
+    orphan = session.path.parent / "nosuchsession.jsonl.sha256"
+    orphan.write_text("0" * 64)
+
+    manager = SessionManager(storage_manager, root=storage_manager.root)
+
+    assert all(
+        entry.log_path.name != "nosuchsession.jsonl"
+        for entry in manager.registry.entries
+    )

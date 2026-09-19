@@ -1,16 +1,17 @@
-"""In-memory discovery index for persisted sessions."""
+"""In-memory discovery index for persisted sessions.
+
+The scan stays cheap: the validator inspects only a log's header and its
+checksum, so no session is fully parsed until it is actually loaded.
+"""
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
-    from arancio.sessions.session import Session
+    from arancio.sessions.validator import SessionValidator
     from arancio.storage.manager import StorageManager
 
 
@@ -22,7 +23,7 @@ class SessionRegistryEntry:
     name: str
     working_directory: Path | None
     log_path: Path
-    status: Literal["healthy", "damaged"]
+    status: Literal["healthy", "unverified", "damaged"]
     damage_reason: str | None = None
 
 
@@ -33,22 +34,21 @@ class SessionRegistry:
         self,
         storage_manager: StorageManager,
         sessions_dir: Path,
-        read_session: Callable[[Path], Session],
+        validator: SessionValidator,
     ) -> None:
         """Initialize the registry by discovering every session file.
 
         Args:
             storage_manager: the file-only storage service scanning the log files.
             sessions_dir: the directory tree containing the session logs.
-            read_session: parses and validates one complete session log.
+            validator: checks each discovered log's header and checksum.
         """
         self._storage_manager = storage_manager
+        self._validator = validator
         self.entries: list[SessionRegistryEntry] = []
-        self.build(sessions_dir, read_session)
+        self.build(sessions_dir)
 
-    def build(
-        self, sessions_dir: Path, read_session: Callable[[Path], Session]
-    ) -> SessionRegistry:
+    def build(self, sessions_dir: Path) -> SessionRegistry:
         """Discover every session file and populate the index.
 
         Damaged files are listed rather than hidden, and an ID that maps to more
@@ -57,13 +57,12 @@ class SessionRegistry:
 
         Args:
             sessions_dir: the directory tree containing the session logs.
-            read_session: parses and validates one complete session log.
 
         Returns:
             This registry, holding every discovered entry.
         """
         entries = [
-            self._entry_for_path(path, read_session)
+            self._entry_for_path(path)
             for path in self._storage_manager.find_files(
                 self._storage_manager.make_dir(sessions_dir), "*.jsonl"
             )
@@ -111,63 +110,21 @@ class SessionRegistry:
             raise ValueError(f"Session ID is ambiguous: {session_id}")
         return matches[0]
 
-    @classmethod
-    def _entry_for_path(
-        cls, path: Path, read_session: Callable[[Path], Session]
-    ) -> SessionRegistryEntry:
-        """Build one healthy or damaged registry entry from a session file.
+    def _entry_for_path(self, path: Path) -> SessionRegistryEntry:
+        """Build one registry entry from a session file's scan result.
 
         Args:
             path: the discovered JSONL session path.
-            read_session: parses and validates one complete session log.
 
         Returns:
-            The healthy entry or a damaged entry with recovered metadata.
+            The entry holding the log's metadata and checksum-based status.
         """
-        session_id = path.stem
-        try:
-            session = read_session(path)
-        except (OSError, ValueError) as exc:
-            name, working_directory = cls._recover_entry_metadata(path, session_id)
-            return SessionRegistryEntry(
-                id=session_id,
-                name=name,
-                working_directory=working_directory,
-                log_path=path,
-                status="damaged",
-                damage_reason=str(exc),
-            )
+        scan = self._validator.scan(path)
         return SessionRegistryEntry(
-            id=session.id,
-            name=session.name,
-            working_directory=session.working_directory,
+            id=path.stem,
+            name=scan.name,
+            working_directory=scan.working_directory,
             log_path=path,
-            status="healthy",
+            status=scan.status,
+            damage_reason=scan.damage_reason,
         )
-
-    @staticmethod
-    def _recover_entry_metadata(path: Path, session_id: str) -> tuple[str, Path | None]:
-        """Recover safe registry metadata from a damaged session's first line.
-
-        Args:
-            path: the damaged JSONL session path.
-            session_id: the ID derived from the filename.
-
-        Returns:
-            The recovered name and working directory, when available.
-        """
-        try:
-            first = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
-            if not isinstance(first, dict):
-                return session_id, None
-            name = first.get("name")
-            working_directory = first.get("working_directory")
-            return (
-                name if isinstance(name, str) else session_id,
-                Path(working_directory)
-                if isinstance(working_directory, str)
-                and Path(working_directory).is_absolute()
-                else None,
-            )
-        except (IndexError, OSError, ValueError):
-            return session_id, None

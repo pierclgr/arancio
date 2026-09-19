@@ -15,6 +15,7 @@ from arancio.core.messages import (
     ToolErrorMessage,
 )
 from arancio.core.tools.session import ToolSession
+from arancio.sessions.checksum import SessionChecksum
 from arancio.sessions.codec import (
     is_message_record,
     message_from_record,
@@ -298,7 +299,9 @@ class SessionRecorder:
         """Persist every unsaved event from the open chat in order.
 
         Every write reaches this method through :meth:`event`, so it is the one
-        place the manager's registry is synced once a write lands.
+        place the manager's registry is synced once a write lands. A fully
+        successful flush also refreshes the log's checksum, certifying the
+        clean state the next registry scan verifies.
 
         Returns:
             The temporary persistence error notice, or ``None`` when all events are
@@ -334,6 +337,8 @@ class SessionRecorder:
         except (OSError, TypeError, ValueError) as exc:
             return self._save_error(exc)
 
+        if session.created_on_disk:
+            SessionChecksum.write(session.path)
         self._session_manager.after_write(session)
         return None
 

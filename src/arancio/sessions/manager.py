@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from arancio.core.constants.path import ARANCIO_DEFAULT_DIR
 from arancio.core.messages import (
@@ -20,10 +19,11 @@ from arancio.sessions.codec import (
     is_message_record,
     message_from_record,
 )
-from arancio.sessions.constants import ARANCIO_SESSIONS_DIR, SESSION_FORMAT_VERSION
+from arancio.sessions.constants import ARANCIO_SESSIONS_DIR
 from arancio.sessions.recorder import SessionRecorder
 from arancio.sessions.registry import SessionRegistry, SessionRegistryEntry
 from arancio.sessions.session import Session, SessionConfiguration
+from arancio.sessions.validator import SessionValidator
 from arancio.storage.manager import StorageManager
 
 if TYPE_CHECKING:
@@ -54,8 +54,9 @@ class SessionManager:
         self._session_recorder = SessionRecorder(
             storage_manager, self, self._tool_session
         )
+        self._validator = SessionValidator(storage_manager)
         self._registry = SessionRegistry(
-            self._storage_manager, self._sessions_dir, self._read_session
+            self._storage_manager, self._sessions_dir, self._validator
         )
 
     @property
@@ -155,7 +156,7 @@ class SessionManager:
         self._tool_session.clear()
         return self.create(working_directory, configuration)
 
-    def load(self, session_id: str) -> Session:
+    def load(self, session_id: str) -> Session | None:
         """Load one healthy session from the reconstructed registry.
 
         Args:
@@ -165,12 +166,12 @@ class SessionManager:
             The newly active reconstructed session.
 
         Raises:
-            ValueError: when the session is missing, ambiguous or damaged.
+            ValueError: when the session is missing, ambiguous, damaged on disk
+                or fails full validation.
         """
         entry = self._registry.get(session_id)
-        if entry.status == "damaged":
-            raise ValueError(f"Session {session_id} is damaged: {entry.damage_reason}")
-        self._current = self._read_session(entry.log_path)
+        self._current = self._validator.read(entry.log_path)
+        self._heal_checked_entry(entry)
         self._session_recorder.close_interrupted_tool_calls()
         return self._current
 
@@ -270,6 +271,19 @@ class SessionManager:
             message = f"{message} {save_error.content}"
         return resolved_fallback, message
 
+    def _heal_checked_entry(self, entry: SessionRegistryEntry) -> None:
+        """Refresh an entry whose checksum was missing or stale now that the
+        session parsed cleanly.
+
+        Args:
+            entry: the registry entry for the just-loaded session.
+        """
+        if entry.status == "healthy":
+            return
+        entry.status = "healthy"
+        entry.damage_reason = None
+        self._validator.certify(entry.log_path)
+
     def _register_durable_session(self, session: Session) -> None:
         """Add a newly durable session to the current in-memory registry.
 
@@ -301,109 +315,6 @@ class SessionManager:
                 entry.working_directory = session.working_directory
                 return
 
-    def _read_session(self, path: Path) -> Session:
-        """Parse and validate a complete JSONL session file.
-
-        Args:
-            path: the JSONL session file to parse.
-
-        Returns:
-            The fully reconstructed session.
-
-        Raises:
-            ValueError: when any line is malformed or violates the session schema.
-        """
-        lines = self._storage_manager.read_lines(path)
-        if not lines:
-            raise ValueError("Missing session_created record")
-
-        records = [self._parse_line(line, index) for index, line in enumerate(lines, 1)]
-        first = records[0]
-        if first.get("type") != "session_created":
-            raise ValueError("Missing session_created record")
-        if first.get("format_version") != SESSION_FORMAT_VERSION:
-            raise ValueError("Unsupported or missing session format version")
-
-        session_id = self._required_string(first, "id")
-        if session_id != path.stem:
-            raise ValueError("Session ID does not match filename")
-        name = self._required_string(first, "name")
-        created_at = self._parse_datetime(self._required_string(first, "timestamp"))
-        creation_directory = self._absolute_path(first, "creation_working_directory")
-        working_directory = self._absolute_path(first, "working_directory")
-        configuration = SessionConfiguration.from_dict(
-            self._required_mapping(first, "configuration")
-        )
-        session = Session(
-            id=session_id,
-            name=name,
-            created_at=created_at,
-            creation_working_directory=creation_directory,
-            working_directory=working_directory,
-            path=path,
-            configuration=configuration,
-        )
-        session.add_event(first, saved=True)
-        for record in records[1:]:
-            self._apply_record(session, record)
-            session.add_event(record, saved=True)
-        return session
-
-    def _apply_record(self, session: Session, record: dict[str, Any]) -> None:
-        """Validate one non-creation record and apply it to session state.
-
-        Each record type states its own required fields and its own effect, so
-        both live in the one branch that knows about that type.
-
-        Args:
-            session: the reconstructed session being updated.
-            record: the JSON-compatible event record to validate and apply.
-
-        Raises:
-            ValueError: when the record type, its metadata or its state data is
-                invalid.
-        """
-        self._parse_datetime(self._required_string(record, "timestamp"))
-        record_type = record.get("type")
-
-        if is_message_record(record):
-            if not isinstance(record.get("in_history"), bool):
-                raise ValueError("message in_history is missing or invalid")
-            if not isinstance(record.get("visible"), bool):
-                raise ValueError("message visible is missing or invalid")
-            message_from_record(record)
-            return
-        if record_type == "command":
-            self._required_string(record, "raw_input")
-            self._required_string(record, "name")
-            args = record.get("args")
-            if not isinstance(args, list) or not all(
-                isinstance(arg, str) for arg in args
-            ):
-                raise ValueError("command args are missing or invalid")
-            if (
-                record.get("in_history") is not False
-                or record.get("visible") is not True
-            ):
-                raise ValueError("command visibility is invalid")
-            return
-        if record_type == "configuration_changed":
-            session.configuration = SessionConfiguration.from_dict(
-                self._required_mapping(record, "configuration")
-            )
-            return
-        if record_type == "working_directory_changed":
-            session.working_directory = self._absolute_path(record, "working_directory")
-            return
-        if record_type == "file_state_changed":
-            file_path = self._absolute_path(record, "file_path")
-            mtime = record.get("mtime")
-            if not isinstance(mtime, (int, float)):
-                raise ValueError("file state mtime is missing or invalid")
-            session.file_states[str(file_path)] = float(mtime)
-            return
-        raise ValueError(f"Unknown session record type: {record_type!r}")
-
     def _new_id(self) -> str:
         """Generate an ID absent from the current in-memory registry.
 
@@ -430,106 +341,6 @@ class SessionManager:
         readable = (readable or "root")[:180]
         digest = hashlib.sha256(raw_path.encode("utf-8")).hexdigest()[:16]
         return f"--{readable}--{digest}"
-
-    @staticmethod
-    def _parse_line(line: str, line_number: int) -> dict[str, Any]:
-        """Parse one JSONL object and retain its file line in errors.
-
-        Args:
-            line: the raw text line to parse.
-            line_number: the one-indexed line number in the session file.
-
-        Returns:
-            The parsed JSON object.
-
-        Raises:
-            ValueError: when the line is invalid JSON or is not an object.
-        """
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Invalid JSON at line {line_number}") from exc
-        if not isinstance(record, dict):
-            raise ValueError(f"Session record at line {line_number} is not an object")
-        return record
-
-    @staticmethod
-    def _parse_datetime(value: str) -> datetime:
-        """Parse an aware ISO-8601 timestamp from a session record.
-
-        Args:
-            value: the serialized timestamp.
-
-        Returns:
-            The aware parsed timestamp.
-
-        Raises:
-            ValueError: when the timestamp is malformed or lacks a timezone.
-        """
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise ValueError("session timestamp is invalid") from exc
-        if parsed.tzinfo is None:
-            raise ValueError("session timestamp must include a timezone")
-        return parsed
-
-    @staticmethod
-    def _required_string(record: dict[str, Any], field: str) -> str:
-        """Return one required string record field.
-
-        Args:
-            record: the event record to inspect.
-            field: the required field name.
-
-        Returns:
-            The field's string value.
-
-        Raises:
-            ValueError: when the field is absent or not a string.
-        """
-        value = record.get(field)
-        if not isinstance(value, str):
-            raise ValueError(f"{field} is missing or invalid")
-        return value
-
-    @classmethod
-    def _absolute_path(cls, record: dict[str, Any], field: str) -> Path:
-        """Return one required absolute path record field.
-
-        Args:
-            record: the event record to inspect.
-            field: the required field name.
-
-        Returns:
-            The resolved absolute path.
-
-        Raises:
-            ValueError: when the field is absent, invalid or relative.
-        """
-        path = Path(cls._required_string(record, field))
-        if not path.is_absolute():
-            raise ValueError(f"{field} must be absolute")
-        return path
-
-    @staticmethod
-    def _required_mapping(record: dict[str, Any], field: str) -> dict[str, Any]:
-        """Return one required mapping record field.
-
-        Args:
-            record: the event record to inspect.
-            field: the required field name.
-
-        Returns:
-            The field mapping.
-
-        Raises:
-            ValueError: when the field is absent or not a mapping.
-        """
-        value = record.get(field)
-        if not isinstance(value, dict):
-            raise ValueError(f"{field} is missing or invalid")
-        return value
 
     def require_current(self) -> Session:
         """Return the active session or fail before an unscoped operation.
