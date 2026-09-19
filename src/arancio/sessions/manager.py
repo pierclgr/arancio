@@ -164,10 +164,6 @@ class SessionManager:
 
         Returns:
             The newly active reconstructed session.
-
-        Raises:
-            ValueError: when the session is missing, ambiguous, damaged on disk
-                or fails full validation.
         """
         entry = self._registry.get(session_id)
         self._current = self._validator.read(entry.log_path)
@@ -274,8 +270,7 @@ class SessionManager:
         return resolved_fallback, message
 
     def _heal_checked_entry(self, entry: SessionRegistryEntry) -> None:
-        """Refresh an entry whose checksum was missing or stale now that the session
-        parsed cleanly.
+        """Refresh an entry after its session parsed cleanly.
 
         Args:
             entry: the registry entry for the just-loaded session.

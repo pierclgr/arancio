@@ -150,7 +150,6 @@ class SessionValidator:
             The header's name and working directory, when available.
 
         Raises:
-            OSError: when the file cannot be read.
             ValueError: when the first line is missing or not a session header.
         """
         with path.open("r", encoding="utf-8") as handle:
