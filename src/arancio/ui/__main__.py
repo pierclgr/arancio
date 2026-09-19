@@ -1,14 +1,11 @@
 """Entry point wiring the agent stack to the Textual UI and running it."""
 
-from pathlib import Path
-
 from arancio.core.agents import Agent
 from arancio.core.clients.litellm import LiteLLMClient
 from arancio.core.permissions.manager import PermissionManager
 from arancio.core.tools.manager import ToolManager
 from arancio.core.tools.session import shared_session
 from arancio.sessions.manager import SessionManager
-from arancio.sessions.session import SessionConfiguration
 from arancio.settings.manager import SettingsManager
 from arancio.storage.manager import StorageManager
 from arancio.ui.app import App
@@ -45,11 +42,7 @@ def main() -> None:
         summary_client=summary_client,
         agent=agent,
     )
-    settings, startup_messages = settings_manager.load()
-    session_manager.create(
-        working_directory=Path.cwd(),
-        configuration=SessionConfiguration.from_settings(settings),
-    )
+    _settings, startup_messages = settings_manager.load()
 
     app = App(
         agent=agent,

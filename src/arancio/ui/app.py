@@ -165,6 +165,9 @@ class App(TextualApp):
         Args:
             text: the user message that starts the turn.
         """
+        # the first action of the run creates the session; every write below,
+        # including the except-branch's, needs one to already exist
+        self._action_executor.ensure_session()
         try:
             # resolve the prompt into action arguments, build the action, then run
             # it: slash and shell commands are handled locally, while a prompt

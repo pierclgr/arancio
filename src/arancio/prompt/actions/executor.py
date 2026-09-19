@@ -82,6 +82,20 @@ class ActionExecutor:
         self._settings_manager: SettingsManager = settings_manager
         self._session_manager: SessionManager = session_manager
 
+    def ensure_session(self) -> None:
+        """Create the active session on first use, not at process startup.
+
+        A no-op once a session already exists, so the caller doesn't need to know
+        whether this is the first action of the run.
+        """
+        if self._session_manager.current is None:
+            self._session_manager.create(
+                working_directory=self._application.working_directory,
+                configuration=SessionConfiguration.from_settings(
+                    self._settings_manager.settings
+                ),
+            )
+
     def execute(self, action: BaseAction) -> Iterator[Message]:
         """Execute the action, producing its output messages.
 

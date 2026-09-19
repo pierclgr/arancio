@@ -84,6 +84,75 @@ def executor(
     )
 
 
+@pytest.fixture
+def bare_executor(
+    agent: Agent,
+    app: RecordingApp,
+    settings_manager: SettingsManager,
+    session_manager: SessionManager,
+) -> ActionExecutor:
+    """Return an executor over a configured but session-less manager.
+
+    Args:
+        agent: the agent prompts are sent to.
+        app: the fake app commands act on.
+        settings_manager: the manager holding a usable provider and model.
+        session_manager: the manager with no session created yet.
+
+    Returns:
+        An executor whose session doesn't exist until ``ensure_session`` or
+        ``execute`` creates one.
+    """
+    data = Settings.default().to_dict()
+    data.update(provider="openai", model_name="gpt-4o")
+    storage_module.ARANCIO_SETTINGS_FILE.write_text(yaml.safe_dump(data))
+    settings_manager.load()
+    return ActionExecutor(
+        agent=agent,
+        application=app,
+        settings_manager=settings_manager,
+        session_manager=session_manager,
+    )
+
+
+def test_ensure_session_creates_one_only_on_first_call(
+    bare_executor: ActionExecutor, session_manager: SessionManager
+) -> None:
+    """A no-op once a session exists, so a caller never has to check first."""
+    assert session_manager.current is None
+
+    bare_executor.ensure_session()
+    first = session_manager.require_current()
+
+    bare_executor.ensure_session()
+
+    assert session_manager.require_current() is first
+
+
+def test_running_an_action_from_a_session_less_executor_needs_ensure_session_first(
+    bare_executor: ActionExecutor, session_manager: SessionManager
+) -> None:
+    """This is what ``App._run_agent`` does before resolving the prompt.
+
+    ``execute`` alone still assumes a session exists (only ``_run_agent``'s ``except``
+    branch and ``execute`` both need one, so the check has to run before either);
+    calling ``ensure_session`` first is what makes both safe.
+    """
+    assert session_manager.current is None
+
+    bare_executor.ensure_session()
+    list(
+        bare_executor.execute(
+            CommandAction(name="effort", args=["low"], raw_input="/effort low")
+        )
+    )
+
+    assert session_manager.current is not None
+    assert any(
+        record.get("type") == "state_changed" for record in _records(session_manager)
+    )
+
+
 def _records(session_manager: SessionManager) -> List[dict]:
     """Read every record written to the open session's log.
 
