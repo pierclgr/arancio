@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Type
 from arancio.commands.base import BaseCommand
 from arancio.commands.clear import ClearCommand
 from arancio.commands.registry import COMMAND_REGISTRY
+from arancio.commands.resume import ResumeCommand
 from arancio.core.agents import Agent
 from arancio.core.messages import (
     AssistantMessage,
@@ -209,10 +210,7 @@ class ActionExecutor:
             )
             return
 
-        # the clear command replaces the open chat, so its line is written
-        # before it runs, while the chat it was typed in is still the one being
-        # recorded; keyed on the class so every alias of it is covered
-        already_recorded = command is ClearCommand
+        already_recorded = command in {ClearCommand, ResumeCommand}
         command_error = (
             self._session_manager.session_recorder.command(
                 raw_input=action.raw_input,

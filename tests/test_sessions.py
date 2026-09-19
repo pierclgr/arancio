@@ -26,6 +26,7 @@ from arancio.core.tools.session import ToolSession
 from arancio.sessions.checksum import SessionChecksum
 from arancio.sessions.codec import message_from_record, message_to_record
 from arancio.sessions.manager import SessionManager
+from arancio.sessions.registry import SessionRegistryEntry
 from arancio.sessions.session import Session, SessionConfiguration
 from arancio.storage.manager import StorageManager
 
@@ -420,6 +421,65 @@ def test_the_same_id_in_two_files_damages_both(
     assert len(damaged) == 2
     assert all(entry.status == "damaged" for entry in damaged)
     assert all("Duplicate session ID" in entry.damage_reason for entry in damaged)
+
+
+def test_find_resolves_an_exact_id_over_a_name_match(
+    session_manager: SessionManager, tmp_path: Path
+) -> None:
+    """A query that happens to also be a name fragment must not create ambiguity."""
+    session = session_manager.create(
+        working_directory=tmp_path, configuration=_configuration()
+    )
+    session_manager.registry.entries.append(
+        SessionRegistryEntry(
+            id="other",
+            name=f"prefix-{session.id}-suffix",
+            working_directory=tmp_path,
+            configuration=_configuration(),
+            log_path=tmp_path / "other.jsonl",
+            status="healthy",
+        )
+    )
+
+    matches = session_manager.registry.find(session.id)
+
+    assert [entry.id for entry in matches] == [session.id]
+
+
+def test_find_matches_a_name_fragment_case_insensitively(
+    session_manager: SessionManager, tmp_path: Path
+) -> None:
+    """The registry has no other way to look a session up by hand."""
+    session = session_manager.create(
+        working_directory=tmp_path, configuration=_configuration()
+    )
+
+    matches = session_manager.registry.find(session.id[:8].upper())
+
+    assert [entry.id for entry in matches] == [session.id]
+
+
+def test_find_returns_both_copies_of_a_duplicated_id(
+    session_manager: SessionManager, storage_manager: StorageManager, tmp_path: Path
+) -> None:
+    """A query for a colliding ID must not silently pick one copy."""
+    session = session_manager.create(
+        working_directory=tmp_path, configuration=_configuration()
+    )
+    duplicate = session.path.parent.parent / session.path.name
+    duplicate.write_text(session.path.read_text())
+    manager = SessionManager(storage_manager, root=storage_manager.root)
+
+    matches = manager.registry.find(session.id)
+
+    assert len(matches) == 2
+
+
+def test_find_returns_nothing_for_an_unknown_query(
+    session_manager: SessionManager,
+) -> None:
+    """No match is how the command knows to report an error, not resume nothing."""
+    assert session_manager.registry.find("nosuchsession") == []
 
 
 def test_loading_an_unknown_session_is_refused(

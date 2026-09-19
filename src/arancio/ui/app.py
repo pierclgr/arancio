@@ -121,11 +121,15 @@ class App(TextualApp):
         # keep the log pinned to the bottom as streamed content grows, until
         # the user scrolls up
         self.query_one("#log", VerticalScroll).anchor()
+        self.populate_log()
+        for message in self._startup_messages:
+            self._mount(self._render(message))
+
+    def populate_log(self) -> None:
+        """Render the active session's visible messages into the log."""
         if self._session_manager.current:
             for message in self._session_manager.visible_messages():
                 self._mount(self._render(message))
-        for message in self._startup_messages:
-            self._mount(self._render(message))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Start an agent turn when the prompt input is submitted.

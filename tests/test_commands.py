@@ -22,10 +22,12 @@ from arancio.commands.model import ModelCommand
 from arancio.commands.permissions import PermissionsCommand
 from arancio.commands.provider import ProviderCommand
 from arancio.commands.registry import COMMAND_REGISTRY
+from arancio.commands.resume import ResumeCommand
 from arancio.core.agents import Agent
 from arancio.core.messages import UserMessage
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 from arancio.sessions.manager import SessionManager
+from arancio.sessions.registry import SessionRegistryEntry
 from arancio.sessions.session import SessionConfiguration
 from arancio.settings.manager import SettingsManager
 from arancio.settings.settings import Settings
@@ -267,6 +269,186 @@ def test_clear_starts_a_new_chat_everywhere_at_once(
     assert session_manager.require_current() is not first
     assert configured.settings.model_name == "gpt-4o"
     assert app.cleared == 1
+
+
+def test_resume_by_exact_id_restores_history_configuration_and_ui(
+    configured: SettingsManager,
+    app: RecordingApp,
+    agent: Agent,
+    session_manager: SessionManager,
+    tmp_path: Path,
+) -> None:
+    """A resumed session has to look, from every angle, like it never left."""
+    first = session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+    session_manager.session_recorder.message(UserMessage(content="from the first chat"))
+
+    configured.settings.model_name = "gpt-5"
+    session_manager.discard_and_create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+    agent.add_message_to_history(UserMessage(content="from the second chat"))
+
+    result = ResumeCommand.execute(
+        query=first.id,
+        application=app,
+        agent=agent,
+        settings_manager=configured,
+        session_manager=session_manager,
+    )
+
+    assert result is None
+    assert session_manager.require_current().id == first.id
+    assert configured.settings.model_name == "gpt-4o"
+    assert agent._message_history == [UserMessage(content="from the first chat")]
+    assert app.cleared == 1
+    assert app.populated == 1
+    assert app.displayed_model_ids == ["openai/gpt-4o"]
+
+
+def test_resume_by_a_name_fragment_finds_the_same_session(
+    configured: SettingsManager,
+    app: RecordingApp,
+    agent: Agent,
+    session_manager: SessionManager,
+    tmp_path: Path,
+) -> None:
+    """A user rarely remembers a session's full ID."""
+    first = session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+
+    result = ResumeCommand.execute(
+        query=first.id[:8],
+        application=app,
+        agent=agent,
+        settings_manager=configured,
+        session_manager=session_manager,
+    )
+
+    assert result is None
+    assert session_manager.require_current().id == first.id
+
+
+def test_resume_with_no_match_is_refused(
+    configured: SettingsManager,
+    app: RecordingApp,
+    agent: Agent,
+    session_manager: SessionManager,
+) -> None:
+    """A typo must not be silently ignored."""
+    with pytest.raises(ValueError, match="No session matches"):
+        ResumeCommand.execute(
+            query="nosuchsession",
+            application=app,
+            agent=agent,
+            settings_manager=configured,
+            session_manager=session_manager,
+        )
+
+
+def test_resume_with_more_than_one_match_lists_them_instead_of_resuming(
+    configured: SettingsManager,
+    app: RecordingApp,
+    agent: Agent,
+    session_manager: SessionManager,
+    tmp_path: Path,
+) -> None:
+    """Guessing which one the user meant would be worse than asking."""
+    first = session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+    session_manager.registry.entries.append(
+        SessionRegistryEntry(
+            id="second",
+            name=f"{first.name}-copy",
+            working_directory=tmp_path,
+            configuration=SessionConfiguration.from_settings(configured.settings),
+            log_path=tmp_path / "second.jsonl",
+            status="healthy",
+        )
+    )
+
+    result = ResumeCommand.execute(
+        query=first.id[:8],
+        application=app,
+        agent=agent,
+        settings_manager=configured,
+        session_manager=session_manager,
+    )
+
+    assert result is not None
+    assert first.id in result
+    assert "second" in result
+    assert session_manager.require_current().id == first.id
+    assert app.cleared == 0
+
+
+def test_resume_from_a_different_directory_moves_to_it(
+    configured: SettingsManager,
+    agent: Agent,
+    session_manager: SessionManager,
+    tmp_path: Path,
+) -> None:
+    """Resuming a session from another project follows it there."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    elsewhere_session = session_manager.create(
+        working_directory=elsewhere,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+    session_manager.discard_and_create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+    app = RecordingApp(working_directory=tmp_path)
+
+    result = ResumeCommand.execute(
+        query=elsewhere_session.id,
+        application=app,
+        agent=agent,
+        settings_manager=configured,
+        session_manager=session_manager,
+    )
+
+    assert result is None
+    assert session_manager.require_current().id == elsewhere_session.id
+    assert app.working_directory == elsewhere.resolve()
+
+
+def test_resume_moves_to_the_resumed_directory_even_when_unchanged(
+    configured: SettingsManager,
+    app: RecordingApp,
+    agent: Agent,
+    session_manager: SessionManager,
+    tmp_path: Path,
+) -> None:
+    """The move always happens, so nothing else has to special-case a no-op."""
+    first = session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+    session_manager.discard_and_create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+
+    result = ResumeCommand.execute(
+        query=first.id,
+        application=app,
+        agent=agent,
+        settings_manager=configured,
+        session_manager=session_manager,
+    )
+
+    assert result is None
+    assert session_manager.require_current().id == first.id
+    assert app.working_directory == tmp_path.resolve()
 
 
 def test_exit_asks_the_app_to_quit(app: RecordingApp) -> None:

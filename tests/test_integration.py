@@ -330,3 +330,68 @@ def test_a_cleared_chat_opens_empty(
     list(executor.execute(action))
 
     assert _contents(session_manager.visible_messages()) == []
+
+
+def test_resuming_is_recorded_on_the_old_session_before_it_runs(
+    wired: tuple[ActionExecutor, SessionManager, StorageManager, ScriptedClient],
+) -> None:
+    """The line must land in the chat that's about to be replaced, not the new one.
+
+    Checked against a failing resume too, since pre-recording happens before the command
+    runs and must not depend on it succeeding.
+    """
+    executor, session_manager, _, _ = wired
+    list(executor.execute(CommandAction(name="clear", args=[], raw_input="/clear")))
+    second = session_manager.require_current()
+
+    list(
+        executor.execute(
+            CommandAction(
+                name="resume",
+                args=["nosuchsession"],
+                raw_input="/resume nosuchsession",
+            )
+        )
+    )
+
+    assert session_manager.require_current().id == second.id
+    records = [json.loads(line) for line in second.path.read_text().splitlines()]
+    assert any(record.get("raw_input") == "/resume nosuchsession" for record in records)
+
+
+def test_resuming_reopens_the_original_session_across_a_config_and_cwd_change(
+    wired: tuple[ActionExecutor, SessionManager, StorageManager, ScriptedClient],
+    tmp_path: Path,
+) -> None:
+    """A resumed session must come back as it was left, not as the newer one."""
+    executor, session_manager, _, _ = wired
+    (tmp_path / "sub").mkdir()
+    first = session_manager.require_current()
+
+    list(executor.execute(CommandAction(name="cd", args=["sub"], raw_input="/cd sub")))
+    list(
+        executor.execute(
+            CommandAction(name="effort", args=["low"], raw_input="/effort low")
+        )
+    )
+    session_manager.session_recorder.message(UserMessage(content="from the first chat"))
+
+    list(executor.execute(CommandAction(name="clear", args=[], raw_input="/clear")))
+    second = session_manager.require_current()
+    assert second.id != first.id
+
+    list(
+        executor.execute(
+            CommandAction(
+                name="resume", args=[first.id], raw_input=f"/resume {first.id}"
+            )
+        )
+    )
+
+    restored = session_manager.require_current()
+    assert restored.id == first.id
+    assert restored.working_directory == (tmp_path / "sub").resolve()
+    assert restored.configuration.thinking_effort == "low"
+    assert _contents(session_manager.model_history()) == ["from the first chat"]
+    records = [json.loads(line) for line in second.path.read_text().splitlines()]
+    assert any(record.get("raw_input") == f"/resume {first.id}" for record in records)

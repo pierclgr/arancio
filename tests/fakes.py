@@ -192,6 +192,7 @@ class RecordingApp:
     Attributes:
         working_directory: the directory commands resolve against.
         cleared: how many times the log was cleared.
+        populated: how many times the log was repopulated from the session.
         exited: whether the app was asked to quit.
         displayed_model_ids: every model id pushed to the toolbar, in order.
         displayed_efforts: every thinking effort pushed to the toolbar.
@@ -206,6 +207,7 @@ class RecordingApp:
         """
         self.working_directory = working_directory or Path.cwd()
         self.cleared = 0
+        self.populated = 0
         self.exited = False
         self.displayed_model_ids: List[str | None] = []
         self.displayed_efforts: List[str | None] = []
@@ -232,6 +234,10 @@ class RecordingApp:
     def clear_log(self) -> None:
         """Record that the displayed log was emptied."""
         self.cleared += 1
+
+    def populate_log(self) -> None:
+        """Record that the log was repopulated from the active session."""
+        self.populated += 1
 
     def exit(self) -> None:
         """Record that the app was asked to quit."""

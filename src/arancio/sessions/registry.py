@@ -112,6 +112,30 @@ class SessionRegistry:
             raise ValueError(f"Session ID is ambiguous: {session_id}")
         return matches[0]
 
+    def find(self, query: str) -> list[SessionRegistryEntry]:
+        """Resolve a ``/resume`` query: an exact ID match, else a name substring.
+
+        An exact ID match wins outright and is returned alone, even when more
+        than one file shares that ID (a duplicate marks both entries
+        ``damaged``, see :meth:`build`) — that ambiguity surfaces to the
+        caller the same way a multi-name match does, rather than needing
+        separate handling. Otherwise every entry whose name contains ``query``
+        case-insensitively is returned, healthy or not: an unloadable match is
+        left to fail clearly when actually loaded, not filtered out here.
+
+        Args:
+            query: a session ID or a fragment of its name.
+
+        Returns:
+            The exact ID match alone when one exists, else every name
+            substring match, in registry order. Empty when nothing matches.
+        """
+        exact = [entry for entry in self.entries if entry.id == query]
+        if exact:
+            return exact
+        needle = query.lower()
+        return [entry for entry in self.entries if needle in entry.name.lower()]
+
     def _entry_for_path(self, path: Path) -> SessionRegistryEntry:
         """Build one registry entry from a session file's scan result.
 
