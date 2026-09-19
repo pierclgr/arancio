@@ -212,6 +212,20 @@ class RecordingApp:
         self.displayed_model_ids: List[str | None] = []
         self.displayed_efforts: List[str | None] = []
 
+    @staticmethod
+    def call_from_thread(func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """Run the callable inline instead of hopping to the UI thread.
+
+        Args:
+            func: the callable the worker thread wants the UI to run.
+            *args: positional arguments to call it with.
+            **kwargs: keyword arguments to call it with.
+
+        Returns:
+            Whatever the callable returned.
+        """
+        return func(*args, **kwargs)
+
     def set_working_directory(self, path: Path | str) -> Path:
         """Move the working directory, validating it the way the app does.
 

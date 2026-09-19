@@ -187,6 +187,11 @@ class ActionExecutor:
     def _execute_command(self, action: CommandAction) -> Iterator[Message]:
         """Bind the action's words to the command's parameters and run it.
 
+        ``command.run`` executes via ``application.call_from_thread`` because
+        this executor runs on the agent's worker thread, and a command can
+        mutate Textual widgets (e.g. ``ResumeCommand`` repopulating the log),
+        which requires the app's event-loop thread.
+
         A plain-string result is wrapped into an :class:`AssistantMessage` so
         the executor always yields messages, regardless of the action type.
 
@@ -221,7 +226,7 @@ class ActionExecutor:
             else None
         )
         try:
-            result = command.run(**kwargs)
+            result = self._application.call_from_thread(command.run, **kwargs)
         except Exception as exc:
             yield from self._yield_error(
                 f"Error while executing command {action.name}: {exc}"
