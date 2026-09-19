@@ -1,10 +1,10 @@
 """Validation of session logs: cheap checksum scan, full validation at load.
 
-A session is inspected at two moments with different depth. The registry scan
-wants only metadata and a cheap integrity signal, so it parses the header line
-and compares the checksum written after the last clean flush. Loading wants to
-trust the content itself, so it parses and validates every line. Both live in
-one class so the two layers can never drift apart.
+A session is inspected at two moments with different depth. The registry scan wants only
+metadata and a cheap integrity signal, so it parses the header line and compares the
+checksum written after the last clean flush. Loading wants to trust the content itself,
+so it parses and validates every line. Both live in one class so the two layers can
+never drift apart.
 """
 
 from __future__ import annotations
@@ -213,12 +213,10 @@ class SessionValidator:
             ):
                 raise ValueError("command visibility is invalid")
             return
-        if record_type == "configuration_changed":
+        if record_type == "state_changed":
             session.configuration = SessionConfiguration.from_dict(
                 self._required_mapping(record, "configuration")
             )
-            return
-        if record_type == "working_directory_changed":
             session.working_directory = self._absolute_path(record, "working_directory")
             return
         if record_type == "file_state_changed":

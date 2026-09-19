@@ -262,7 +262,9 @@ class SessionManager:
             return session.working_directory, None
         missing = session.working_directory
         resolved_fallback = fallback.resolve()
-        save_error = self._session_recorder.working_directory(resolved_fallback)
+        save_error = self._session_recorder.state_changed(
+            session.configuration, resolved_fallback
+        )
         message = (
             f"Saved working directory no longer exists: {missing}; "
             f"using {resolved_fallback}."
@@ -272,8 +274,8 @@ class SessionManager:
         return resolved_fallback, message
 
     def _heal_checked_entry(self, entry: SessionRegistryEntry) -> None:
-        """Refresh an entry whose checksum was missing or stale now that the
-        session parsed cleanly.
+        """Refresh an entry whose checksum was missing or stale now that the session
+        parsed cleanly.
 
         Args:
             entry: the registry entry for the just-loaded session.

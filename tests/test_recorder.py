@@ -339,10 +339,10 @@ def test_a_configuration_change_updates_the_session_and_the_log(
         permissions={c: PermissionLevel.AUTO for c in PermissionCategory},
     )
 
-    session_manager.session_recorder.configuration(changed)
+    session_manager.session_recorder.state_changed(changed, session.working_directory)
 
     assert session.configuration == changed
-    assert _records(session.path)[-1]["type"] == "configuration_changed"
+    assert _records(session.path)[-1]["type"] == "state_changed"
 
 
 def test_a_directory_change_is_resolved_before_it_is_stored(
@@ -355,7 +355,7 @@ def test_a_directory_change_is_resolved_before_it_is_stored(
     nested = tmp_path / "sub"
     nested.mkdir()
 
-    session_manager.session_recorder.working_directory(nested)
+    session_manager.session_recorder.state_changed(session.configuration, nested)
 
     assert session.working_directory == nested.resolve()
-    assert _records(session.path)[-1]["type"] == "working_directory_changed"
+    assert _records(session.path)[-1]["type"] == "state_changed"

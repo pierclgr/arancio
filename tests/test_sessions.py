@@ -214,7 +214,7 @@ def test_loading_restores_the_configuration_the_session_ended_with(
         thinking_effort=None,
         permissions={category: PermissionLevel.AUTO for category in PermissionCategory},
     )
-    session_manager.session_recorder.configuration(changed)
+    session_manager.session_recorder.state_changed(changed, session.working_directory)
 
     restored = _reopen(session, storage_manager).require_current()
 

@@ -261,6 +261,34 @@ def test_a_session_that_stopped_mid_tool_call_is_closed_on_reopen(
     assert "may or may not have completed" in closing.content
 
 
+def test_reopening_restores_the_last_state_changed_snapshot(
+    wired: tuple[ActionExecutor, SessionManager, StorageManager, ScriptedClient],
+    tmp_path: Path,
+) -> None:
+    """A later ``state_changed`` record supersedes an earlier one, atomically.
+
+    ``/cd`` and ``/effort`` each snapshot both configuration and working directory
+    together, so the session reopened from disk must reflect the directory moved by the
+    first command and the effort set by the second, not a mix of the two records or the
+    earlier one.
+    """
+    executor, session_manager, storage_manager, _ = wired
+    (tmp_path / "sub").mkdir()
+
+    list(executor.execute(CommandAction(name="cd", args=["sub"], raw_input="/cd sub")))
+    list(
+        executor.execute(
+            CommandAction(name="effort", args=["low"], raw_input="/effort low")
+        )
+    )
+
+    reopened = _reopen(session_manager, storage_manager)
+    restored = reopened.require_current()
+
+    assert restored.working_directory == (tmp_path / "sub").resolve()
+    assert restored.configuration.thinking_effort == "low"
+
+
 @pytest.mark.parametrize("command_name", ["clear", "new"])
 def test_clearing_a_chat_starts_a_separate_log(
     command_name: str,

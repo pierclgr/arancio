@@ -281,7 +281,7 @@ def test_changing_the_directory_records_it_on_the_session(
     moved = next(
         record
         for record in _records(session_manager)
-        if record["type"] == "working_directory_changed"
+        if record["type"] == "state_changed"
     )
     assert moved["working_directory"] == str((tmp_path / "sub").resolve())
 
@@ -305,7 +305,7 @@ def test_a_configuration_command_snapshots_the_session(
     list(executor.execute(CommandAction(name=name, args=args, raw_input=f"/{name}")))
 
     types = [record["type"] for record in _records(session_manager)]
-    assert "configuration_changed" in types
+    assert "state_changed" in types
 
 
 def test_reading_a_permission_changes_no_session_state(
@@ -321,7 +321,7 @@ def test_reading_a_permission_changes_no_session_state(
     )
 
     types = [record["type"] for record in _records(session_manager)]
-    assert "configuration_changed" not in types
+    assert "state_changed" not in types
 
 
 def test_only_declared_parameters_are_injected(executor: ActionExecutor) -> None:

@@ -339,16 +339,13 @@ class ActionExecutor:
             A persistence error notice, or ``None`` when no session state
             changed or the write succeeded.
         """
-        if action.name == "cd":
-            return self._session_manager.session_recorder.working_directory(
-                self._application.working_directory
-            )
         changes_configuration = action.name in {"provider", "model", "effort"}
         changes_permission = action.name == "permissions" and len(action.args) > 1
-        if not (changes_configuration or changes_permission):
+        if not (action.name == "cd" or changes_configuration or changes_permission):
             return None
-        return self._session_manager.session_recorder.configuration(
-            SessionConfiguration.from_settings(self._settings_manager.settings)
+        return self._session_manager.session_recorder.state_changed(
+            SessionConfiguration.from_settings(self._settings_manager.settings),
+            self._application.working_directory,
         )
 
     @classmethod

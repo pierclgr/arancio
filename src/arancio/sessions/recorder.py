@@ -158,40 +158,30 @@ class SessionRecorder:
             if error:
                 yield error
 
-    def configuration(self, configuration: SessionConfiguration) -> ErrorMessage | None:
-        """Record the complete command-controlled configuration snapshot.
+    def state_changed(
+        self, configuration: SessionConfiguration, working_directory: Path
+    ) -> ErrorMessage | None:
+        """Record a complete snapshot of the session's command-controlled state.
+
+        Configuration and working directory are always recorded together, so
+        the log carries one atomic record of "the state at this point" rather
+        than two independently-timed ones.
 
         Args:
-            configuration: the new active configuration for the chat.
+            configuration: the active configuration for the chat.
+            working_directory: the active absolute working directory.
 
         Returns:
             The temporary persistence error notice, or ``None`` on success.
         """
         session = self._session()
         session.configuration = configuration
+        session.working_directory = working_directory.resolve()
         return self.event(
             {
-                "type": "configuration_changed",
+                "type": "state_changed",
                 "timestamp": self._utc_timestamp(),
                 "configuration": configuration.to_dict(),
-            }
-        )
-
-    def working_directory(self, path: Path) -> ErrorMessage | None:
-        """Record the session working directory.
-
-        Args:
-            path: the new absolute working directory.
-
-        Returns:
-            The temporary persistence error notice, or ``None`` on success.
-        """
-        session = self._session()
-        session.working_directory = path.resolve()
-        return self.event(
-            {
-                "type": "working_directory_changed",
-                "timestamp": self._utc_timestamp(),
                 "working_directory": str(session.working_directory),
             }
         )
