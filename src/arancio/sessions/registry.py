@@ -1,7 +1,7 @@
 """In-memory discovery index for persisted sessions.
 
-The scan stays cheap: the validator inspects only a log's header and its
-checksum, so no session is fully parsed until it is actually loaded.
+The scan stays cheap: the validator inspects only a log's header and its checksum, so no
+session is fully parsed until it is actually loaded.
 """
 
 from __future__ import annotations

@@ -1,10 +1,10 @@
 """SHA-256 checksums letting the registry verify a session log without parsing it.
 
-Every session log has a sibling checksum file recording the digest of the bytes
-that were last fully flushed. The registry scan recomputes the digest and
-compares it with the stored one instead of parsing the whole log: a match means
-the file is byte-identical to a state that was cleanly validated, a mismatch
-means something changed it afterwards.
+Every session log has a sibling checksum file recording the digest of the bytes that
+were last fully flushed. The registry scan recomputes the digest and compares it with
+the stored one instead of parsing the whole log: a match means the file is byte-
+identical to a state that was cleanly validated, a mismatch means something changed it
+afterwards.
 """
 
 from __future__ import annotations
