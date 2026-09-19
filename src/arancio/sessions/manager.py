@@ -296,6 +296,7 @@ class SessionManager:
                 id=session.id,
                 name=session.name,
                 working_directory=session.working_directory,
+                configuration=session.configuration,
                 log_path=session.path,
                 status="healthy",
             )
@@ -305,11 +306,12 @@ class SessionManager:
         """Synchronize the active durable session's mutable registry metadata.
 
         Args:
-            session: the active session whose current CWD changed.
+            session: the active session whose current state changed.
         """
         for entry in self._registry.entries:
             if entry.log_path == session.path:
                 entry.working_directory = session.working_directory
+                entry.configuration = session.configuration
                 return
 
     def _new_id(self) -> str:

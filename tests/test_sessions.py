@@ -221,6 +221,81 @@ def test_loading_restores_the_configuration_the_session_ended_with(
     assert restored.configuration == changed
 
 
+def test_reading_picks_the_last_state_changed_across_intervening_messages(
+    session_manager: SessionManager, storage_manager: StorageManager, tmp_path: Path
+) -> None:
+    """A message written between two state snapshots must not hide the later one."""
+    session = session_manager.create(
+        working_directory=tmp_path, configuration=_configuration()
+    )
+    first_directory = tmp_path / "first"
+    second_directory = tmp_path / "second"
+    second = SessionConfiguration(
+        provider="anthropic",
+        model_name="claude",
+        thinking_effort=None,
+        permissions={category: PermissionLevel.AUTO for category in PermissionCategory},
+    )
+    session_manager.session_recorder.state_changed(_configuration(), first_directory)
+    session_manager.session_recorder.message(UserMessage(content="in between"))
+    session_manager.session_recorder.state_changed(second, second_directory)
+
+    restored = _reopen(session, storage_manager).require_current()
+
+    assert restored.configuration == second
+    assert restored.working_directory == second_directory.resolve()
+
+
+def test_scanning_recovers_the_same_latest_state_without_a_full_parse(
+    session_manager: SessionManager, storage_manager: StorageManager, tmp_path: Path
+) -> None:
+    """The registry must not show a session's stale, creation-time state."""
+    session = session_manager.create(
+        working_directory=tmp_path, configuration=_configuration()
+    )
+    moved = tmp_path / "moved"
+    changed = SessionConfiguration(
+        provider="anthropic",
+        model_name="claude",
+        thinking_effort=None,
+        permissions={category: PermissionLevel.AUTO for category in PermissionCategory},
+    )
+    session_manager.session_recorder.state_changed(changed, moved)
+
+    reopened = SessionManager(storage_manager, root=storage_manager.root)
+    entry = reopened.registry.get(session.id)
+
+    assert entry.working_directory == moved.resolve()
+    assert entry.configuration == changed
+
+
+def test_a_malformed_earlier_state_changed_only_fails_a_full_load(
+    session_manager: SessionManager, storage_manager: StorageManager, tmp_path: Path
+) -> None:
+    """The scan only trusts the winning record; a full load checks every one."""
+    session = session_manager.create(
+        working_directory=tmp_path, configuration=_configuration()
+    )
+    malformed = json.dumps(
+        {
+            "type": "state_changed",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "working_directory": str(tmp_path),
+            "configuration": "not-a-mapping",
+        }
+    )
+    with session.path.open("a") as handle:
+        handle.write(malformed + "\n")
+    session_manager.session_recorder.state_changed(_configuration(), tmp_path)
+
+    reopened = SessionManager(storage_manager, root=storage_manager.root)
+    entry = reopened.registry.get(session.id)
+    assert entry.configuration == _configuration()
+
+    with pytest.raises(ValueError):
+        reopened.load(session.id)
+
+
 def test_loading_answers_a_tool_call_that_never_got_a_result(
     session_manager: SessionManager, storage_manager: StorageManager, tmp_path: Path
 ) -> None:

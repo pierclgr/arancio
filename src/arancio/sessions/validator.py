@@ -28,6 +28,7 @@ class SessionScan:
 
     name: str
     working_directory: Path | None
+    configuration: SessionConfiguration | None
     status: Literal["healthy", "unverified", "damaged"]
     damage_reason: str | None = None
 
@@ -58,26 +59,34 @@ class SessionValidator:
         """
         session_id = path.stem
         try:
-            name, working_directory = self._read_header(path, session_id)
+            name, working_directory, configuration = self._scan_state(path, session_id)
         except (OSError, ValueError) as exc:
             return SessionScan(
                 name=session_id,
                 working_directory=None,
+                configuration=None,
                 status="damaged",
                 damage_reason=str(exc),
             )
         matches = SessionChecksum.verify(path)
         if matches is None:
             return SessionScan(
-                name=name, working_directory=working_directory, status="unverified"
+                name=name,
+                working_directory=working_directory,
+                configuration=configuration,
+                status="unverified",
             )
         if matches:
             return SessionScan(
-                name=name, working_directory=working_directory, status="healthy"
+                name=name,
+                working_directory=working_directory,
+                configuration=configuration,
+                status="healthy",
             )
         return SessionScan(
             name=name,
             working_directory=working_directory,
+            configuration=configuration,
             status="damaged",
             damage_reason="Session log no longer matches its checksum",
         )
@@ -111,10 +120,13 @@ class SessionValidator:
         name = self._required_string(first, "name")
         created_at = self._parse_datetime(self._required_string(first, "timestamp"))
         creation_directory = self._absolute_path(first, "creation_working_directory")
-        working_directory = self._absolute_path(first, "working_directory")
-        configuration = SessionConfiguration.from_dict(
-            self._required_mapping(first, "configuration")
-        )
+
+        latest_state_record = first
+        for record in records[1:]:
+            if record.get("type") == "state_changed":
+                latest_state_record = record
+        configuration, working_directory = self._state_from_record(latest_state_record)
+
         session = Session(
             id=session_id,
             name=name,
@@ -138,41 +150,65 @@ class SessionValidator:
         """
         SessionChecksum.write(path)
 
-    @staticmethod
-    def _read_header(path: Path, session_id: str) -> tuple[str, Path | None]:
-        """Parse a session's display metadata from its first line only.
+    def _scan_state(
+        self, path: Path, session_id: str
+    ) -> tuple[str, Path, SessionConfiguration]:
+        """Recover a session's display name and its latest state snapshot.
+
+        Reads every line, but only inspects each one's ``type`` to find the
+        winning record; only that one record's configuration and working
+        directory are actually validated and built, unlike :meth:`read`,
+        which validates every line's own schema too.
 
         Args:
             path: the JSONL session path.
             session_id: the ID derived from the filename, used as a fallback name.
 
         Returns:
-            The header's name and working directory, when available.
+            The header's name, and the working directory and configuration of
+            the last ``state_changed`` record, or the header's own when none
+            exists.
 
         Raises:
-            ValueError: when the first line is missing or not a session header.
+            ValueError: when the first line is missing, not a session header,
+                or the winning state record is invalid.
         """
-        with path.open("r", encoding="utf-8") as handle:
-            line = handle.readline()
-        if not line:
+        lines = self._storage_manager.read_lines(path)
+        if not lines:
             raise ValueError("Missing session_created record")
-        try:
-            first = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ValueError("Invalid JSON at line 1") from exc
-        if not isinstance(first, dict):
-            raise ValueError("Session record at line 1 is not an object")
+        first = self._parse_line(lines[0], 1)
         if first.get("type") != "session_created":
             raise ValueError("Missing session_created record")
         name = first.get("name")
-        working_directory = first.get("working_directory")
-        return (
-            name if isinstance(name, str) else session_id,
-            Path(working_directory)
-            if isinstance(working_directory, str)
-            and Path(working_directory).is_absolute()
-            else None,
+        name = name if isinstance(name, str) else session_id
+
+        latest = first
+        for index, line in enumerate(lines[1:], 2):
+            record = self._parse_line(line, index)
+            if record.get("type") == "state_changed":
+                latest = record
+        configuration, working_directory = self._state_from_record(latest)
+        return name, working_directory, configuration
+
+    @staticmethod
+    def _state_from_record(record: dict[str, Any]) -> tuple[SessionConfiguration, Path]:
+        """Build the configuration and working directory a state snapshot carries.
+
+        Shared by :meth:`_scan_state` and :meth:`read`, both of which need to
+        turn a ``session_created`` or ``state_changed`` record into the same
+        two values.
+
+        Args:
+            record: the winning ``session_created`` or ``state_changed`` record.
+
+        Returns:
+            The record's configuration and absolute working directory.
+        """
+        configuration = SessionConfiguration.from_dict(
+            SessionValidator._required_mapping(record, "configuration")
         )
+        working_directory = SessionValidator._absolute_path(record, "working_directory")
+        return configuration, working_directory
 
     def _apply_record(self, session: Session, record: dict[str, Any]) -> None:
         """Validate one non-creation record and apply it to session state.
@@ -213,10 +249,9 @@ class SessionValidator:
                 raise ValueError("command visibility is invalid")
             return
         if record_type == "state_changed":
-            session.configuration = SessionConfiguration.from_dict(
-                self._required_mapping(record, "configuration")
-            )
-            session.working_directory = self._absolute_path(record, "working_directory")
+            # validated here so every line is checked; the final value came
+            # from the winning record already, resolved once in `read`
+            self._state_from_record(record)
             return
         if record_type == "file_state_changed":
             file_path = self._absolute_path(record, "file_path")

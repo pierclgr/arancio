@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
+    from arancio.sessions.session import SessionConfiguration
     from arancio.sessions.validator import SessionValidator
     from arancio.storage.manager import StorageManager
 
@@ -22,6 +23,7 @@ class SessionRegistryEntry:
     id: str
     name: str
     working_directory: Path | None
+    configuration: SessionConfiguration | None
     log_path: Path
     status: Literal["healthy", "unverified", "damaged"]
     damage_reason: str | None = None
@@ -124,6 +126,7 @@ class SessionRegistry:
             id=path.stem,
             name=scan.name,
             working_directory=scan.working_directory,
+            configuration=scan.configuration,
             log_path=path,
             status=scan.status,
             damage_reason=scan.damage_reason,
