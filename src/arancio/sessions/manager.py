@@ -54,7 +54,9 @@ class SessionManager:
         self._session_recorder = SessionRecorder(
             storage_manager, self, self._tool_session
         )
-        self._registry = self.rebuild_registry()
+        self._registry = SessionRegistry(
+            self._storage_manager, self._sessions_dir, self._read_session
+        )
 
     @property
     def current(self) -> Session | None:
@@ -95,31 +97,6 @@ class SessionManager:
         """
         self._register_durable_session(session)
         self._update_registry_entry(session)
-
-    def rebuild_registry(self) -> SessionRegistry:
-        """Discover every session file and mark damaged files without hiding them.
-
-        Returns:
-            The newly built registry containing every discovered session file.
-        """
-        entries = [
-            self._entry_for_path(path)
-            for path in self._storage_manager.find_files(
-                self._storage_manager.make_dir(self._sessions_dir), "*.jsonl"
-            )
-        ]
-        by_id: dict[str, list[SessionRegistryEntry]] = {}
-        for entry in entries:
-            by_id.setdefault(entry.id, []).append(entry)
-        for duplicates in by_id.values():
-            if len(duplicates) < 2:
-                continue
-            for entry in duplicates:
-                other = next(item for item in duplicates if item is not entry)
-                entry.status = "damaged"
-                entry.damage_reason = f"Duplicate session ID found at {other.log_path}"
-        self._registry = SessionRegistry(entries)
-        return self._registry
 
     def create(
         self,
@@ -293,36 +270,6 @@ class SessionManager:
             message = f"{message} {save_error.content}"
         return resolved_fallback, message
 
-    def _entry_for_path(self, path: Path) -> SessionRegistryEntry:
-        """Build one healthy or damaged registry entry from a session file.
-
-        Args:
-            path: the discovered JSONL session path.
-
-        Returns:
-            The healthy entry or a damaged entry with recovered metadata.
-        """
-        session_id = path.stem
-        try:
-            session = self._read_session(path)
-        except (OSError, ValueError) as exc:
-            name, working_directory = self._recover_entry_metadata(path, session_id)
-            return SessionRegistryEntry(
-                id=session_id,
-                name=name,
-                working_directory=working_directory,
-                log_path=path,
-                status="damaged",
-                damage_reason=str(exc),
-            )
-        return SessionRegistryEntry(
-            id=session.id,
-            name=session.name,
-            working_directory=session.working_directory,
-            log_path=path,
-            status="healthy",
-        )
-
     def _register_durable_session(self, session: Session) -> None:
         """Add a newly durable session to the current in-memory registry.
 
@@ -456,33 +403,6 @@ class SessionManager:
             session.file_states[str(file_path)] = float(mtime)
             return
         raise ValueError(f"Unknown session record type: {record_type!r}")
-
-    def _recover_entry_metadata(
-        self, path: Path, session_id: str
-    ) -> tuple[str, Path | None]:
-        """Recover safe registry metadata from a damaged session's first line.
-
-        Args:
-            path: the damaged JSONL session path.
-            session_id: the ID derived from the filename.
-
-        Returns:
-            The recovered name and working directory, when available.
-        """
-        try:
-            lines = self._storage_manager.read_lines(path)
-            first = self._parse_line(lines[0], 1)
-            name = first.get("name")
-            working_directory = first.get("working_directory")
-            return (
-                name if isinstance(name, str) else session_id,
-                Path(working_directory)
-                if isinstance(working_directory, str)
-                and Path(working_directory).is_absolute()
-                else None,
-            )
-        except (IndexError, OSError, ValueError):
-            return session_id, None
 
     def _new_id(self) -> str:
         """Generate an ID absent from the current in-memory registry.
