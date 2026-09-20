@@ -12,10 +12,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Type
 
 from arancio.commands.base import BaseCommand
-from arancio.commands.clear import ClearCommand
-from arancio.commands.exit import ExitCommand
-from arancio.commands.registry import COMMAND_REGISTRY
-from arancio.commands.resume import ResumeCommand
+from arancio.commands.registry import (
+    COMMAND_REGISTRY,
+    SESSION_DISCARDING_COMMANDS,
+)
 from arancio.core.agents import Agent
 from arancio.core.messages import (
     AssistantMessage,
@@ -34,7 +34,6 @@ from arancio.prompt.actions.types import (
     ShellCommandAction,
 )
 from arancio.sessions.manager import SessionManager
-from arancio.sessions.session import SessionConfiguration
 from arancio.settings.manager import SettingsManager
 
 if TYPE_CHECKING:
@@ -83,45 +82,26 @@ class ActionExecutor:
         self._settings_manager: SettingsManager = settings_manager
         self._session_manager: SessionManager = session_manager
 
-    def ensure_session(self, action: BaseAction | None = None) -> None:
-        """Create the active session on first use, not at process startup.
+    def _writes_nothing(self, command: Type[BaseCommand] | None) -> bool:
+        """Report whether this command must leave the log untouched.
 
-        A no-op once a session already exists, so the caller doesn't need to know
-        whether this is the first action of the run. Quitting never opens a chat:
-        an ``/exit`` (or its ``/quit`` alias) typed into a fresh app leaves no
-        session file behind, matching ctrl+c, which quits without one either. An
-        unresolved action (``None``) always gets a session, since the caller
-        cannot yet tell whether it will turn out to be a quit.
-
-        Args:
-            action: the action about to run, or ``None`` when it has not been
-                resolved yet.
-        """
-        if self._session_manager.current is not None or self._quits(action):
-            return
-        self._session_manager.create(
-            working_directory=self._application.working_directory,
-            configuration=SessionConfiguration.from_settings(
-                self._settings_manager.settings
-            ),
-        )
-
-    @staticmethod
-    def _quits(action: BaseAction | None) -> bool:
-        """Report whether the action does nothing but quit the application.
-
-        Keyed on the command class rather than the typed name, so ``/exit``
-        and its ``/quit`` alias are both covered.
+        A command that ends or switches the chat adds nothing to the one it was
+        typed into, so it is never the write that brings that chat's log into
+        existence: typing ``/quit``, ``/clear``, ``/fork`` or ``/resume`` into a
+        fresh app leaves nothing behind, matching ctrl+c, which quits without
+        running an action at all. Once the log exists, the same command is
+        recorded like any other, so the replayed log keeps the line.
 
         Args:
-            action: the action to check.
+            command: the resolved command class, or ``None`` when the typed name
+                matches no command.
 
         Returns:
-            Whether the action is a slash command resolving to ``ExitCommand``.
+            Whether every write this command would produce must be skipped.
         """
         return (
-            isinstance(action, CommandAction)
-            and COMMAND_REGISTRY.get(action.name) is ExitCommand
+            command in SESSION_DISCARDING_COMMANDS
+            and not self._session_manager.current.created_on_disk
         )
 
     def execute(self, action: BaseAction) -> Iterator[Message]:
@@ -212,35 +192,43 @@ class ActionExecutor:
             if notice:
                 yield notice
 
-    def _yield_error(self, content: str) -> Iterator[Message]:
+    def _yield_error(
+        self, content: str, command: Type[BaseCommand] | None = None
+    ) -> Iterator[Message]:
         """Record an error the executor itself reports, then yield it.
 
         Args:
             content: the error text shown to the user and saved in the session.
+            command: the command the error belongs to, when it came from one, so
+                a session-discarding command does not save it into a chat that
+                has no log.
 
         Yields:
             The error, followed by the persistence notice when saving it failed.
         """
         error = ErrorMessage(content=content)
-        save_error = self._session_manager.session_recorder.message(error)
+        save_error = (
+            None
+            if self._writes_nothing(command)
+            else self._session_manager.session_recorder.message(error)
+        )
         yield error
         yield from self._yield_notices(save_error)
 
-    def _record_command(self, action: CommandAction) -> ErrorMessage | None:
-        """Record the typed command line, unless there is no session to record it in.
-
-        The only way there is no active session at this point is that
-        :meth:`ensure_session` deliberately skipped creating one for a plain
-        quit, so there is nowhere to write and nothing lost by not writing.
+    def _record_command(
+        self, action: CommandAction, command: Type[BaseCommand]
+    ) -> ErrorMessage | None:
+        """Record the typed command line, unless the command writes nothing.
 
         Args:
             action: the command action to record.
+            command: the resolved command class the action runs.
 
         Returns:
             The temporary persistence error notice, or ``None`` when the
-            write succeeded or there was no session to write it into.
+            write succeeded or the line was deliberately not written.
         """
-        if self._session_manager.current is None:
+        if self._writes_nothing(command):
             return None
         return self._session_manager.session_recorder.command(
             raw_input=action.raw_input, name=action.name, args=action.args
@@ -273,23 +261,25 @@ class ActionExecutor:
             kwargs = self._build_command_kwargs(command, action.args)
         except Exception as exc:
             yield from self._yield_error(
-                f"Error while executing command {action.name}: {exc}"
+                f"Error while executing command {action.name}: {exc}", command
             )
             return
 
-        already_recorded = command in {ClearCommand, ResumeCommand}
-        command_error = self._record_command(action) if already_recorded else None
+        discards_session = command in SESSION_DISCARDING_COMMANDS
+        command_error = (
+            self._record_command(action, command) if discards_session else None
+        )
         try:
             result = self._application.call_from_thread(command.run, **kwargs)
         except Exception as exc:
             yield from self._yield_error(
-                f"Error while executing command {action.name}: {exc}"
+                f"Error while executing command {action.name}: {exc}", command
             )
             yield from self._yield_notices(command_error)
             return
 
-        if not already_recorded:
-            command_error = self._record_command(action)
+        if not discards_session:
+            command_error = self._record_command(action, command)
 
         if result is None:
             yield from self._yield_notices(command_error)
@@ -299,7 +289,13 @@ class ActionExecutor:
         )
         if isinstance(message, AssistantMessage):
             message.in_history = False
-            result_error = self._session_manager.session_recorder.message(message)
+            # asked after the command ran, so a fork's confirmation is weighed
+            # against the fork itself, not the session it came from
+            result_error = (
+                None
+                if self._writes_nothing(command)
+                else self._session_manager.session_recorder.message(message)
+            )
         else:
             result_error = None
         yield message

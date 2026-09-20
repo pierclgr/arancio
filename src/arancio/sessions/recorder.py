@@ -67,22 +67,24 @@ class SessionRecorder:
     def _session(self) -> Session:
         """Return the chat every write goes into.
 
-        The manager raises when no chat is open, so a write can never land in
-        the wrong place.
-
         Returns:
             The manager's open session.
         """
-        return self._session_manager.get_current_session()
+        return self._session_manager.current
 
-    def created(self) -> ErrorMessage | None:
-        """Record the creation header that opens a session log.
+    def created(self) -> None:
+        """Add the creation header that opens a session log, without saving it.
 
-        Returns:
-            The temporary persistence error notice, or ``None`` on success.
+        The header is the one record that is not flushed when it is built: an
+        untouched session must leave no file behind. It stays unsaved until the
+        first write that has something to save, which :meth:`flush` then writes
+        ahead of it, in order.
+
+        The header also records the session's fork provenance, ``None``
+        unless the session was created by ``SessionManager.fork``.
         """
         session = self._session()
-        return self.event(
+        session.add_event(
             {
                 "type": "session_created",
                 "format_version": SESSION_FORMAT_VERSION,
@@ -92,6 +94,7 @@ class SessionRecorder:
                 "creation_working_directory": str(session.creation_working_directory),
                 "working_directory": str(session.working_directory),
                 "configuration": session.configuration.to_dict(),
+                "forked_from": session.forked_from,
             }
         )
 
@@ -279,19 +282,52 @@ class SessionRecorder:
         self._session().add_event(record)
         return self.flush()
 
-    def flush(self) -> ErrorMessage | None:
-        """Persist every unsaved event from the open chat in order.
+    def message_into(
+        self, session: Session, message: Message, visible: bool = True
+    ) -> ErrorMessage | None:
+        """Record one finalized message into a session other than the open one.
 
-        Every write reaches this method through :meth:`event`, so it is the one
-        place the manager's registry is synced once a write lands. A fully
-        successful flush also refreshes the log's checksum, certifying the
-        clean state the next registry scan verifies.
+        :meth:`message` always writes into whatever chat
+        :attr:`SessionManager.current` reports; this is the one deliberate
+        exception, used only when forking, where the same confirmation
+        belongs in both the source session's log and the new fork's. It
+        skips the file-state sync :meth:`message` does, since that concerns
+        the *open* chat's tool reads, not a session that is no longer
+        current.
+
+        Args:
+            session: the session to append the record to and flush.
+            message: the message to persist.
+            visible: whether the record belongs in the replayed UI log.
+
+        Returns:
+            The temporary persistence error notice, or ``None`` when the
+            message was saved or is not meant to be.
+        """
+        record = message_to_record(message, visible)
+        if record is None:
+            return None
+        session.add_event(record)
+        return self.flush(session)
+
+    def flush(self, session: Session | None = None) -> ErrorMessage | None:
+        """Persist every unsaved event from a session in order.
+
+        Every ordinary write reaches this method through :meth:`event`, for the
+        open chat, so it is the one place the manager's registry is synced once
+        a write lands. A fully successful flush also refreshes the log's
+        checksum, certifying the clean state the next registry scan verifies.
+        ``session`` is only ever passed explicitly by :meth:`message_into`, for
+        a session that is not the open one.
+
+        Args:
+            session: the session to flush, or ``None`` for the open chat.
 
         Returns:
             The temporary persistence error notice, or ``None`` when all events are
             saved.
         """
-        session = self._session()
+        session = session or self._session()
         try:
             if session.recovery_offset is not None:
                 self._storage_manager.truncate_file(

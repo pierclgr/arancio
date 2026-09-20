@@ -85,107 +85,109 @@ def executor(
     )
 
 
-@pytest.fixture
-def bare_executor(
-    agent: Agent,
-    app: RecordingApp,
-    settings_manager: SettingsManager,
+def test_the_first_action_is_what_puts_the_session_on_disk(
+    executor: ActionExecutor,
     session_manager: SessionManager,
-) -> ActionExecutor:
-    """Return an executor over a configured but session-less manager.
-
-    Args:
-        agent: the agent prompts are sent to.
-        app: the fake app commands act on.
-        settings_manager: the manager holding a usable provider and model.
-        session_manager: the manager with no session created yet.
-
-    Returns:
-        An executor whose session doesn't exist until ``ensure_session`` or
-        ``execute`` creates one.
-    """
-    data = Settings.default().to_dict()
-    data.update(provider="openai", model_name="gpt-4o")
-    storage_module.ARANCIO_SETTINGS_FILE.write_text(yaml.safe_dump(data))
-    settings_manager.load()
-    return ActionExecutor(
-        agent=agent,
-        application=app,
-        settings_manager=settings_manager,
-        session_manager=session_manager,
-    )
-
-
-def test_ensure_session_creates_one_only_on_first_call(
-    bare_executor: ActionExecutor, session_manager: SessionManager
+    storage_manager: StorageManager,
 ) -> None:
-    """A no-op once a session exists, so a caller never has to check first."""
-    assert session_manager.current is None
-
-    bare_executor.ensure_session()
-    first = session_manager.get_current_session()
-
-    bare_executor.ensure_session()
-
-    assert session_manager.get_current_session() is first
-
-
-def test_running_an_action_from_a_session_less_executor_needs_ensure_session_first(
-    bare_executor: ActionExecutor, session_manager: SessionManager
-) -> None:
-    """This is what ``App._run_agent`` does once the action is resolved.
-
-    ``execute`` alone still assumes a session exists (only ``_run_agent``'s ``except``
-    branch and ``execute`` both need one, so the check has to run before either);
-    calling ``ensure_session`` first is what makes both safe.
-    """
-    assert session_manager.current is None
+    """A session exists from startup, but an untouched one stays in memory."""
+    assert session_manager.current.created_on_disk is False
+    assert list(storage_manager.root.rglob("*.jsonl")) == []
 
     action = CommandAction(name="effort", args=["low"], raw_input="/effort low")
-    bare_executor.ensure_session(action)
-    list(bare_executor.execute(action))
+    list(executor.execute(action))
 
-    assert session_manager.current is not None
-    assert any(
-        record.get("type") == "state_changed" for record in _records(session_manager)
-    )
+    assert session_manager.current.created_on_disk is True
+    records = _records(session_manager)
+    assert records[0]["type"] == "session_created"
+    assert any(record.get("type") == "state_changed" for record in records)
 
 
-@pytest.mark.parametrize("name", ["quit", "exit"])
-def test_quitting_a_fresh_executor_leaves_no_session_behind(
-    bare_executor: ActionExecutor,
-    session_manager: SessionManager,
-    app: RecordingApp,
+@pytest.mark.parametrize(
+    "name, args",
+    [
+        ("quit", []),
+        ("exit", []),
+        ("clear", []),
+        ("new", []),
+        ("fork", []),
+        ("resume", ["nosuchsession"]),
+    ],
+)
+def test_no_session_discarding_command_creates_the_log(
+    executor: ActionExecutor,
     storage_manager: StorageManager,
     name: str,
+    args: List[str],
 ) -> None:
-    """Quitting immediately must not leave a two-line junk session on disk.
+    """A command that ends or switches an unused chat must leave nothing behind.
 
-    Covers both ``/exit`` and its ``/quit`` alias, matching ctrl+c, which quits without
-    ever running an action at all.
+    Every alias is covered, and so is a ``/resume`` that fails: its error is shown but
+    never saved, since there is no chat worth saving it into.
     """
-    action = CommandAction(name=name, args=[], raw_input=f"/{name}")
+    raw_input = " ".join([f"/{name}", *args])
 
-    bare_executor.ensure_session(action)
-    list(bare_executor.execute(action))
+    list(executor.execute(CommandAction(name=name, args=args, raw_input=raw_input)))
 
-    assert session_manager.current is None
-    assert app.exited is True
     assert list(storage_manager.root.rglob("*.jsonl")) == []
 
 
-def test_quitting_an_existing_session_is_still_recorded(
-    executor: ActionExecutor, session_manager: SessionManager
+def test_forking_an_untouched_chat_switches_without_writing(
+    executor: ActionExecutor,
+    session_manager: SessionManager,
+    storage_manager: StorageManager,
 ) -> None:
-    """Quitting mid-chat must not silently drop the line from the log."""
-    action = CommandAction(name="quit", args=[], raw_input="/quit")
+    """The fork still happens; a fork of nothing simply has no log to write."""
+    source = session_manager.current
 
-    executor.ensure_session(action)
-    list(executor.execute(action))
+    produced = list(
+        executor.execute(CommandAction(name="fork", args=[], raw_input="/fork"))
+    )
 
+    forked = session_manager.current
+    assert forked is not source
+    assert forked.forked_from == source.id
+    assert produced[0].content == f"Session {source.id} forked to {forked.id}"
+    assert list(storage_manager.root.rglob("*.jsonl")) == []
+
+
+def test_a_forked_chat_records_the_confirmation_into_both_logs(
+    executor: ActionExecutor,
+    session_manager: SessionManager,
+) -> None:
+    """The fork's confirmation must be readable from either session's replay.
+
+    ``ForkCommand`` writes its own copy into the source; the executor's generic post-
+    command write is what puts the same text into the fork, since that chat is current
+    by the time the executor records the result.
+    """
+    list(executor.execute(CommandAction(name="effort", args=["low"], raw_input="/e")))
+    source = session_manager.current
+
+    produced = list(
+        executor.execute(CommandAction(name="fork", args=[], raw_input="/fork"))
+    )
+
+    forked = session_manager.current
+    confirmation = produced[0].content
+    assert confirmation in [event.record.get("content") for event in source.events]
+    assert confirmation in [event.record.get("content") for event in forked.events]
+
+
+@pytest.mark.parametrize("name", ["quit", "clear"])
+def test_a_discarding_command_is_recorded_once_the_chat_has_a_log(
+    executor: ActionExecutor, session_manager: SessionManager, name: str
+) -> None:
+    """The rule spares an unused chat only; a real one must keep the typed line."""
+    list(executor.execute(CommandAction(name="effort", args=["low"], raw_input="/e")))
+    chat = session_manager.current
+
+    list(executor.execute(CommandAction(name=name, args=[], raw_input=f"/{name}")))
+
+    records = [json.loads(line) for line in chat.path.read_text().splitlines() if line]
     assert any(
-        record.get("type") == "command" and record.get("raw_input") == "/quit"
-        for record in _records(session_manager)
+        record.get("type") == "command" and record.get("raw_input") == f"/{name}"
+        for record in records
     )
 
 
@@ -198,7 +200,7 @@ def _records(session_manager: SessionManager) -> List[dict]:
     Returns:
         One decoded record per line.
     """
-    path = session_manager.get_current_session().path
+    path = session_manager.current.path
     return [json.loads(line) for line in path.read_text().splitlines() if line]
 
 

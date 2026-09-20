@@ -118,6 +118,12 @@ class SessionValidator:
             raise ValueError("Session ID does not match filename")
         created_at = self._parse_datetime(self._required_string(first, "timestamp"))
         creation_directory = self._absolute_path(first, "creation_working_directory")
+        # not part of a state_changed snapshot, so read directly off the header
+        forked_from = first.get("forked_from")
+        if "forked_from" not in first or (
+            forked_from is not None and not isinstance(forked_from, str)
+        ):
+            raise ValueError("forked_from is missing or invalid")
 
         self._state_from_record(first)
         latest_state_record = first
@@ -131,6 +137,7 @@ class SessionValidator:
         session = Session(
             id=session_id,
             explicit_name=name,
+            forked_from=forked_from,
             created_at=created_at,
             creation_working_directory=creation_directory,
             working_directory=working_directory,

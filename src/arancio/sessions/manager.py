@@ -37,20 +37,26 @@ class SessionManager:
     def __init__(
         self,
         storage_manager: StorageManager,
+        configuration: SessionConfiguration,
         root: Path = ARANCIO_DEFAULT_DIR,
         tool_session: ToolSession | None = None,
     ) -> None:
-        """Initialize the manager and discover existing sessions.
+        """Discover existing sessions and open the one this process starts with.
+
+        A session exists from construction on, so nothing downstream has to
+        handle its absence. Only its log is deferred: the chat reaches disk on
+        the first write that has something to save.
 
         Args:
             storage_manager: the file-only storage service for the arancio directory.
+            configuration: the command-controlled configuration the opening chat
+                starts with, taken from the already-loaded settings.
             root: the base directory containing the sessions directory.
             tool_session: the file-read safety state owned by the active chat.
         """
         self._storage_manager = storage_manager
         self._sessions_dir = root / ARANCIO_SESSIONS_DIR
         self._tool_session = tool_session or shared_session
-        self._current: Session | None = None
         self._session_recorder = SessionRecorder(
             storage_manager, self, self._tool_session
         )
@@ -58,13 +64,14 @@ class SessionManager:
         self._registry = SessionRegistry(
             self._storage_manager, self._sessions_dir, self._validator
         )
+        self._current: Session = self.create(Path.cwd(), configuration)
 
     @property
-    def current(self) -> Session | None:
+    def current(self) -> Session:
         """Return the session active in this arancio process.
 
         Returns:
-            The current session, or ``None`` before one is created or loaded.
+            The current session, created, cleared or resumed.
         """
         return self._current
 
@@ -103,15 +110,25 @@ class SessionManager:
         self,
         working_directory: Path,
         configuration: SessionConfiguration,
+        explicit_name: str | None = None,
+        forked_from: str | None = None,
     ) -> Session:
-        """Create a new in-memory session and attempt to persist its first record.
+        """Create a new in-memory session and stamp its creation header.
+
+        Nothing is written here: the header stays unsaved until the first write
+        that has something to save, so a chat nobody used leaves no log behind.
 
         Args:
             working_directory: the absolute directory active for the new chat.
             configuration: the command-controlled configuration active at creation.
+            explicit_name: the session's display name, or ``None`` to fall
+                back to its ID. A caller building a fork passes the source
+                session's own name here.
+            forked_from: the source session's ID when this session is a
+                fork, or ``None`` for an ordinary session.
 
         Returns:
-            The newly active session, even when its first disk save fails.
+            The newly active session, not yet on disk.
         """
         resolved_directory = working_directory.resolve()
         session_id = self._new_id()
@@ -131,6 +148,8 @@ class SessionManager:
             working_directory=resolved_directory,
             path=session_path,
             configuration=configuration,
+            explicit_name=explicit_name,
+            forked_from=forked_from,
             created_on_disk=False,
         )
         self._current = session
@@ -151,11 +170,10 @@ class SessionManager:
         Returns:
             The newly active session.
         """
-        self._current = None
         self._tool_session.clear()
         return self.create(working_directory, configuration)
 
-    def load(self, session_id: str) -> Session | None:
+    def load(self, session_id: str) -> Session:
         """Load one healthy session from the reconstructed registry.
 
         Args:
@@ -209,7 +227,7 @@ class SessionManager:
         """
         return [
             message_from_record(event.record)
-            for event in self.get_current_session().events
+            for event in self._current.events
             if is_message_record(event.record)
             and event.record.get("in_history") is True
         ]
@@ -224,7 +242,7 @@ class SessionManager:
             The normalized visible messages in original event order.
         """
         messages: list[Message] = []
-        for event in self.get_current_session().events:
+        for event in self._current.events:
             record = event.record
             if record.get("visible") is not True:
                 continue
@@ -236,7 +254,7 @@ class SessionManager:
 
     def restore_file_states(self) -> None:
         """Restore unchanged file-read safety records without reading file content."""
-        for path, mtime in self.get_current_session().file_states.items():
+        for path, mtime in self._current.file_states.items():
             target = Path(path)
             if target.is_file() and target.stat().st_mtime == mtime:
                 self._tool_session.record_read(path=path, mtime=mtime)
@@ -252,7 +270,7 @@ class SessionManager:
             The usable working directory and a temporary user-facing error when
             a fallback was necessary.
         """
-        session = self.get_current_session()
+        session = self._current
         if session.working_directory.is_dir():
             return session.working_directory, None
         missing = session.working_directory
@@ -339,16 +357,3 @@ class SessionManager:
         readable = (readable or "root")[:180]
         digest = hashlib.sha256(raw_path.encode("utf-8")).hexdigest()[:16]
         return f"--{readable}--{digest}"
-
-    def get_current_session(self) -> Session:
-        """Return the active session or fail before an unscoped operation.
-
-        Returns:
-            The active session.
-
-        Raises:
-            ValueError: when no session is active in this process.
-        """
-        if self._current is None:
-            raise ValueError("No active session.")
-        return self._current

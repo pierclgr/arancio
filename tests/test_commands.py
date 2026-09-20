@@ -6,6 +6,7 @@ default, and refresh what the toolbar shows.
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -18,11 +19,15 @@ from arancio.commands.cd import CdCommand
 from arancio.commands.clear import ClearCommand
 from arancio.commands.effort import EffortCommand
 from arancio.commands.exit import ExitCommand
+from arancio.commands.fork import ForkCommand
 from arancio.commands.hello_world import HelloWorldCommand
 from arancio.commands.model import ModelCommand
 from arancio.commands.permissions import PermissionsCommand
 from arancio.commands.provider import ProviderCommand
-from arancio.commands.registry import COMMAND_REGISTRY
+from arancio.commands.registry import (
+    COMMAND_REGISTRY,
+    SESSION_DISCARDING_COMMANDS,
+)
 from arancio.commands.rename import RenameCommand
 from arancio.commands.resume import ResumeCommand
 from arancio.core.agents import Agent
@@ -84,19 +89,25 @@ def _records(session_manager: SessionManager) -> list[dict]:
     Returns:
         One decoded record per line.
     """
-    path = session_manager.get_current_session().path
+    path = session_manager.current.path
     return [json.loads(line) for line in path.read_text().splitlines() if line]
 
 
 def test_every_registered_name_resolves_to_a_command() -> None:
     """The registry is the only lookup, so a broken entry breaks the command."""
     assert COMMAND_REGISTRY["quit"] is ExitCommand
+    assert COMMAND_REGISTRY["new"] is ClearCommand
     assert all(
         issubclass(command, BaseCommand) for command in COMMAND_REGISTRY.values()
     )
     assert {command.name for command in COMMAND_REGISTRY.values()} <= set(
         COMMAND_REGISTRY
     )
+
+
+def test_every_discarding_command_is_a_registered_command() -> None:
+    """The executor keys on the class, so an unregistered one could never run."""
+    assert SESSION_DISCARDING_COMMANDS <= set(COMMAND_REGISTRY.values())
 
 
 def test_a_typed_argument_is_coerced_from_its_prompt_word() -> None:
@@ -131,9 +142,7 @@ def test_cd_moves_the_working_directory(
 
     assert app.working_directory == (tmp_path / "sub").resolve()
     assert result == f"Working directory set to {app.working_directory}"
-    assert (
-        session_manager.get_current_session().working_directory == app.working_directory
-    )
+    assert session_manager.current.working_directory == app.working_directory
     assert _records(session_manager)[-1]["type"] == "state_changed"
 
 
@@ -171,7 +180,7 @@ def test_model_applies_and_persists_the_new_name(
     assert client.model_id == "openai/gpt-5"
     assert _persisted()["model_name"] == "gpt-5"
     assert app.displayed_model_ids == ["openai/gpt-5"]
-    assert session_manager.get_current_session().configuration.model_name == "gpt-5"
+    assert session_manager.current.configuration.model_name == "gpt-5"
     assert _records(session_manager)[-1]["type"] == "state_changed"
 
 
@@ -213,7 +222,7 @@ def test_provider_is_normalized_before_it_is_stored(
 
     assert result == "Provider set to anthropic"
     assert _persisted()["provider"] == "anthropic"
-    assert session_manager.get_current_session().configuration.provider == "anthropic"
+    assert session_manager.current.configuration.provider == "anthropic"
     assert _records(session_manager)[-1]["type"] == "state_changed"
 
 
@@ -252,7 +261,7 @@ def test_effort_accepts_the_word_null_as_no_thinking(
     assert result == "Thinking effort set to null"
     assert configured.settings.thinking_effort is None
     assert app.displayed_efforts == [None]
-    assert session_manager.get_current_session().configuration.thinking_effort is None
+    assert session_manager.current.configuration.thinking_effort is None
     assert _records(session_manager)[-1]["type"] == "state_changed"
 
 
@@ -320,9 +329,7 @@ def test_permissions_sets_and_persists_a_level(
     )
     assert _persisted()["permissions"]["write"] == "auto"
     assert (
-        session_manager.get_current_session().configuration.permissions[
-            PermissionCategory.WRITE
-        ]
+        session_manager.current.configuration.permissions[PermissionCategory.WRITE]
         is PermissionLevel.AUTO
     )
     assert _records(session_manager)[-1]["type"] == "state_changed"
@@ -347,9 +354,7 @@ def test_permissions_removes_a_grant_with_the_word_null(
     assert result == "execute permission removed"
     assert _persisted()["permissions"]["execute"] is None
     assert (
-        session_manager.get_current_session().configuration.permissions[
-            PermissionCategory.EXECUTE
-        ]
+        session_manager.current.configuration.permissions[PermissionCategory.EXECUTE]
         is PermissionLevel.NONE
     )
     assert _records(session_manager)[-1]["type"] == "state_changed"
@@ -398,7 +403,7 @@ def test_clear_starts_a_new_chat_everywhere_at_once(
         session_manager=session_manager,
     )
 
-    assert session_manager.get_current_session() is not first
+    assert session_manager.current is not first
     assert configured.settings.model_name == "gpt-4o"
     assert app.cleared == 1
 
@@ -433,7 +438,7 @@ def test_resume_by_exact_id_restores_history_configuration_and_ui(
     )
 
     assert result is None
-    assert session_manager.get_current_session().id == first.id
+    assert session_manager.current.id == first.id
     assert configured.settings.model_name == "gpt-4o"
     assert agent._message_history == [UserMessage(content="from the first chat")]
     assert app.cleared == 1
@@ -453,6 +458,12 @@ def test_resume_by_a_name_fragment_finds_the_same_session(
         working_directory=tmp_path,
         configuration=SessionConfiguration.from_settings(configured.settings),
     )
+    # only a session whose log is on disk is in the registry to be found
+    session_manager.session_recorder.flush()
+    session_manager.discard_and_create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
 
     result = ResumeCommand.execute(
         query=first.id[:8],
@@ -463,7 +474,7 @@ def test_resume_by_a_name_fragment_finds_the_same_session(
     )
 
     assert result is None
-    assert session_manager.get_current_session().id == first.id
+    assert session_manager.current.id == first.id
 
 
 def test_resume_with_no_match_is_refused(
@@ -495,6 +506,8 @@ def test_resume_with_more_than_one_match_lists_them_instead_of_resuming(
         working_directory=tmp_path,
         configuration=SessionConfiguration.from_settings(configured.settings),
     )
+    # only a session whose log is on disk is in the registry to be found
+    session_manager.session_recorder.flush()
     session_manager.registry.entries.append(
         SessionRegistryEntry(
             id="second",
@@ -517,7 +530,7 @@ def test_resume_with_more_than_one_match_lists_them_instead_of_resuming(
     assert result is not None
     assert first.id in result
     assert "second" in result
-    assert session_manager.get_current_session().id == first.id
+    assert session_manager.current.id == first.id
     assert app.cleared == 0
 
 
@@ -534,6 +547,8 @@ def test_resume_from_a_different_directory_moves_to_it(
         working_directory=elsewhere,
         configuration=SessionConfiguration.from_settings(configured.settings),
     )
+    # only a session whose log is on disk is in the registry to be found
+    session_manager.session_recorder.flush()
     session_manager.discard_and_create(
         working_directory=tmp_path,
         configuration=SessionConfiguration.from_settings(configured.settings),
@@ -549,7 +564,7 @@ def test_resume_from_a_different_directory_moves_to_it(
     )
 
     assert result is None
-    assert session_manager.get_current_session().id == elsewhere_session.id
+    assert session_manager.current.id == elsewhere_session.id
     assert app.working_directory == elsewhere.resolve()
 
 
@@ -565,6 +580,8 @@ def test_resume_moves_to_the_resumed_directory_even_when_unchanged(
         working_directory=tmp_path,
         configuration=SessionConfiguration.from_settings(configured.settings),
     )
+    # only a session whose log is on disk is in the registry to be found
+    session_manager.session_recorder.flush()
     session_manager.discard_and_create(
         working_directory=tmp_path,
         configuration=SessionConfiguration.from_settings(configured.settings),
@@ -579,7 +596,7 @@ def test_resume_moves_to_the_resumed_directory_even_when_unchanged(
     )
 
     assert result is None
-    assert session_manager.get_current_session().id == first.id
+    assert session_manager.current.id == first.id
     assert app.working_directory == tmp_path.resolve()
 
 
@@ -594,7 +611,7 @@ def test_rename_updates_the_session_and_its_registry_entry(
 
     result = RenameCommand.execute(new_name="demo", session_manager=session_manager)
 
-    assert result == f"Session {session.id} renamed to 'demo'"
+    assert result == "Session renamed to 'demo'"
     assert session.name == "demo"
     assert session_manager.registry.get(session.id).name == "demo"
 
@@ -612,11 +629,217 @@ def test_a_rename_survives_a_reload(
     )
     RenameCommand.execute(new_name="demo", session_manager=session_manager)
 
-    reopened = SessionManager(storage_manager, root=storage_manager.root)
+    reopened = SessionManager(
+        storage_manager,
+        SessionConfiguration.from_settings(Settings.default()),
+        root=storage_manager.root,
+    )
     restored = reopened.load(session.id)
 
     assert restored.name == "demo"
     assert reopened.registry.get(session.id).name == "demo"
+
+
+def test_fork_renames_a_named_source_to_main_and_names_the_child(
+    configured: SettingsManager, session_manager: SessionManager, tmp_path: Path
+) -> None:
+    """A named, non-fork source becomes ``:main``; the child gets a fork suffix."""
+    first = session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+    RenameCommand.execute(new_name="demo", session_manager=session_manager)
+
+    result = ForkCommand.execute(session_manager=session_manager)
+
+    forked = session_manager.current
+    assert forked is not first
+    assert first.name == "demo:main"
+    assert re.fullmatch(r"demo:fork_\d{14}", forked.name)
+    assert result == f"Session {first.name} forked to {forked.name}"
+    assert forked.forked_from == first.id
+
+
+def test_forking_a_fork_does_not_rename_it_again_and_reuses_the_base_name(
+    configured: SettingsManager, session_manager: SessionManager, tmp_path: Path
+) -> None:
+    """Re-forking a fork must not rename it or pile up ``:fork_`` suffixes."""
+    session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+    RenameCommand.execute(new_name="demo", session_manager=session_manager)
+    ForkCommand.execute(session_manager=session_manager)
+    first_fork = session_manager.current
+    first_fork_name = first_fork.name
+
+    ForkCommand.execute(session_manager=session_manager)
+
+    second_fork = session_manager.current
+    assert first_fork.name == first_fork_name
+    assert re.fullmatch(r"demo:fork_\d{14}", second_fork.name)
+
+
+def test_forking_an_unnamed_session_leaves_names_untouched(
+    configured: SettingsManager, session_manager: SessionManager, tmp_path: Path
+) -> None:
+    """Without a name, a fork keeps behaving exactly as before this convention."""
+    first = session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+
+    result = ForkCommand.execute(session_manager=session_manager)
+
+    forked = session_manager.current
+    assert forked is not first
+    assert forked.name == forked.id
+    assert result == f"Session {first.id} forked to {forked.id}"
+
+
+def test_fork_copies_the_source_session_s_events_under_a_new_id(
+    configured: SettingsManager, session_manager: SessionManager, tmp_path: Path
+) -> None:
+    """Forking must duplicate the source's events onto a fresh identity."""
+    source = session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+    session_manager.session_recorder.message(UserMessage(content="hi"))
+    events_before_fork = [event.record for event in source.events[1:]]
+
+    ForkCommand.execute(session_manager=session_manager)
+
+    forked = session_manager.current
+    assert forked.id != source.id
+    assert [event.record for event in forked.events[1:]] == events_before_fork
+    header = json.loads(forked.path.read_text().splitlines()[0])
+    assert header["forked_from"] == source.id
+
+
+def test_fork_confirmation_is_also_recorded_into_the_source(
+    configured: SettingsManager, session_manager: SessionManager, tmp_path: Path
+) -> None:
+    """The source's replayed log must show the fork happened, not just the fork's.
+
+    ``ForkCommand`` only owns the write into the source: the write into the fork itself
+    (now the open chat) is the executor's generic post-command write, exercised
+    separately in ``tests/test_executor.py``.
+    """
+    source = session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+    session_manager.session_recorder.message(UserMessage(content="hi"))
+
+    result = ForkCommand.execute(session_manager=session_manager)
+
+    assert result in [event.record.get("content") for event in source.events]
+    saved_lines = source.path.read_text().splitlines()
+    assert any(json.loads(line).get("content") == result for line in saved_lines)
+
+
+def test_forking_a_chat_that_was_never_saved_writes_no_log(
+    configured: SettingsManager, session_manager: SessionManager, tmp_path: Path
+) -> None:
+    """A fork of nothing is still a switch, but it has nothing to persist."""
+    source = session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+
+    ForkCommand.execute(session_manager=session_manager)
+
+    forked = session_manager.current
+    assert forked is not source
+    assert forked.forked_from == source.id
+    assert not source.path.exists()
+    assert not forked.path.exists()
+
+
+def test_fork_copies_file_read_state_without_aliasing_it(
+    configured: SettingsManager, session_manager: SessionManager, tmp_path: Path
+) -> None:
+    """The read-first guard state must carry over without being aliased."""
+    source = session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+    session_manager.session_recorder.file_state("/tmp/a", 1.0)
+
+    ForkCommand.execute(session_manager=session_manager)
+
+    forked = session_manager.current
+    assert forked.file_states == source.file_states
+    forked.file_states["/tmp/b"] = 2.0
+    assert "/tmp/b" not in source.file_states
+
+
+def test_a_fork_survives_a_reload_with_its_provenance_intact(
+    configured: SettingsManager,
+    session_manager: SessionManager,
+    storage_manager: StorageManager,
+    tmp_path: Path,
+) -> None:
+    """A forked session's provenance and history must be durable, not just live."""
+    session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+    session_manager.session_recorder.message(UserMessage(content="hi"))
+    source_history = session_manager.model_history()
+    source_id = session_manager.current.id
+
+    ForkCommand.execute(session_manager=session_manager)
+    forked = session_manager.current
+
+    reopened = SessionManager(
+        storage_manager,
+        SessionConfiguration.from_settings(Settings.default()),
+        root=storage_manager.root,
+    )
+    restored = reopened.load(forked.id)
+
+    assert restored.forked_from == source_id
+    assert reopened.model_history() == source_history
+
+
+def test_fork_leaves_the_live_agent_and_ui_untouched(
+    configured: SettingsManager,
+    app: RecordingApp,
+    agent: Agent,
+    session_manager: SessionManager,
+    tmp_path: Path,
+) -> None:
+    """Forking duplicates persisted identity only; nothing visible resets."""
+    session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+    agent.add_message_to_history(UserMessage(content="earlier"))
+
+    ForkCommand.execute(session_manager=session_manager)
+
+    assert agent._message_history == [UserMessage(content="earlier")]
+    assert app.cleared == 0
+    assert app.populated == 0
+
+
+def test_resume_by_the_shared_base_name_finds_a_source_and_its_fork(
+    configured: SettingsManager, session_manager: SessionManager, tmp_path: Path
+) -> None:
+    """A named source and its fork share a base name a query can find both by."""
+    source = session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+    RenameCommand.execute(new_name="demo", session_manager=session_manager)
+
+    ForkCommand.execute(session_manager=session_manager)
+    forked = session_manager.current
+
+    matches = {entry.id for entry in session_manager.registry.find("demo")}
+    assert matches == {source.id, forked.id}
 
 
 def test_exit_asks_the_app_to_quit(app: RecordingApp) -> None:

@@ -82,19 +82,21 @@ provider file (e.g. `litellm.py`); adding a provider means a new `BaseClient` su
 with its own builder/parser trio, not touching the core loop.
 
 **Wiring** (`ui/__main__.py:main`) — build order matters: `StorageManager` →
-`SessionManager` → `UIController` → two `LiteLLMClient`s (main *streaming*, summary *non-streaming*, thinking
+`UIController` → two `LiteLLMClient`s (main *streaming*, summary *non-streaming*, thinking
 disabled) → `ToolManager` → `PermissionManager` → `Agent` → `SettingsManager.load()`
 (neither `PermissionManager` nor `Agent` receives the `SessionManager`: core does not save)
 (validates `settings.yml` and applies the result to the live objects, returning any
-fallback messages) → Textual `App`, which also receives the `SettingsManager` so
+fallback messages) → `SessionManager` → Textual `App`, which also receives the
+`SettingsManager` so
 settings-mutating commands (e.g. `/model`) can apply and persist their changes, and the
 `load()` messages as `startup_messages`, rendered once in `on_mount`. The controller is
 created before the app because app→agent→permission-manager→controller; `controller.app`
-is assigned once the app exists. `main()` does **not** create a session — `SessionManager`
-starts with no `current` session, and `ActionExecutor.ensure_session()` creates one lazily,
-on the first action the user actually takes (see **Sessions** below), so closing the app
-without ever typing anything — or having typed only `/exit` (or its `/quit` alias) — leaves
-no session file behind.
+is assigned once the app exists. The `SessionManager` comes **after** `SettingsManager.load()`
+because its constructor opens the process's session and that session snapshots the loaded
+settings — built earlier, its header would record the defaults. Its `current` is therefore
+never `None`; what is deferred is the *log*, which reaches disk on the first write that has
+something to save (see **Sessions** below), so closing the app without ever typing anything
+— or having typed only `/exit` (or its `/quit` alias) — leaves no session file behind.
 
 **Messages** (`core/messages.py`) — the lingua franca between clients, agent and UI. Every
 message carries `content` (fed to the model) and `display_text` (shown in the UI), plus
@@ -307,49 +309,75 @@ loop limits and permission grants (which rebuilds the tool catalog) into the liv
 
 **Sessions** (`sessions/`) — `SessionManager` decides *which* chat is active and owns the
 read side; `SessionRecorder` (`sessions/recorder.py`) owns the **write** side; `StorageManager`
-does only file I/O. No session exists until the user's first action, and quitting is not
-one: `ActionExecutor.ensure_session(action)` calls `SessionManager.create` the first time
-`session_manager.current` is `None`, unless `action` resolves to `ExitCommand` (its `/quit`
-alias included, matched by class via `COMMAND_REGISTRY`, same as the `ClearCommand`/
-`ResumeCommand` check below) — a no-op either way once a session already exists. This keeps
-opening arancio and immediately typing `/quit` (or `/exit`) consistent with ctrl+c, which
-quits without running any action at all: neither leaves a two-record junk session behind.
-`App._run_agent` therefore resolves the action *first*, then calls `ensure_session(action)`
-— the one caller that can tell `ensure_session` whether this action only quits. Its `except`
-branch (a malformed prompt, which never reaches action resolution) calls `ensure_session()`
-with no argument instead, since a bad prompt is a real attempted turn and always earns a
-session for the `ErrorMessage` it writes through `session_recorder.message` directly, not
-through the executor. Because of this ordering, `execute`'s prompt/shell/command branches
-can assume a session already exists — except a plain `/quit` at the very start, which
-`ActionExecutor._record_command` guards by checking `session_manager.current` before
-writing, rather than assuming `ensure_session` always ran a session into being. `App` doesn't
+does only file I/O. **A session always exists; its log does not.**
+`SessionManager.__init__` ends with `create()`, so `current` is a `Session` from
+construction on and no consumer handles its absence. What is deferred is persistence:
+`SessionRecorder.created()` only *adds* the `session_created` header to `session.events`,
+leaving it unsaved, and `flush()` — which walks every unsaved event in order and already
+uses `create_file` for the first one — carries it to disk under the first write that has
+something to save. An untouched chat therefore leaves no file.
+
+Which commands must never supply that first write is named once, as
+`commands/registry.py:SESSION_DISCARDING_COMMANDS` — a frozenset of the classes that
+end or switch the active chat: `ExitCommand` (`/exit`, `/quit`), `ClearCommand`
+(`/clear`, `/new`), `ForkCommand` and `ResumeCommand`. It is keyed by **class**, so
+aliases come along for free, and it drives two rules in `ActionExecutor`: *when* the
+typed line is recorded — before the command runs, since the chat it belongs to is about
+to be replaced — and *whether* anything is written at all. The second rule is the single
+predicate `_writes_nothing(command)`, the only place the executor reads
+`created_on_disk`, and it covers every write the executor makes for such a command: the
+typed line (`_record_command`), the result message (`/fork`'s confirmation, `/resume`'s
+"multiple matches", "already current" and directory-fallback notices) and the error from
+a command that raised or whose arguments did not bind (`/resume <unknown>`). All three
+are still shown; they are only not saved. Once the chat has a log, the same command is
+recorded like any other, so a `/quit` mid-chat still shows up in the replayed log. The
+result-message check runs *after* the command, so `/fork`'s confirmation is weighed
+against the fork, not the session it came from. `ForkCommand` is the one command that
+writes on its own, and its `session_recorder.flush()` is likewise conditional on the
+**source** being `created_on_disk`: forking an unsaved chat switches to the fork without
+writing either of them. Two holes are deliberate: an unknown command (`/quti`) and a
+malformed prompt still write their error and so create the log — they are real mistakes
+the session keeps, and neither resolves to a command the set could recognize. Nothing
+in `App._run_agent` orders itself
+around this any more: it resolves the action and executes it, and its `except` branch (a
+malformed prompt) writes the `ErrorMessage` through `session_recorder.message` directly,
+which persists the header along with it. `App` doesn't
 hold its own `settings_manager` reference (checked: it's
 passed straight into the `ActionExecutor` it builds and only used inline once at `__init__`),
-which is why this lives on `ActionExecutor` rather than `App`. The chain is
+which is why the recording lives on `ActionExecutor` rather than `App`. The chain is
 `ActionExecutor` → `SessionRecorder` → `SessionManager`:
 the recorder holds the manager and asks it which chat is open, so a caller passes only what it
 wants written (`session_recorder.message(msg)`, not `record_message(session, msg)`). `SessionManager`
 has **no** `record_*` methods; it exposes three seams the recorder uses — the
-`session_recorder` property, `get_current_session()` (the open chat) and `after_write(session)` (registry sync).
+`session_recorder` property, `current` (the open chat) and `after_write(session)` (registry sync).
 `ActionExecutor` reaches the recorder as `session_manager.session_recorder` at each point of
 use, and holds the manager itself because `/clear` receives it through
 `INJECTABLE_COMMAND_PARAMETERS`.
 
 The recorder builds each event record, applies the state change it describes, appends it to
 the session and flushes it, including the recovery-offset retry after a failed write.
-**`flush()` is the single funnel** — every write reaches it through `event()` — so it is the
+**`flush()` is the single funnel** — every write reaches it through `event()`, the creation
+header being the one record added outside it, which then rides along with the first real
+write — so it is the
 one place that calls `SessionManager.after_write`, and only on success. That keeps the
 registry true without any caller remembering to sync it, and keeps `_register_durable_session`
 and `_update_registry_entry` private to the manager. Both are idempotent, so running them on
-every successful write is cheaper than tracking which write needs which.
+every successful write is cheaper than tracking which write needs which. `event()` always
+flushes whichever chat `session_manager.current` reports; `flush()` itself takes an optional
+`session` (defaulting to the current one) so `ForkCommand` — the one command that writes on
+its own — can reach `SessionRecorder.message_into(session, ...)` to persist the same message
+into a session that is **not** current (the source, once `create()` has already switched
+`current` to the new fork). It is the one deliberate exception to "the recorder always asks
+which chat is open," and it skips the file-state sync `message()` does,
+since that concerns the open chat's tool reads, not a session that just stopped being current.
 
 The recorder is built as
 `SessionRecorder(storage_manager, self, self._tool_session)` inside
 `SessionManager.__init__`, receiving a half-built manager: it only stores the reference,
 and first reads it on the earliest write. `create()` and `load()` must therefore set `self._current` **before** calling
 the recorder — they do. The recorder also
-writes the two records nobody asks for explicitly: `created` stamps the `session_created`
-header that opens a log (the schema version lives in `sessions/constants.py` as
+builds the two records nobody asks for explicitly: `created` stamps the `session_created`
+header that opens a log, unsaved (the schema version lives in `sessions/constants.py` as
 `SESSION_FORMAT_VERSION`, since the recorder writes it and the manager validates it on read),
 and `close_interrupted_tool_calls` gives a loaded session's unanswered tool calls a synthetic
 tool error. **No class other than the recorder builds a session record or writes the log** —
@@ -436,10 +464,9 @@ finds it under its new name without waiting for a restart to re-scan the registr
 `/clear` (aliased as `/new`) discards the old session's unsaved in-memory
 events, restores global settings, resets file-read safety state and starts a new session
 under the current CWD. Because it replaces the open chat, the executor writes its command
-line *before* running it, and keys that on `command in {ClearCommand, ResumeCommand}` rather
-than the typed name, so every alias of `/clear` is covered and `/resume` is too, whether or
-not it ends up replacing the session — pre-recording is harmless either way, since when it
-doesn't replace the session the line lands in the same still-current chat it would have
+line *before* running it, and keys that on `SESSION_DISCARDING_COMMANDS` rather than the
+typed name, so every alias is covered — and so is `ExitCommand`, which replaces nothing,
+making pre-recording harmless: the line lands in the same still-current chat it would have
 anyway.
 
 `/resume <id-or-name>` is `restore_runtime`'s first caller. `SessionRegistry.find`
@@ -457,6 +484,42 @@ move. `set_working_directory` mirrors that move to the process via `os.chdir`, s
 the log (`App.populate_log`, factored out of `on_mount` for this reuse), and refreshes the
 toolbar's model/effort display, returning `None` on success — the repopulated log is the
 confirmation, the same way `/clear`'s effect is only ever seen, never announced in-band.
+
+`/fork` (`commands/fork.py`) is `create()`'s second caller after plain session creation:
+`create()` gained `explicit_name`/`forked_from` parameters so it stays the one place a session's
+identity and header are built, but it only builds an empty session — `ForkCommand` itself decides
+what a fork carries over, the same way `ClearCommand` (not `discard_and_create`) decides to reset
+the agent and UI. `ForkCommand` calls `create()` with the source session's `working_directory`, a
+deep-copied `configuration`, its `explicit_name` and `forked_from=source.id`, then copies every
+event but the header from `source.events` onto the new session and its `file_states`, and flushes
+once through `session_manager.session_recorder`. The new header's `forked_from` is `None` on every
+non-forked session (`SessionValidator.read` reads it directly off the header, bypassing
+`_state_from_record` since it isn't part of a `state_changed` snapshot). Unlike `/clear`, nothing
+in memory is discarded — agent history and the `ToolSession` guard survive untouched, since
+forking duplicates the conversation's persisted identity rather than
+starting a new one. Unlike `/resume`, there is no `clear_log`/`populate_log`/toolbar refresh,
+since nothing rendered changes. `ForkCommand` is in `SESSION_DISCARDING_COMMANDS` for the
+same reason as the others: it too replaces `session_manager.current`.
+
+A named source that is not itself already a fork (`forked_from is None`) is renamed to
+`{base_name}:main` before the switch, so its lineage stays visible; the new child is always
+named `{base_name}:fork_<YYYYMMDDHHMMSS>`. `base_name` strips any trailing `:main` or
+`:fork_<14 digits>` off the source's current name first, so re-forking a fork chains off the
+original name instead of nesting suffixes, and `SessionRegistry.find`'s existing substring
+match on `entry.name` already resolves a query for the shared base to both sessions — no
+change needed there. An unnamed source is untouched, and the confirmation keeps using ids
+instead of names, exactly as before this convention existed. The rename, when it happens, is
+persisted via the ordinary `session_recorder.state_changed()` while `source` is still current
+— a named session is always already `created_on_disk` by construction (naming only ever
+happens through `/rename`, which flushes immediately, or through a previous fork, which
+flushes its child right away too), so this is never a session's first write. The events
+copied onto the fork are snapshotted **before** that rename, so the rename's own
+`state_changed` record stays source-only and never shows up in the fork's replayed history.
+The confirmation itself is recorded into both logs: the executor's generic post-command write
+puts it into the fork (current by the time the executor gets to it), and `ForkCommand` puts
+the same text into `source` directly via `session_recorder.message_into` (see **Sessions**
+above), under the same `if source.created_on_disk:` guard that already decides whether the
+fork gets a log at all.
 
 Session events are kept in memory with a runtime-only `saved` flag. Failed writes leave events
 unsaved and remember the starting byte offset; a later save truncates the unconfirmed tail and
@@ -476,7 +539,8 @@ path/mtime state so a resumed session restores its read-first guard only for unc
   `base.py`, and for a tool also add its `harness/tools/<snake_name>/` prompt pair; for a
   command register it in `commands/registry.py`, and subclass
   `commands/state_change.py:StateChangeCommand` instead when it changes the session's saved
-  configuration, working directory or name.
+  configuration, working directory or name. A command that ends or switches the active
+  session also goes into `commands/registry.py:SESSION_DISCARDING_COMMANDS`.
 - **Git**: branches `feature/snake_case` or `fix/snake_case`; commit messages in past tense
   naming the file(s) touched. Do not mention the contribution of coding agents (including
   Claude) in commit messages — attribute commits to the human author only.

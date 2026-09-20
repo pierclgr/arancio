@@ -44,7 +44,7 @@ class CdCommand(StateChangeCommand):
             persistence error notice when saving the change failed.
         """
         application.set_working_directory(path)
-        session = session_manager.get_current_session()
+        session = session_manager.current
         session.working_directory = application.working_directory
         return cls._persist_state_change(
             session_manager, f"Working directory set to {application.working_directory}"

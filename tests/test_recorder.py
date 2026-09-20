@@ -130,7 +130,9 @@ def _open_session(
     Returns:
         The manager and the open session's log path.
     """
-    manager = SessionManager(storage, root=storage.root, tool_session=ToolSession())
+    manager = SessionManager(
+        storage, _configuration(), root=storage.root, tool_session=ToolSession()
+    )
     session = manager.create(working_directory=tmp_path, configuration=_configuration())
     return manager, session.path
 
@@ -169,6 +171,7 @@ def test_a_streaming_fragment_is_dropped_before_it_reaches_the_log(
     session = session_manager.create(
         working_directory=tmp_path, configuration=_configuration()
     )
+    session_manager.session_recorder.message(AssistantMessage(content="whole"))
     before = len(_records(session.path))
 
     assert (
@@ -263,7 +266,9 @@ def test_a_failed_write_is_rolled_back_and_retried(
     the log permanently.
     """
     manager, log = _open_session(flaky, tmp_path)
-    session = manager.get_current_session()
+    session = manager.current
+    # the header is what the retry must append after, so it has to land first
+    assert manager.session_recorder.flush() is None
     confirmed = flaky.file_size(log)
     flaky.fail_append = True
 
@@ -291,10 +296,15 @@ def test_a_session_whose_first_write_failed_leaves_nothing_behind(
     not on disk or in the registry yet.
     """
     flaky.create_error = OSError("read-only file system")
-    manager = SessionManager(flaky, root=flaky.root, tool_session=ToolSession())
+    manager = SessionManager(
+        flaky, _configuration(), root=flaky.root, tool_session=ToolSession()
+    )
 
     session = manager.create(working_directory=tmp_path, configuration=_configuration())
 
+    error = manager.session_recorder.message(UserMessage(content="hello"))
+
+    assert isinstance(error, ErrorMessage)
     assert session.created_on_disk is False
     assert session.recovery_offset is None
     assert not session.path.exists()
@@ -306,10 +316,15 @@ def test_a_colliding_log_name_records_no_recovery_offset(
 ) -> None:
     """Nothing was written, so there is no unconfirmed tail to roll back."""
     flaky.create_error = FileExistsError("already there")
-    manager = SessionManager(flaky, root=flaky.root, tool_session=ToolSession())
+    manager = SessionManager(
+        flaky, _configuration(), root=flaky.root, tool_session=ToolSession()
+    )
 
     session = manager.create(working_directory=tmp_path, configuration=_configuration())
 
+    error = manager.session_recorder.message(UserMessage(content="hello"))
+
+    assert isinstance(error, ErrorMessage)
     assert session.recovery_offset is None
     assert session.created_on_disk is False
 
@@ -321,6 +336,10 @@ def test_a_successful_write_registers_the_session(
     session = session_manager.create(
         working_directory=tmp_path, configuration=_configuration()
     )
+
+    assert session_manager.registry.contains(session.id) is False
+
+    session_manager.session_recorder.message(UserMessage(content="hello"))
 
     assert session_manager.registry.contains(session.id) is True
 

@@ -111,7 +111,11 @@ class SessionEvent:
 
 @dataclass
 class Session:
-    """One chat session and the events needed to restore it."""
+    """One chat session and the events needed to restore it.
+
+    A session forked from another carries the source session's ID in ``forked_from``; it
+    is ``None`` for a session created or resumed normally.
+    """
 
     id: str
     created_at: datetime
@@ -120,6 +124,7 @@ class Session:
     path: Path
     configuration: SessionConfiguration
     explicit_name: str | None = None
+    forked_from: str | None = None
     events: list[SessionEvent] = field(default_factory=list)
     recovery_offset: int | None = None
     created_on_disk: bool = True

@@ -6,6 +6,7 @@ from arancio.core.permissions.manager import PermissionManager
 from arancio.core.tools.manager import ToolManager
 from arancio.core.tools.session import shared_session
 from arancio.sessions.manager import SessionManager
+from arancio.sessions.session import SessionConfiguration
 from arancio.settings.manager import SettingsManager
 from arancio.storage.manager import StorageManager
 from arancio.ui.app import App
@@ -17,11 +18,11 @@ def main() -> None:
 
     The controller is built first (the app it drives needs the agent, which needs the
     permission manager, which needs the controller); its ``app`` is assigned once the
-    app exists.
+    app exists. The session manager comes after the settings are loaded, because the
+    session it opens snapshots them.
     """
     storage_manager = StorageManager()
     storage_manager.bind_litellm_login_dir()
-    session_manager = SessionManager(storage_manager, tool_session=shared_session)
 
     controller = UIController()
     client = LiteLLMClient(stream=True, controller=controller)
@@ -42,7 +43,13 @@ def main() -> None:
         summary_client=summary_client,
         agent=agent,
     )
-    _settings, startup_messages = settings_manager.load()
+    settings, startup_messages = settings_manager.load()
+
+    session_manager = SessionManager(
+        storage_manager,
+        configuration=SessionConfiguration.from_settings(settings),
+        tool_session=shared_session,
+    )
 
     app = App(
         agent=agent,
@@ -52,7 +59,9 @@ def main() -> None:
         startup_messages=startup_messages,
     )
     controller.app = app
-    app.run()
+    # leaves the terminal's own mouse-tracking off, so the terminal emulator's native
+    # text selection works instead of Textual capturing clicks/drags
+    app.run(mouse=False)
 
 
 if __name__ == "__main__":

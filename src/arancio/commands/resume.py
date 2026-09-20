@@ -60,7 +60,8 @@ class ResumeCommand(BaseCommand):
             own effect.
 
         Raises:
-            ValueError: when no session matches ``query``.
+            ValueError: when no session matches ``query``, or when the match
+                is already the current session.
         """
         matches = session_manager.registry.find(query)
         if not matches:
@@ -70,6 +71,9 @@ class ResumeCommand(BaseCommand):
             return f"Multiple sessions match {query!r}: {listing}"
 
         entry = matches[0]
+        if session_manager.current.id == entry.id:
+            raise ValueError(f"Session {query} is the current session.")
+
         working_directory, warning = session_manager.restore_runtime(
             entry.id,
             agent,

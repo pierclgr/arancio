@@ -25,7 +25,9 @@ from arancio.core.tools import base as tools_base
 from arancio.core.tools.manager import ToolManager
 from arancio.core.tools.session import shared_session
 from arancio.sessions.manager import SessionManager
+from arancio.sessions.session import SessionConfiguration
 from arancio.settings.manager import SettingsManager
+from arancio.settings.settings import Settings
 from arancio.storage import manager as storage_module
 from arancio.storage.manager import StorageManager
 
@@ -148,9 +150,13 @@ def session_manager(storage_manager: StorageManager) -> SessionManager:
         storage_manager: the storage manager doing the file I/O.
 
     Returns:
-        A session manager with no session open yet.
+        A session manager whose session is open but not yet written to disk.
     """
-    return SessionManager(storage_manager, root=storage_manager.root)
+    return SessionManager(
+        storage_manager,
+        configuration=SessionConfiguration.from_settings(Settings.default()),
+        root=storage_manager.root,
+    )
 
 
 @pytest.fixture

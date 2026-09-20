@@ -127,9 +127,8 @@ class App(TextualApp):
 
     def populate_log(self) -> None:
         """Render the active session's visible messages into the log."""
-        if self._session_manager.current:
-            for message in self._session_manager.visible_messages():
-                self._mount(self._render(message))
+        for message in self._session_manager.visible_messages():
+            self._mount(self._render(message))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Start an agent turn when the prompt input is submitted.
@@ -171,17 +170,12 @@ class App(TextualApp):
             # goes to the model. all yield a message stream rendered the same way
             resolved_arguments = PromptManager.resolve_prompt(text)
             action = ActionFactory.create_action(raw_input=text, **resolved_arguments)
-            # the first action of the run creates the session, unless it only
-            # quits, in which case there is no chat to leave behind
-            self._action_executor.ensure_session(action)
             for message in self._action_executor.execute(action):
                 self.call_from_thread(self._handle_message, message)
         except ValueError as exc:
             # a malformed prompt (e.g. an unclosed quote) is a real attempted
-            # turn, so it earns a session, reported like any other failure
-            # instead of killing the worker thread, and saved so a resumed
-            # log keeps the only trace of that turn
-            self._action_executor.ensure_session()
+            # turn, reported like any other failure instead of killing the
+            # worker thread, and saved so a resumed log keeps its only trace
             error = ErrorMessage(content=f"Invalid prompt: {exc}")
             save_error = self._session_manager.session_recorder.message(error)
             self.call_from_thread(self._handle_message, error)

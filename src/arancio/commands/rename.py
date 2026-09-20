@@ -34,11 +34,11 @@ class RenameCommand(StateChangeCommand):
                 session is renamed.
 
         Returns:
-            Confirmation text naming the session and its new name, or the
+            Confirmation text naming the session's new name, or the
             persistence error notice when saving the change failed.
         """
-        session = session_manager.get_current_session()
+        session = session_manager.current
         session.name = new_name
         return cls._persist_state_change(
-            session_manager, f"Session {session.id} renamed to {new_name!r}"
+            session_manager, f"Session renamed to {new_name!r}"
         )

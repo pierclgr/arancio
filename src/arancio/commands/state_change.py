@@ -37,7 +37,7 @@ class StateChangeCommand(BaseCommand):
                 session's configuration is updated.
             settings_manager: the manager holding the just-applied settings.
         """
-        session = session_manager.get_current_session()
+        session = session_manager.current
         session.configuration = SessionConfiguration.from_settings(
             settings_manager.settings
         )
