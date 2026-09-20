@@ -498,7 +498,7 @@ def test_resume_with_more_than_one_match_lists_them_instead_of_resuming(
     session_manager.registry.entries.append(
         SessionRegistryEntry(
             id="second",
-            name=f"{first.name}-copy",
+            explicit_name=f"{first.name}-copy",
             working_directory=tmp_path,
             configuration=SessionConfiguration.from_settings(configured.settings),
             log_path=tmp_path / "second.jsonl",

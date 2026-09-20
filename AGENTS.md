@@ -382,6 +382,13 @@ outcome is unknown. Every session starts with a versioned creation record carryi
 name, configuration and working directory, and later `state_changed` and `file_state_changed`
 records update its state.
 
+Session names store only an explicit choice: `Session.explicit_name` defaults to `None`,
+while the `name` property returns the ID when unset. Assigning `session.name` updates the
+explicit value; assigning `None` clears it. Creation and state records keep the required
+`"name"` field as `null` or a string, never materializing the fallback. Scans and registry
+entries preserve that nullable value; registry entries expose the same `name` fallback
+for search and display. No migration of older logs is performed.
+
 The session's name, command-controlled provider, model, thinking effort, complete permission map
 and working directory are restored without overwriting global `settings.yml` defaults.
 `session_recorder.state_changed()` takes no arguments: it only reads the session's *current*

@@ -446,7 +446,7 @@ def test_find_resolves_an_exact_id_over_a_name_match(
     session_manager.registry.entries.append(
         SessionRegistryEntry(
             id="other",
-            name=f"prefix-{session.id}-suffix",
+            explicit_name=f"prefix-{session.id}-suffix",
             working_directory=tmp_path,
             configuration=_configuration(),
             log_path=tmp_path / "other.jsonl",
@@ -575,3 +575,77 @@ def test_an_orphan_checksum_file_is_ignored(
         entry.log_path.name != "nosuchsession.jsonl"
         for entry in manager.registry.entries
     )
+
+
+@pytest.mark.parametrize("explicit_name", [None, "demo", ""])
+def test_session_name_fallback_survives_round_trip(
+    session_manager: SessionManager,
+    storage_manager: StorageManager,
+    tmp_path: Path,
+    explicit_name: str | None,
+) -> None:
+    """Only explicit names are stored; display names fall back without mutation."""
+    session = session_manager.create(tmp_path, _configuration())
+    assert session.explicit_name is None
+    assert session.name == session.id
+    assert session.explicit_name is None
+    assert json.loads(session.path.read_text().splitlines()[0])["name"] is None
+    session.name = explicit_name
+    session_manager.session_recorder.state_changed()
+    assert (
+        json.loads(session.path.read_text().splitlines()[-1])["name"] == explicit_name
+    )
+    reopened = _reopen(session, storage_manager)
+    restored = reopened.current
+    expected = session.id if explicit_name is None else explicit_name
+    assert restored.explicit_name == explicit_name
+    assert restored.name == expected
+    for manager in (session_manager, reopened):
+        entry = manager.registry.get(session.id)
+        assert entry.explicit_name == explicit_name
+        assert entry.name == expected
+        assert manager.registry.find(session.id) == [entry]
+        assert entry in manager.registry.find(expected[:8])
+
+
+def test_clearing_session_name_restores_id_fallback(
+    session_manager: SessionManager,
+    storage_manager: StorageManager,
+    tmp_path: Path,
+) -> None:
+    """Clearing a previous name persists null and restores the ID label."""
+    session = session_manager.create(tmp_path, _configuration())
+    session.name = "demo"
+    session_manager.session_recorder.state_changed()
+    session.name = None
+    session_manager.session_recorder.state_changed()
+    restored = _reopen(session, storage_manager).current
+    assert restored.explicit_name is None
+    assert restored.name == session.id
+
+
+@pytest.mark.parametrize("invalid_name", [123, False, [], {}, "missing"])
+@pytest.mark.parametrize("record_type", ["session_created", "state_changed"])
+def test_invalid_session_names_are_rejected(
+    session_manager: SessionManager,
+    storage_manager: StorageManager,
+    tmp_path: Path,
+    invalid_name: object,
+    record_type: str,
+) -> None:
+    """Both state record types require a name containing a string or null."""
+    from arancio.sessions.validator import SessionValidator
+
+    session = session_manager.create(tmp_path, _configuration())
+    if record_type == "state_changed":
+        session_manager.session_recorder.state_changed()
+    records = [json.loads(line) for line in session.path.read_text().splitlines()]
+    if invalid_name == "missing":
+        del records[-1]["name"]
+    else:
+        records[-1]["name"] = invalid_name
+    session.path.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+    validator = SessionValidator(storage_manager)
+    assert validator.scan(session.path).status == "damaged"
+    with pytest.raises(ValueError, match="name is missing or invalid"):
+        validator.read(session.path)

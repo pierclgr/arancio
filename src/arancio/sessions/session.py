@@ -114,16 +114,30 @@ class Session:
     """One chat session and the events needed to restore it."""
 
     id: str
-    name: str
     created_at: datetime
     creation_working_directory: Path
     working_directory: Path
     path: Path
     configuration: SessionConfiguration
+    explicit_name: str | None = None
     events: list[SessionEvent] = field(default_factory=list)
     recovery_offset: int | None = None
     created_on_disk: bool = True
     file_states: dict[str, float] = field(default_factory=dict)
+
+    @property
+    def name(self) -> str:
+        """Return the explicit name, or the ID when no name is set."""
+        return self.id if self.explicit_name is None else self.explicit_name
+
+    @name.setter
+    def name(self, value: str | None) -> None:
+        """Set the explicit name, or clear it with ``None``.
+
+        Args:
+            value: the explicit name to store.
+        """
+        self.explicit_name = value
 
     def add_event(self, record: dict[str, Any], saved: bool = False) -> SessionEvent:
         """Append one event to this session's ordered log.

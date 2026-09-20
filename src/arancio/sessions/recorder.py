@@ -88,7 +88,7 @@ class SessionRecorder:
                 "format_version": SESSION_FORMAT_VERSION,
                 "timestamp": session.created_at.isoformat(),
                 "id": session.id,
-                "name": session.name,
+                "name": session.explicit_name,
                 "creation_working_directory": str(session.creation_working_directory),
                 "working_directory": str(session.working_directory),
                 "configuration": session.configuration.to_dict(),
@@ -176,7 +176,7 @@ class SessionRecorder:
                 "timestamp": self._utc_timestamp(),
                 "configuration": session.configuration.to_dict(),
                 "working_directory": str(session.working_directory),
-                "name": session.name,
+                "name": session.explicit_name,
             }
         )
 

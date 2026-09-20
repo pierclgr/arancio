@@ -26,7 +26,7 @@ from arancio.storage.manager import StorageManager
 class SessionScan:
     """What the registry needs from one session log: metadata plus integrity."""
 
-    name: str
+    explicit_name: str | None
     working_directory: Path | None
     configuration: SessionConfiguration | None
     status: Literal["healthy", "unverified", "damaged"]
@@ -57,12 +57,11 @@ class SessionValidator:
         Returns:
             The scan result with recovered metadata and integrity status.
         """
-        session_id = path.stem
         try:
             configuration, working_directory, name = self._scan_state(path)
         except (OSError, ValueError) as exc:
             return SessionScan(
-                name=session_id,
+                explicit_name=None,
                 working_directory=None,
                 configuration=None,
                 status="damaged",
@@ -71,20 +70,20 @@ class SessionValidator:
         matches = SessionChecksum.verify(path)
         if matches is None:
             return SessionScan(
-                name=name,
+                explicit_name=name,
                 working_directory=working_directory,
                 configuration=configuration,
                 status="unverified",
             )
         if matches:
             return SessionScan(
-                name=name,
+                explicit_name=name,
                 working_directory=working_directory,
                 configuration=configuration,
                 status="healthy",
             )
         return SessionScan(
-            name=name,
+            explicit_name=name,
             working_directory=working_directory,
             configuration=configuration,
             status="damaged",
@@ -120,6 +119,7 @@ class SessionValidator:
         created_at = self._parse_datetime(self._required_string(first, "timestamp"))
         creation_directory = self._absolute_path(first, "creation_working_directory")
 
+        self._state_from_record(first)
         latest_state_record = first
         for record in records[1:]:
             if record.get("type") == "state_changed":
@@ -130,7 +130,7 @@ class SessionValidator:
 
         session = Session(
             id=session_id,
-            name=name,
+            explicit_name=name,
             created_at=created_at,
             creation_working_directory=creation_directory,
             working_directory=working_directory,
@@ -151,7 +151,7 @@ class SessionValidator:
         """
         SessionChecksum.write(path)
 
-    def _scan_state(self, path: Path) -> tuple[SessionConfiguration, Path, str]:
+    def _scan_state(self, path: Path) -> tuple[SessionConfiguration, Path, str | None]:
         """Recover a session's latest state snapshot without a full parse.
 
         Reads every line, but only inspects each one's ``type`` to find the
@@ -187,7 +187,7 @@ class SessionValidator:
     @staticmethod
     def _state_from_record(
         record: dict[str, Any],
-    ) -> tuple[SessionConfiguration, Path, str]:
+    ) -> tuple[SessionConfiguration, Path, str | None]:
         """Build the configuration, working directory and name a state snapshot carries.
 
         Shared by :meth:`_scan_state` and :meth:`read`, both of which need to
@@ -198,13 +198,18 @@ class SessionValidator:
             record: the winning ``session_created`` or ``state_changed`` record.
 
         Returns:
-            The record's configuration, absolute working directory and name.
+            The record's configuration, absolute working directory and explicit name.
+
+        Raises:
+            ValueError: when the name is absent or neither a string nor null.
         """
         configuration = SessionConfiguration.from_dict(
             SessionValidator._required_mapping(record, "configuration")
         )
         working_directory = SessionValidator._absolute_path(record, "working_directory")
-        name = SessionValidator._required_string(record, "name")
+        name = record.get("name")
+        if "name" not in record or (name is not None and not isinstance(name, str)):
+            raise ValueError("name is missing or invalid")
         return configuration, working_directory, name
 
     def _apply_record(self, session: Session, record: dict[str, Any]) -> None:

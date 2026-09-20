@@ -21,12 +21,17 @@ class SessionRegistryEntry:
     """One discovered session file and its restoration status."""
 
     id: str
-    name: str
     working_directory: Path | None
     configuration: SessionConfiguration | None
     log_path: Path
     status: Literal["healthy", "unverified", "damaged"]
+    explicit_name: str | None = None
     damage_reason: str | None = None
+
+    @property
+    def name(self) -> str:
+        """Return the explicit name, or the ID when no name is set."""
+        return self.id if self.explicit_name is None else self.explicit_name
 
 
 class SessionRegistry:
@@ -148,7 +153,7 @@ class SessionRegistry:
         scan = self._validator.scan(path)
         return SessionRegistryEntry(
             id=path.stem,
-            name=scan.name,
+            explicit_name=scan.explicit_name,
             working_directory=scan.working_directory,
             configuration=scan.configuration,
             log_path=path,

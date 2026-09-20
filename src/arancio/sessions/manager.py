@@ -126,7 +126,6 @@ class SessionManager:
         )
         session = Session(
             id=session_id,
-            name=session_id,
             created_at=created_at,
             creation_working_directory=resolved_directory,
             working_directory=resolved_directory,
@@ -293,7 +292,7 @@ class SessionManager:
         self._registry.entries.append(
             SessionRegistryEntry(
                 id=session.id,
-                name=session.name,
+                explicit_name=session.explicit_name,
                 working_directory=session.working_directory,
                 configuration=session.configuration,
                 log_path=session.path,
@@ -311,7 +310,7 @@ class SessionManager:
             if entry.log_path == session.path:
                 entry.working_directory = session.working_directory
                 entry.configuration = session.configuration
-                entry.name = session.name
+                entry.explicit_name = session.explicit_name
                 return
 
     def _new_id(self) -> str:
