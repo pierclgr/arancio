@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Type
 
 from arancio.commands.base import BaseCommand
 from arancio.commands.clear import ClearCommand
+from arancio.commands.exit import ExitCommand
 from arancio.commands.registry import COMMAND_REGISTRY
 from arancio.commands.resume import ResumeCommand
 from arancio.core.agents import Agent
@@ -82,19 +83,46 @@ class ActionExecutor:
         self._settings_manager: SettingsManager = settings_manager
         self._session_manager: SessionManager = session_manager
 
-    def ensure_session(self) -> None:
+    def ensure_session(self, action: BaseAction | None = None) -> None:
         """Create the active session on first use, not at process startup.
 
         A no-op once a session already exists, so the caller doesn't need to know
-        whether this is the first action of the run.
+        whether this is the first action of the run. Quitting never opens a chat:
+        an ``/exit`` (or its ``/quit`` alias) typed into a fresh app leaves no
+        session file behind, matching ctrl+c, which quits without one either. An
+        unresolved action (``None``) always gets a session, since the caller
+        cannot yet tell whether it will turn out to be a quit.
+
+        Args:
+            action: the action about to run, or ``None`` when it has not been
+                resolved yet.
         """
-        if self._session_manager.current is None:
-            self._session_manager.create(
-                working_directory=self._application.working_directory,
-                configuration=SessionConfiguration.from_settings(
-                    self._settings_manager.settings
-                ),
-            )
+        if self._session_manager.current is not None or self._quits(action):
+            return
+        self._session_manager.create(
+            working_directory=self._application.working_directory,
+            configuration=SessionConfiguration.from_settings(
+                self._settings_manager.settings
+            ),
+        )
+
+    @staticmethod
+    def _quits(action: BaseAction | None) -> bool:
+        """Report whether the action does nothing but quit the application.
+
+        Keyed on the command class rather than the typed name, so ``/exit``
+        and its ``/quit`` alias are both covered.
+
+        Args:
+            action: the action to check.
+
+        Returns:
+            Whether the action is a slash command resolving to ``ExitCommand``.
+        """
+        return (
+            isinstance(action, CommandAction)
+            and COMMAND_REGISTRY.get(action.name) is ExitCommand
+        )
 
     def execute(self, action: BaseAction) -> Iterator[Message]:
         """Execute the action, producing its output messages.
@@ -198,6 +226,26 @@ class ActionExecutor:
         yield error
         yield from self._yield_notices(save_error)
 
+    def _record_command(self, action: CommandAction) -> ErrorMessage | None:
+        """Record the typed command line, unless there is no session to record it in.
+
+        The only way there is no active session at this point is that
+        :meth:`ensure_session` deliberately skipped creating one for a plain
+        quit, so there is nowhere to write and nothing lost by not writing.
+
+        Args:
+            action: the command action to record.
+
+        Returns:
+            The temporary persistence error notice, or ``None`` when the
+            write succeeded or there was no session to write it into.
+        """
+        if self._session_manager.current is None:
+            return None
+        return self._session_manager.session_recorder.command(
+            raw_input=action.raw_input, name=action.name, args=action.args
+        )
+
     def _execute_command(self, action: CommandAction) -> Iterator[Message]:
         """Bind the action's words to the command's parameters and run it.
 
@@ -230,15 +278,7 @@ class ActionExecutor:
             return
 
         already_recorded = command in {ClearCommand, ResumeCommand}
-        command_error = (
-            self._session_manager.session_recorder.command(
-                raw_input=action.raw_input,
-                name=action.name,
-                args=action.args,
-            )
-            if already_recorded
-            else None
-        )
+        command_error = self._record_command(action) if already_recorded else None
         try:
             result = self._application.call_from_thread(command.run, **kwargs)
         except Exception as exc:
@@ -249,11 +289,7 @@ class ActionExecutor:
             return
 
         if not already_recorded:
-            command_error = self._session_manager.session_recorder.command(
-                raw_input=action.raw_input,
-                name=action.name,
-                args=action.args,
-            )
+            command_error = self._record_command(action)
 
         if result is None:
             yield from self._yield_notices(command_error)

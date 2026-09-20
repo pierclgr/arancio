@@ -33,6 +33,7 @@ from arancio.sessions.manager import SessionManager
 from arancio.sessions.session import SessionConfiguration
 from arancio.settings.manager import SettingsManager
 from arancio.settings.settings import Settings
+from arancio.storage.manager import StorageManager
 
 
 @pytest.fixture
@@ -132,7 +133,7 @@ def test_ensure_session_creates_one_only_on_first_call(
 def test_running_an_action_from_a_session_less_executor_needs_ensure_session_first(
     bare_executor: ActionExecutor, session_manager: SessionManager
 ) -> None:
-    """This is what ``App._run_agent`` does before resolving the prompt.
+    """This is what ``App._run_agent`` does once the action is resolved.
 
     ``execute`` alone still assumes a session exists (only ``_run_agent``'s ``except``
     branch and ``execute`` both need one, so the check has to run before either);
@@ -140,16 +141,51 @@ def test_running_an_action_from_a_session_less_executor_needs_ensure_session_fir
     """
     assert session_manager.current is None
 
-    bare_executor.ensure_session()
-    list(
-        bare_executor.execute(
-            CommandAction(name="effort", args=["low"], raw_input="/effort low")
-        )
-    )
+    action = CommandAction(name="effort", args=["low"], raw_input="/effort low")
+    bare_executor.ensure_session(action)
+    list(bare_executor.execute(action))
 
     assert session_manager.current is not None
     assert any(
         record.get("type") == "state_changed" for record in _records(session_manager)
+    )
+
+
+@pytest.mark.parametrize("name", ["quit", "exit"])
+def test_quitting_a_fresh_executor_leaves_no_session_behind(
+    bare_executor: ActionExecutor,
+    session_manager: SessionManager,
+    app: RecordingApp,
+    storage_manager: StorageManager,
+    name: str,
+) -> None:
+    """Quitting immediately must not leave a two-line junk session on disk.
+
+    Covers both ``/exit`` and its ``/quit`` alias, matching ctrl+c, which quits without
+    ever running an action at all.
+    """
+    action = CommandAction(name=name, args=[], raw_input=f"/{name}")
+
+    bare_executor.ensure_session(action)
+    list(bare_executor.execute(action))
+
+    assert session_manager.current is None
+    assert app.exited is True
+    assert list(storage_manager.root.rglob("*.jsonl")) == []
+
+
+def test_quitting_an_existing_session_is_still_recorded(
+    executor: ActionExecutor, session_manager: SessionManager
+) -> None:
+    """Quitting mid-chat must not silently drop the line from the log."""
+    action = CommandAction(name="quit", args=[], raw_input="/quit")
+
+    executor.ensure_session(action)
+    list(executor.execute(action))
+
+    assert any(
+        record.get("type") == "command" and record.get("raw_input") == "/quit"
+        for record in _records(session_manager)
     )
 
 

@@ -93,7 +93,8 @@ created before the app because app→agent→permission-manager→controller; `c
 is assigned once the app exists. `main()` does **not** create a session — `SessionManager`
 starts with no `current` session, and `ActionExecutor.ensure_session()` creates one lazily,
 on the first action the user actually takes (see **Sessions** below), so closing the app
-without ever typing anything leaves no session file behind.
+without ever typing anything — or having typed only `/exit` (or its `/quit` alias) — leaves
+no session file behind.
 
 **Messages** (`core/messages.py`) — the lingua franca between clients, agent and UI. Every
 message carries `content` (fed to the model) and `display_text` (shown in the UI), plus
@@ -306,13 +307,23 @@ loop limits and permission grants (which rebuilds the tool catalog) into the liv
 
 **Sessions** (`sessions/`) — `SessionManager` decides *which* chat is active and owns the
 read side; `SessionRecorder` (`sessions/recorder.py`) owns the **write** side; `StorageManager`
-does only file I/O. No session exists until the user's first action: `ActionExecutor
-.ensure_session()` calls `SessionManager.create` the first time `session_manager.current`
-is `None`, a no-op after that. `App._run_agent` calls it before resolving the submitted
-text — before the `try` that can itself fail and write an `ErrorMessage` through
-`session_recorder.message` directly, not through the executor — so both that failure path
-and every action type (`execute`'s prompt/shell/command branches) can assume a session
-already exists. `App` doesn't hold its own `settings_manager` reference (checked: it's
+does only file I/O. No session exists until the user's first action, and quitting is not
+one: `ActionExecutor.ensure_session(action)` calls `SessionManager.create` the first time
+`session_manager.current` is `None`, unless `action` resolves to `ExitCommand` (its `/quit`
+alias included, matched by class via `COMMAND_REGISTRY`, same as the `ClearCommand`/
+`ResumeCommand` check below) — a no-op either way once a session already exists. This keeps
+opening arancio and immediately typing `/quit` (or `/exit`) consistent with ctrl+c, which
+quits without running any action at all: neither leaves a two-record junk session behind.
+`App._run_agent` therefore resolves the action *first*, then calls `ensure_session(action)`
+— the one caller that can tell `ensure_session` whether this action only quits. Its `except`
+branch (a malformed prompt, which never reaches action resolution) calls `ensure_session()`
+with no argument instead, since a bad prompt is a real attempted turn and always earns a
+session for the `ErrorMessage` it writes through `session_recorder.message` directly, not
+through the executor. Because of this ordering, `execute`'s prompt/shell/command branches
+can assume a session already exists — except a plain `/quit` at the very start, which
+`ActionExecutor._record_command` guards by checking `session_manager.current` before
+writing, rather than assuming `ensure_session` always ran a session into being. `App` doesn't
+hold its own `settings_manager` reference (checked: it's
 passed straight into the `ActionExecutor` it builds and only used inline once at `__init__`),
 which is why this lives on `ActionExecutor` rather than `App`. The chain is
 `ActionExecutor` → `SessionRecorder` → `SessionManager`:
