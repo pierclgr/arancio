@@ -122,11 +122,11 @@ def test_ensure_session_creates_one_only_on_first_call(
     assert session_manager.current is None
 
     bare_executor.ensure_session()
-    first = session_manager.require_current()
+    first = session_manager.get_current_session()
 
     bare_executor.ensure_session()
 
-    assert session_manager.require_current() is first
+    assert session_manager.get_current_session() is first
 
 
 def test_running_an_action_from_a_session_less_executor_needs_ensure_session_first(
@@ -162,7 +162,7 @@ def _records(session_manager: SessionManager) -> List[dict]:
     Returns:
         One decoded record per line.
     """
-    path = session_manager.require_current().path
+    path = session_manager.get_current_session().path
     return [json.loads(line) for line in path.read_text().splitlines() if line]
 
 

@@ -5,8 +5,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from arancio.commands.base import BaseCommand
+from arancio.core.messages import ErrorMessage
 
 if TYPE_CHECKING:
+    from arancio.sessions.manager import SessionManager
     from arancio.ui.app import App
 
 
@@ -17,8 +19,10 @@ class CdCommand(BaseCommand):
     description = "Change the working directory."
 
     @classmethod
-    def execute(cls, path: str, application: App) -> str:
-        """Move the working directory to ``path``.
+    def execute(
+        cls, path: str, application: App, session_manager: SessionManager
+    ) -> str | ErrorMessage:
+        """Move the working directory to ``path`` and record it on the session.
 
         Resolution and validation are left to
         :meth:`~arancio.ui.app.App.set_working_directory`, which raises
@@ -31,9 +35,18 @@ class CdCommand(BaseCommand):
                 currently set; an absolute path is taken as-is. ``~`` is
                 expanded.
             application: the running app whose working directory is moved.
+            session_manager: the active session manager, whose current
+                session's working directory is updated to match and whose
+                recorder persists the change.
 
         Returns:
-            Confirmation text naming the new working directory.
+            Confirmation text naming the new working directory, or the
+            persistence error notice when saving the change failed.
         """
         application.set_working_directory(path)
+        session = session_manager.get_current_session()
+        session.working_directory = application.working_directory
+        error = session_manager.session_recorder.state_changed()
+        if error is not None:
+            return error
         return f"Working directory set to {application.working_directory}"

@@ -11,6 +11,7 @@ from arancio.commands.hello_world import HelloWorldCommand
 from arancio.commands.model import ModelCommand
 from arancio.commands.permissions import PermissionsCommand
 from arancio.commands.provider import ProviderCommand
+from arancio.commands.rename import RenameCommand
 from arancio.commands.resume import ResumeCommand
 
 # register a command by adding an entry keyed by its name; aliases point at the
@@ -27,4 +28,5 @@ COMMAND_REGISTRY: Dict[str, Type[BaseCommand]] = {
     "new": ClearCommand,
     CdCommand.name: CdCommand,
     ResumeCommand.name: ResumeCommand,
+    RenameCommand.name: RenameCommand,
 }

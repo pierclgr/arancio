@@ -263,7 +263,7 @@ def test_a_failed_write_is_rolled_back_and_retried(
     the log permanently.
     """
     manager, log = _open_session(flaky, tmp_path)
-    session = manager.require_current()
+    session = manager.get_current_session()
     confirmed = flaky.file_size(log)
     flaky.fail_append = True
 
@@ -325,10 +325,14 @@ def test_a_successful_write_registers_the_session(
     assert session_manager.registry.contains(session.id) is True
 
 
-def test_a_configuration_change_updates_the_session_and_the_log(
+def test_state_changed_persists_the_sessions_current_fields(
     session_manager: SessionManager, tmp_path: Path
 ) -> None:
-    """The in-memory session and its log must not drift apart."""
+    """Mutating the session is the caller's job; the recorder only persists.
+
+    An unresolved directory is used deliberately: the recorder must write
+    exactly what is on the session, not resolve or otherwise normalize it.
+    """
     session = session_manager.create(
         working_directory=tmp_path, configuration=_configuration()
     )
@@ -338,24 +342,15 @@ def test_a_configuration_change_updates_the_session_and_the_log(
         thinking_effort=None,
         permissions={c: PermissionLevel.AUTO for c in PermissionCategory},
     )
-
-    session_manager.session_recorder.state_changed(changed, session.working_directory)
-
-    assert session.configuration == changed
-    assert _records(session.path)[-1]["type"] == "state_changed"
-
-
-def test_a_directory_change_is_resolved_before_it_is_stored(
-    session_manager: SessionManager, tmp_path: Path
-) -> None:
-    """A relative or symlinked path would not survive a restart."""
-    session = session_manager.create(
-        working_directory=tmp_path, configuration=_configuration()
-    )
     nested = tmp_path / "sub"
-    nested.mkdir()
+    session.configuration = changed
+    session.working_directory = nested
+    session.name = "demo"
 
-    session_manager.session_recorder.state_changed(session.configuration, nested)
+    assert session_manager.session_recorder.state_changed() is None
 
-    assert session.working_directory == nested.resolve()
-    assert _records(session.path)[-1]["type"] == "state_changed"
+    record = _records(session.path)[-1]
+    assert record["type"] == "state_changed"
+    assert record["configuration"] == changed.to_dict()
+    assert record["working_directory"] == str(nested)
+    assert record["name"] == "demo"

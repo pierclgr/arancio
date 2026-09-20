@@ -5,9 +5,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from arancio.commands.base import BaseCommand
+from arancio.core.messages import ErrorMessage
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
+from arancio.sessions.session import SessionConfiguration
 
 if TYPE_CHECKING:
+    from arancio.sessions.manager import SessionManager
     from arancio.settings.manager import SettingsManager
 
 
@@ -22,8 +25,9 @@ class PermissionsCommand(BaseCommand):
         cls,
         category: str,
         settings_manager: SettingsManager,
+        session_manager: SessionManager,
         level: str | None = None,
-    ) -> str:
+    ) -> str | ErrorMessage:
         """Report or replace the autonomy level for a permission category.
 
         With only ``category``, reports its currently set level, or that none
@@ -39,13 +43,18 @@ class PermissionsCommand(BaseCommand):
                 bound to the prompt's first word.
             settings_manager: the manager used to read, apply and persist the
                 permission grants.
+            session_manager: the active session manager, whose current
+                session's configuration is updated to match and whose
+                recorder persists a mutating change; unused when only
+                reading the current level.
             level: the new autonomy level (e.g. ``"ask"``/``"auto"``), or
                 ``"null"`` to remove the grant; bound to the prompt's second
                 word. Omitted to only report the current level.
 
         Returns:
             The current level (when only reading) or confirmation text naming
-            the newly set level.
+            the newly set level, or the persistence error notice when saving
+            a mutating change failed.
 
         Raises:
             ValueError: when ``category`` does not name an existing category,
@@ -74,6 +83,9 @@ class PermissionsCommand(BaseCommand):
             )
             settings_manager.apply()
             settings_manager.save_permission(resolved_category)
+            error = cls._record_configuration(session_manager, settings_manager)
+            if error is not None:
+                return error
             return f"{resolved_category.name.lower()} permission removed"
 
         try:
@@ -90,7 +102,30 @@ class PermissionsCommand(BaseCommand):
         settings_manager.settings.permissions[resolved_category] = new_level
         settings_manager.apply()
         settings_manager.save_permission(resolved_category)
+        error = cls._record_configuration(session_manager, settings_manager)
+        if error is not None:
+            return error
         return (
             f"{resolved_category.name.lower()} permission level set to "
             f"{new_level.value}"
         )
+
+    @classmethod
+    def _record_configuration(
+        cls, session_manager: SessionManager, settings_manager: SettingsManager
+    ) -> ErrorMessage | None:
+        """Snapshot the live settings onto the session and persist the change.
+
+        Args:
+            session_manager: the active session manager, whose current
+                session's configuration is updated.
+            settings_manager: the manager holding the just-applied settings.
+
+        Returns:
+            The temporary persistence error notice, or ``None`` on success.
+        """
+        session = session_manager.get_current_session()
+        session.configuration = SessionConfiguration.from_settings(
+            settings_manager.settings
+        )
+        return session_manager.session_recorder.state_changed()

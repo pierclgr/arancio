@@ -210,7 +210,7 @@ class SessionManager:
         """
         return [
             message_from_record(event.record)
-            for event in self.require_current().events
+            for event in self.get_current_session().events
             if is_message_record(event.record)
             and event.record.get("in_history") is True
         ]
@@ -225,7 +225,7 @@ class SessionManager:
             The normalized visible messages in original event order.
         """
         messages: list[Message] = []
-        for event in self.require_current().events:
+        for event in self.get_current_session().events:
             record = event.record
             if record.get("visible") is not True:
                 continue
@@ -237,7 +237,7 @@ class SessionManager:
 
     def restore_file_states(self) -> None:
         """Restore unchanged file-read safety records without reading file content."""
-        for path, mtime in self.require_current().file_states.items():
+        for path, mtime in self.get_current_session().file_states.items():
             target = Path(path)
             if target.is_file() and target.stat().st_mtime == mtime:
                 self._tool_session.record_read(path=path, mtime=mtime)
@@ -253,14 +253,13 @@ class SessionManager:
             The usable working directory and a temporary user-facing error when
             a fallback was necessary.
         """
-        session = self.require_current()
+        session = self.get_current_session()
         if session.working_directory.is_dir():
             return session.working_directory, None
         missing = session.working_directory
         resolved_fallback = fallback.resolve()
-        save_error = self._session_recorder.state_changed(
-            session.configuration, resolved_fallback
-        )
+        session.working_directory = resolved_fallback
+        save_error = self._session_recorder.state_changed()
         message = (
             f"Saved working directory no longer exists: {missing}; "
             f"using {resolved_fallback}."
@@ -312,6 +311,7 @@ class SessionManager:
             if entry.log_path == session.path:
                 entry.working_directory = session.working_directory
                 entry.configuration = session.configuration
+                entry.name = session.name
                 return
 
     def _new_id(self) -> str:
@@ -341,7 +341,7 @@ class SessionManager:
         digest = hashlib.sha256(raw_path.encode("utf-8")).hexdigest()[:16]
         return f"--{readable}--{digest}"
 
-    def require_current(self) -> Session:
+    def get_current_session(self) -> Session:
         """Return the active session or fail before an unscoped operation.
 
         Returns:

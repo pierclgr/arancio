@@ -59,7 +59,7 @@ class SessionValidator:
         """
         session_id = path.stem
         try:
-            name, working_directory, configuration = self._scan_state(path, session_id)
+            configuration, working_directory, name = self._scan_state(path)
         except (OSError, ValueError) as exc:
             return SessionScan(
                 name=session_id,
@@ -117,7 +117,6 @@ class SessionValidator:
         session_id = self._required_string(first, "id")
         if session_id != path.stem:
             raise ValueError("Session ID does not match filename")
-        name = self._required_string(first, "name")
         created_at = self._parse_datetime(self._required_string(first, "timestamp"))
         creation_directory = self._absolute_path(first, "creation_working_directory")
 
@@ -125,7 +124,9 @@ class SessionValidator:
         for record in records[1:]:
             if record.get("type") == "state_changed":
                 latest_state_record = record
-        configuration, working_directory = self._state_from_record(latest_state_record)
+        configuration, working_directory, name = self._state_from_record(
+            latest_state_record
+        )
 
         session = Session(
             id=session_id,
@@ -150,24 +151,20 @@ class SessionValidator:
         """
         SessionChecksum.write(path)
 
-    def _scan_state(
-        self, path: Path, session_id: str
-    ) -> tuple[str, Path, SessionConfiguration]:
-        """Recover a session's display name and its latest state snapshot.
+    def _scan_state(self, path: Path) -> tuple[SessionConfiguration, Path, str]:
+        """Recover a session's latest state snapshot without a full parse.
 
         Reads every line, but only inspects each one's ``type`` to find the
-        winning record; only that one record's configuration and working
-        directory are actually validated and built, unlike :meth:`read`,
-        which validates every line's own schema too.
+        winning record; only that one record's configuration, working
+        directory and name are actually validated and built, unlike
+        :meth:`read`, which validates every line's own schema too.
 
         Args:
             path: the JSONL session path.
-            session_id: the ID derived from the filename, used as a fallback name.
 
         Returns:
-            The header's name, and the working directory and configuration of
-            the last ``state_changed`` record, or the header's own when none
-            exists.
+            The configuration, working directory and name of the last
+            ``state_changed`` record, or the header's own when none exists.
 
         Raises:
             ValueError: when the first line is missing, not a session header,
@@ -179,36 +176,36 @@ class SessionValidator:
         first = self._parse_line(lines[0], 1)
         if first.get("type") != "session_created":
             raise ValueError("Missing session_created record")
-        name = first.get("name")
-        name = name if isinstance(name, str) else session_id
 
         latest = first
         for index, line in enumerate(lines[1:], 2):
             record = self._parse_line(line, index)
             if record.get("type") == "state_changed":
                 latest = record
-        configuration, working_directory = self._state_from_record(latest)
-        return name, working_directory, configuration
+        return self._state_from_record(latest)
 
     @staticmethod
-    def _state_from_record(record: dict[str, Any]) -> tuple[SessionConfiguration, Path]:
-        """Build the configuration and working directory a state snapshot carries.
+    def _state_from_record(
+        record: dict[str, Any],
+    ) -> tuple[SessionConfiguration, Path, str]:
+        """Build the configuration, working directory and name a state snapshot carries.
 
         Shared by :meth:`_scan_state` and :meth:`read`, both of which need to
         turn a ``session_created`` or ``state_changed`` record into the same
-        two values.
+        three values.
 
         Args:
             record: the winning ``session_created`` or ``state_changed`` record.
 
         Returns:
-            The record's configuration and absolute working directory.
+            The record's configuration, absolute working directory and name.
         """
         configuration = SessionConfiguration.from_dict(
             SessionValidator._required_mapping(record, "configuration")
         )
         working_directory = SessionValidator._absolute_path(record, "working_directory")
-        return configuration, working_directory
+        name = SessionValidator._required_string(record, "name")
+        return configuration, working_directory, name
 
     def _apply_record(self, session: Session, record: dict[str, Any]) -> None:
         """Validate one non-creation record and apply it to session state.

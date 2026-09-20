@@ -5,8 +5,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from arancio.commands.base import BaseCommand
+from arancio.core.messages import ErrorMessage
+from arancio.sessions.session import SessionConfiguration
 
 if TYPE_CHECKING:
+    from arancio.sessions.manager import SessionManager
     from arancio.settings.manager import SettingsManager
     from arancio.ui.app import App
 
@@ -19,8 +22,12 @@ class ModelCommand(BaseCommand):
 
     @classmethod
     def execute(
-        cls, model_name: str, application: App, settings_manager: SettingsManager
-    ) -> str:
+        cls,
+        model_name: str,
+        application: App,
+        settings_manager: SettingsManager,
+        session_manager: SessionManager,
+    ) -> str | ErrorMessage:
         """Replace the model name in the current model id and apply it.
 
         ``provider`` and ``model_name`` are stored as separate settings
@@ -35,9 +42,13 @@ class ModelCommand(BaseCommand):
                 new model id.
             settings_manager: the manager used to apply and persist the
                 change.
+            session_manager: the active session manager, whose current
+                session's configuration is updated to match and whose
+                recorder persists the change.
 
         Returns:
-            Confirmation text naming the resulting model id.
+            Confirmation text naming the resulting model id, or the
+            persistence error notice when saving the change failed.
 
         Raises:
             ValueError: when no provider is currently configured (propagated
@@ -55,4 +66,9 @@ class ModelCommand(BaseCommand):
         settings_manager.apply()
         settings_manager.save_model_name()
         application.set_displayed_model_id(model_id)
+        session = session_manager.get_current_session()
+        session.configuration = SessionConfiguration.from_settings(settings)
+        error = session_manager.session_recorder.state_changed()
+        if error is not None:
+            return error
         return f"Model set to {model_id}"

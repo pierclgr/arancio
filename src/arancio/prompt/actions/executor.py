@@ -255,10 +255,8 @@ class ActionExecutor:
                 args=action.args,
             )
 
-        state_error = self._session_effect_of(action)
-
         if result is None:
-            yield from self._yield_notices(command_error, state_error)
+            yield from self._yield_notices(command_error)
             return
         message = (
             AssistantMessage(content=result) if isinstance(result, str) else result
@@ -269,7 +267,7 @@ class ActionExecutor:
         else:
             result_error = None
         yield message
-        yield from self._yield_notices(command_error, state_error, result_error)
+        yield from self._yield_notices(command_error, result_error)
 
     def _build_command_kwargs(
         self, command: Type[BaseCommand], args: list[str]
@@ -341,28 +339,6 @@ class ActionExecutor:
         yield from self._yield_notices(save_error)
         yield from self._session_manager.session_recorder.record_stream(
             self._agent.run(message, prelude=prelude)
-        )
-
-    def _session_effect_of(self, action: CommandAction) -> ErrorMessage | None:
-        """Persist whatever session state a successful local command changed.
-
-        Only the executor knows which command changes what, so the mapping lives
-        here; the write itself is a direct recorder call.
-
-        Args:
-            action: the successfully executed local command.
-
-        Returns:
-            A persistence error notice, or ``None`` when no session state
-            changed or the write succeeded.
-        """
-        changes_configuration = action.name in {"provider", "model", "effort"}
-        changes_permission = action.name == "permissions" and len(action.args) > 1
-        if not (action.name == "cd" or changes_configuration or changes_permission):
-            return None
-        return self._session_manager.session_recorder.state_changed(
-            SessionConfiguration.from_settings(self._settings_manager.settings),
-            self._application.working_directory,
         )
 
     @classmethod

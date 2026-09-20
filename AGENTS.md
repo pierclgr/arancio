@@ -230,17 +230,13 @@ manager at the point of use, never cached. `_execute_prompt` records the user me
 just built, then wraps `agent.run(...)` in `session_recorder.record_stream` and yields the
 whole stream. What to skip lives in `SessionRecorder.message`, and every recorder write
 returns an `ErrorMessage | None` rather than an error string, so the executor has nothing
-left to wrap. The one exception is `_session_effect_of`, which maps a
-finished command to the session write it needs — `/cd`, `/provider`, `/model`, `/effort` and
-a mutating `/permissions` all resolve to the same `session_recorder.state_changed(...)` call,
-since each one leaves the chat with a new configuration and/or working directory that must be
-snapshotted together (see **Sessions** below): that mapping is command knowledge, not record
-knowledge, so it stays here while the write itself is a direct recorder call. This keeps
-saving out of core. Two asymmetries: the initial user message is
-recorded before the loop rather than from it, since it must replay on restore but
-`ui/app.py:145` already mounted the typed text, so yielding it would render it twice; and
-the `!` attribution line is recorded with `visible=False`, the one write that asks to stay
-out of the replayed log while staying in model history.
+left to wrap. The executor has no session-effect mapping of its own: which command changes
+what session state is each command's own knowledge, not the executor's (see **Sessions**
+below for `/cd`, `/provider`, `/model`, `/effort` and `/permissions`). Two asymmetries: the
+initial user message is recorded before the loop rather than from it, since it must replay
+on restore but `ui/app.py:145` already mounted the typed text, so yielding it would render
+it twice; and the `!` attribution line is recorded with `visible=False`, the one write that
+asks to stay out of the replayed log while staying in model history.
 
 A command's plain-string result is wrapped into an `AssistantMessage` by
 the executor. A slash command subclasses `BaseCommand`, sets `name`/`description`,
@@ -319,7 +315,7 @@ which is why this lives on `ActionExecutor` rather than `App`. The chain is
 the recorder holds the manager and asks it which chat is open, so a caller passes only what it
 wants written (`session_recorder.message(msg)`, not `record_message(session, msg)`). `SessionManager`
 has **no** `record_*` methods; it exposes three seams the recorder uses — the
-`session_recorder` property, `require_current()` (the open chat) and `after_write(session)` (registry sync).
+`session_recorder` property, `get_current_session()` (the open chat) and `after_write(session)` (registry sync).
 `ActionExecutor` reaches the recorder as `session_manager.session_recorder` at each point of
 use, and holds the manager itself because `/clear` receives it through
 `INJECTABLE_COMMAND_PARAMETERS`.
@@ -368,30 +364,48 @@ entries; `model_history` and `visible_messages` are each **one walk** over the e
 command has no message record of its own. A saved tool call with no paired
 result receives a synthetic model-facing tool error during restoration so the model knows its
 outcome is unknown. Every session starts with a versioned creation record carrying its initial
-configuration and working directory, and later `state_changed` and `file_state_changed`
+name, configuration and working directory, and later `state_changed` and `file_state_changed`
 records update its state.
 
-The session's command-controlled provider, model, thinking effort, complete permission map and
-working directory are restored without overwriting global `settings.yml` defaults.
-`session_recorder.state_changed(configuration, working_directory)` is the single write behind
-all of `/cd`, `/provider`, `/model`, `/effort` and a mutating `/permissions`: it snapshots both
-fields together as one `state_changed` record rather than writing them as two independently-timed
-event types. Because that record is a complete snapshot, the bottom-most one already *is* the
-session's current state on its own, so reading it back never needs to replay the record-by-record
-mutation a two-event-type schema would have required: `SessionValidator._state_from_record`
-converts a `session_created`/`state_changed` record into `(configuration, working_directory)`
-once, and both readers of that final state build on it — `_scan_state` (replacing the old
+The session's name, command-controlled provider, model, thinking effort, complete permission map
+and working directory are restored without overwriting global `settings.yml` defaults.
+`session_recorder.state_changed()` takes no arguments: it only reads the session's *current*
+`configuration`/`working_directory`/`name` and persists them together as one `state_changed`
+record — **mutating those fields is not the recorder's job**. Each command that changes one of
+them mutates the session itself, then calls `state_changed()` to persist the result: `CdCommand`
+sets `session.working_directory` to the app's new (already-resolved) directory; `ModelCommand`,
+`ProviderCommand`, `EffortCommand` and the mutating branches of `PermissionsCommand` (the latter
+via a small `_record_configuration` helper, since it has two mutating branches) set
+`session.configuration = SessionConfiguration.from_settings(settings_manager.settings)` after
+applying and persisting the settings change; `RenameCommand` sets `session.name`. All three
+fields are re-sent together regardless of which one changed, so the log carries one atomic
+record of "the state at this point" rather than several independently-timed event types. Each
+of these commands is injected `session_manager` (`prompt/actions/constants.py`) for exactly this;
+the executor itself has no session-effect mapping — `ActionExecutor` only records the command's
+own confirmation text and its `command` line, nothing about session state. If `state_changed()`
+returns a persistence error, the command returns that `ErrorMessage` in place of its usual
+confirmation string, so the failure still reaches the user, from the command itself. Because the
+persisted record is a complete snapshot, the bottom-most one already *is* the session's current
+state on its own, so reading it back never needs to replay a record-by-record mutation:
+`SessionValidator._state_from_record` converts a `session_created`/`state_changed` record into
+`(configuration, working_directory, name)` once, and both readers of that final state build on
+it — `_scan_state` (replacing the old
 header-only `_read_header`) walks every line of a log checking only `type`, keeping the last
 `state_changed` (or the header) without validating any non-winning record's shape, so
 `SessionRegistry` (built once per process at startup) reflects every session's true last-known
-configuration and working directory, not its stale creation-time header; `read` still walks the
-whole log regardless, since message history requires it, but now derives the final
-`Session.configuration`/`working_directory` from `_state_from_record` once rather than via
-`_apply_record` mutating them on every `state_changed` occurrence it passes — `_apply_record`'s
+name, configuration and working directory, not its stale creation-time header; `read` still
+walks the whole log regardless, since message history requires it, but now derives the final
+`Session.configuration`/`working_directory`/`name` from `_state_from_record` once rather than
+via `_apply_record` mutating them on every `state_changed` occurrence it passes — `_apply_record`'s
 `state_changed` branch still validates every record's shape (so "every line is validated" still
 holds for a full `read`), it just no longer supplies the final value. `/provider`, `/model`,
 `/effort` and `/permissions` update both their session snapshot and the corresponding global
-default field. `/clear` (aliased as `/new`) discards the old session's unsaved in-memory
+default field; `/rename` (`commands/rename.py`) has no global counterpart to update — a session's
+name is session-only state, unlike its configuration. `_update_registry_entry`
+(`manager.py`) syncs a renamed active session's own registry entry immediately, the same way it
+already keeps `working_directory`/`configuration` current, so a same-process `/resume` search
+finds it under its new name without waiting for a restart to re-scan the registry.
+`/clear` (aliased as `/new`) discards the old session's unsaved in-memory
 events, restores global settings, resets file-read safety state and starts a new session
 under the current CWD. Because it replaces the open chat, the executor writes its command
 line *before* running it, and keys that on `command in {ClearCommand, ResumeCommand}` rather

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from arancio.core.messages import (
@@ -22,7 +21,7 @@ from arancio.sessions.codec import (
     message_to_record,
 )
 from arancio.sessions.constants import SESSION_FORMAT_VERSION
-from arancio.sessions.session import Session, SessionConfiguration
+from arancio.sessions.session import Session
 from arancio.storage.manager import StorageManager
 
 if TYPE_CHECKING:
@@ -74,7 +73,7 @@ class SessionRecorder:
         Returns:
             The manager's open session.
         """
-        return self._session_manager.require_current()
+        return self._session_manager.get_current_session()
 
     def created(self) -> ErrorMessage | None:
         """Record the creation header that opens a session log.
@@ -158,31 +157,26 @@ class SessionRecorder:
             if error:
                 yield error
 
-    def state_changed(
-        self, configuration: SessionConfiguration, working_directory: Path
-    ) -> ErrorMessage | None:
-        """Record a complete snapshot of the session's command-controlled state.
+    def state_changed(self) -> ErrorMessage | None:
+        """Record the session's current configuration, working directory and name.
 
-        Configuration and working directory are always recorded together, so
-        the log carries one atomic record of "the state at this point" rather
-        than two independently-timed ones.
-
-        Args:
-            configuration: the active configuration for the chat.
-            working_directory: the active absolute working directory.
+        The caller is responsible for updating those fields on the session before
+        calling this; the recorder only builds the record and persists it. All
+        three are always recorded together, so the log carries one atomic record
+        of "the state at this point" rather than several independently-timed
+        ones.
 
         Returns:
             The temporary persistence error notice, or ``None`` on success.
         """
         session = self._session()
-        session.configuration = configuration
-        session.working_directory = working_directory.resolve()
         return self.event(
             {
                 "type": "state_changed",
                 "timestamp": self._utc_timestamp(),
-                "configuration": configuration.to_dict(),
+                "configuration": session.configuration.to_dict(),
                 "working_directory": str(session.working_directory),
+                "name": session.name,
             }
         )
 

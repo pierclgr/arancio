@@ -102,7 +102,7 @@ def _reopen(
     Returns:
         A second manager that read the log back.
     """
-    session_id = session_manager.require_current().id
+    session_id = session_manager.get_current_session().id
     reopened = SessionManager(
         storage_manager, root=storage_manager.root, tool_session=ToolSession()
     )
@@ -164,7 +164,7 @@ def test_a_whole_turn_replays_for_both_the_user_and_the_model(
         produced[1].content,
         "the file says alpha",
     ]
-    assert reopened.require_current().file_states[str(target.resolve())] == (
+    assert reopened.get_current_session().file_states[str(target.resolve())] == (
         target.stat().st_mtime
     )
 
@@ -283,7 +283,7 @@ def test_reopening_restores_the_last_state_changed_snapshot(
     )
 
     reopened = _reopen(session_manager, storage_manager)
-    restored = reopened.require_current()
+    restored = reopened.get_current_session()
 
     assert restored.working_directory == (tmp_path / "sub").resolve()
     assert restored.configuration.thinking_effort == "low"
@@ -299,14 +299,14 @@ def test_clearing_a_chat_starts_a_separate_log(
     Runs once per registered name of the clear command, aliases included.
     """
     executor, session_manager, storage_manager, _ = wired
-    first = session_manager.require_current()
+    first = session_manager.get_current_session()
     session_manager.session_recorder.message(UserMessage(content="old chat"))
     shared_session.record_read("/tmp/earlier.txt", 1.0)
     action = CommandAction(name=command_name, args=[], raw_input=f"/{command_name}")
 
     list(executor.execute(action))
 
-    second = session_manager.require_current()
+    second = session_manager.get_current_session()
     assert second.id != first.id
     assert second.path != first.path
     assert shared_session.is_known("/tmp/earlier.txt") is False
@@ -342,7 +342,7 @@ def test_resuming_is_recorded_on_the_old_session_before_it_runs(
     """
     executor, session_manager, _, _ = wired
     list(executor.execute(CommandAction(name="clear", args=[], raw_input="/clear")))
-    second = session_manager.require_current()
+    second = session_manager.get_current_session()
 
     list(
         executor.execute(
@@ -354,7 +354,7 @@ def test_resuming_is_recorded_on_the_old_session_before_it_runs(
         )
     )
 
-    assert session_manager.require_current().id == second.id
+    assert session_manager.get_current_session().id == second.id
     records = [json.loads(line) for line in second.path.read_text().splitlines()]
     assert any(record.get("raw_input") == "/resume nosuchsession" for record in records)
 
@@ -366,7 +366,7 @@ def test_resuming_reopens_the_original_session_across_a_config_and_cwd_change(
     """A resumed session must come back as it was left, not as the newer one."""
     executor, session_manager, _, _ = wired
     (tmp_path / "sub").mkdir()
-    first = session_manager.require_current()
+    first = session_manager.get_current_session()
 
     list(executor.execute(CommandAction(name="cd", args=["sub"], raw_input="/cd sub")))
     list(
@@ -377,7 +377,7 @@ def test_resuming_reopens_the_original_session_across_a_config_and_cwd_change(
     session_manager.session_recorder.message(UserMessage(content="from the first chat"))
 
     list(executor.execute(CommandAction(name="clear", args=[], raw_input="/clear")))
-    second = session_manager.require_current()
+    second = session_manager.get_current_session()
     assert second.id != first.id
 
     list(
@@ -388,10 +388,40 @@ def test_resuming_reopens_the_original_session_across_a_config_and_cwd_change(
         )
     )
 
-    restored = session_manager.require_current()
+    restored = session_manager.get_current_session()
     assert restored.id == first.id
     assert restored.working_directory == (tmp_path / "sub").resolve()
     assert restored.configuration.thinking_effort == "low"
     assert _contents(session_manager.model_history()) == ["from the first chat"]
     records = [json.loads(line) for line in second.path.read_text().splitlines()]
     assert any(record.get("raw_input") == f"/resume {first.id}" for record in records)
+
+
+def test_renaming_then_resuming_by_the_new_name_finds_the_same_session(
+    wired: tuple[ActionExecutor, SessionManager, StorageManager, ScriptedClient],
+) -> None:
+    """The point of tying rename into state_changed: resume can find it by name."""
+    executor, session_manager, _, _ = wired
+    first = session_manager.get_current_session()
+
+    list(
+        executor.execute(
+            CommandAction(
+                name="rename", args=["project-x"], raw_input="/rename project-x"
+            )
+        )
+    )
+    list(executor.execute(CommandAction(name="clear", args=[], raw_input="/clear")))
+    assert session_manager.get_current_session().id != first.id
+
+    list(
+        executor.execute(
+            CommandAction(
+                name="resume", args=["project-x"], raw_input="/resume project-x"
+            )
+        )
+    )
+
+    restored = session_manager.get_current_session()
+    assert restored.id == first.id
+    assert restored.name == "project-x"

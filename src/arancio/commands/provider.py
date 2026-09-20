@@ -5,8 +5,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from arancio.commands.base import BaseCommand
+from arancio.core.messages import ErrorMessage
+from arancio.sessions.session import SessionConfiguration
 
 if TYPE_CHECKING:
+    from arancio.sessions.manager import SessionManager
     from arancio.settings.manager import SettingsManager
     from arancio.ui.app import App
 
@@ -19,8 +22,12 @@ class ProviderCommand(BaseCommand):
 
     @classmethod
     def execute(
-        cls, provider: str, application: App, settings_manager: SettingsManager
-    ) -> str:
+        cls,
+        provider: str,
+        application: App,
+        settings_manager: SettingsManager,
+        session_manager: SessionManager,
+    ) -> str | ErrorMessage:
         """Replace the provider and apply it.
 
         Unlike :class:`~arancio.commands.model.ModelCommand`, this does not
@@ -38,9 +45,13 @@ class ProviderCommand(BaseCommand):
                 new model id, when a model name is already configured too.
             settings_manager: the manager used to apply and persist the
                 change.
+            session_manager: the active session manager, whose current
+                session's configuration is updated to match and whose
+                recorder persists the change.
 
         Returns:
-            Confirmation text naming the new provider.
+            Confirmation text naming the new provider, or the persistence
+            error notice when saving the change failed.
         """
         settings = settings_manager.settings
         settings.provider = provider
@@ -48,4 +59,9 @@ class ProviderCommand(BaseCommand):
         settings_manager.save_provider()
         if settings.model_name:
             application.set_displayed_model_id(settings.model_id)
+        session = session_manager.get_current_session()
+        session.configuration = SessionConfiguration.from_settings(settings)
+        error = session_manager.session_recorder.state_changed()
+        if error is not None:
+            return error
         return f"Provider set to {settings.provider}"

@@ -5,6 +5,7 @@ to do three things together: change the live objects, persist the change as a gl
 default, and refresh what the toolbar shows.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ from arancio.commands.model import ModelCommand
 from arancio.commands.permissions import PermissionsCommand
 from arancio.commands.provider import ProviderCommand
 from arancio.commands.registry import COMMAND_REGISTRY
+from arancio.commands.rename import RenameCommand
 from arancio.commands.resume import ResumeCommand
 from arancio.core.agents import Agent
 from arancio.core.messages import UserMessage
@@ -31,6 +33,7 @@ from arancio.sessions.registry import SessionRegistryEntry
 from arancio.sessions.session import SessionConfiguration
 from arancio.settings.manager import SettingsManager
 from arancio.settings.settings import Settings
+from arancio.storage.manager import StorageManager
 
 
 @pytest.fixture
@@ -72,6 +75,19 @@ def _persisted() -> dict:
     return yaml.safe_load(storage_module.ARANCIO_SETTINGS_FILE.read_text())
 
 
+def _records(session_manager: SessionManager) -> list[dict]:
+    """Read every record written to the open session's log.
+
+    Args:
+        session_manager: the manager owning the open chat.
+
+    Returns:
+        One decoded record per line.
+    """
+    path = session_manager.get_current_session().path
+    return [json.loads(line) for line in path.read_text().splitlines() if line]
+
+
 def test_every_registered_name_resolves_to_a_command() -> None:
     """The registry is the only lookup, so a broken entry breaks the command."""
     assert COMMAND_REGISTRY["quit"] is ExitCommand
@@ -96,118 +112,206 @@ def test_an_uncoercible_argument_is_reported_by_name() -> None:
         HelloWorldCommand.run(name="Ada", times="lots")
 
 
-def test_cd_moves_the_working_directory(app: RecordingApp, tmp_path: Path) -> None:
-    """The app owns the directory; the command only asks it to move."""
+def test_cd_moves_the_working_directory(
+    app: RecordingApp,
+    session_manager: SessionManager,
+    configured: SettingsManager,
+    tmp_path: Path,
+) -> None:
+    """The app owns the directory; the command mirrors it onto the session."""
     (tmp_path / "sub").mkdir()
+    session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
 
-    result = CdCommand.execute(path="sub", application=app)
+    result = CdCommand.execute(
+        path="sub", application=app, session_manager=session_manager
+    )
 
     assert app.working_directory == (tmp_path / "sub").resolve()
     assert result == f"Working directory set to {app.working_directory}"
+    assert (
+        session_manager.get_current_session().working_directory == app.working_directory
+    )
+    assert _records(session_manager)[-1]["type"] == "state_changed"
 
 
-def test_cd_into_a_missing_directory_is_refused(app: RecordingApp) -> None:
+def test_cd_into_a_missing_directory_is_refused(
+    app: RecordingApp, session_manager: SessionManager
+) -> None:
     """The executor turns this into an error message rather than crashing."""
     with pytest.raises(ValueError):
-        CdCommand.execute(path="nowhere", application=app)
+        CdCommand.execute(
+            path="nowhere", application=app, session_manager=session_manager
+        )
 
 
 def test_model_applies_and_persists_the_new_name(
-    configured: SettingsManager, app: RecordingApp, client: ScriptedClient
+    configured: SettingsManager,
+    app: RecordingApp,
+    client: ScriptedClient,
+    session_manager: SessionManager,
+    tmp_path: Path,
 ) -> None:
     """One command has to change the client, the file and the toolbar together."""
+    session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+
     result = ModelCommand.execute(
-        model_name="gpt-5", application=app, settings_manager=configured
+        model_name="gpt-5",
+        application=app,
+        settings_manager=configured,
+        session_manager=session_manager,
     )
 
     assert result == "Model set to openai/gpt-5"
     assert client.model_id == "openai/gpt-5"
     assert _persisted()["model_name"] == "gpt-5"
     assert app.displayed_model_ids == ["openai/gpt-5"]
+    assert session_manager.get_current_session().configuration.model_name == "gpt-5"
+    assert _records(session_manager)[-1]["type"] == "state_changed"
 
 
 def test_model_without_a_provider_leaves_the_name_untouched(
-    settings_manager: SettingsManager, app: RecordingApp
+    settings_manager: SettingsManager,
+    app: RecordingApp,
+    session_manager: SessionManager,
 ) -> None:
     """A half-applied change would leave the settings inconsistent."""
     with pytest.raises(ValueError):
         ModelCommand.execute(
-            model_name="gpt-5", application=app, settings_manager=settings_manager
+            model_name="gpt-5",
+            application=app,
+            settings_manager=settings_manager,
+            session_manager=session_manager,
         )
 
     assert settings_manager.settings.model_name is None
 
 
 def test_provider_is_normalized_before_it_is_stored(
-    configured: SettingsManager, app: RecordingApp
+    configured: SettingsManager,
+    app: RecordingApp,
+    session_manager: SessionManager,
+    tmp_path: Path,
 ) -> None:
     """The provider becomes half of a model id, so its case must be settled."""
+    session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+
     result = ProviderCommand.execute(
-        provider="Anthropic", application=app, settings_manager=configured
+        provider="Anthropic",
+        application=app,
+        settings_manager=configured,
+        session_manager=session_manager,
     )
 
     assert result == "Provider set to anthropic"
     assert _persisted()["provider"] == "anthropic"
+    assert session_manager.get_current_session().configuration.provider == "anthropic"
+    assert _records(session_manager)[-1]["type"] == "state_changed"
 
 
 def test_an_unknown_provider_is_refused(
-    configured: SettingsManager, app: RecordingApp
+    configured: SettingsManager, app: RecordingApp, session_manager: SessionManager
 ) -> None:
     """LiteLLM resolves credentials from the provider, so a typo must not stick."""
     with pytest.raises(ValueError):
         ProviderCommand.execute(
-            provider="not-a-provider", application=app, settings_manager=configured
+            provider="not-a-provider",
+            application=app,
+            settings_manager=configured,
+            session_manager=session_manager,
         )
 
 
 def test_effort_accepts_the_word_null_as_no_thinking(
-    configured: SettingsManager, app: RecordingApp
+    configured: SettingsManager,
+    app: RecordingApp,
+    session_manager: SessionManager,
+    tmp_path: Path,
 ) -> None:
     """There is no other way to type "none" into a text argument."""
+    session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+
     result = EffortCommand.execute(
-        level="NULL", application=app, settings_manager=configured
+        level="NULL",
+        application=app,
+        settings_manager=configured,
+        session_manager=session_manager,
     )
 
     assert result == "Thinking effort set to null"
     assert configured.settings.thinking_effort is None
     assert app.displayed_efforts == [None]
+    assert session_manager.get_current_session().configuration.thinking_effort is None
+    assert _records(session_manager)[-1]["type"] == "state_changed"
 
 
 def test_effort_without_a_model_changes_nothing(
-    settings_manager: SettingsManager, app: RecordingApp
+    settings_manager: SettingsManager,
+    app: RecordingApp,
+    session_manager: SessionManager,
 ) -> None:
     """Effort belongs to a model, so it is refused before anything is written."""
     with pytest.raises(ValueError):
         EffortCommand.execute(
-            level="high", application=app, settings_manager=settings_manager
+            level="high",
+            application=app,
+            settings_manager=settings_manager,
+            session_manager=session_manager,
         )
 
 
 def test_permissions_without_a_level_reports_the_current_one(
-    configured: SettingsManager,
+    configured: SettingsManager, session_manager: SessionManager
 ) -> None:
     """The read form is how a user checks what the agent may do."""
-    result = PermissionsCommand.execute(category="READ", settings_manager=configured)
+    result = PermissionsCommand.execute(
+        category="READ", settings_manager=configured, session_manager=session_manager
+    )
 
     assert result == "read permission level: ask"
 
 
 def test_permissions_reports_a_revoked_category_differently(
-    configured: SettingsManager,
+    configured: SettingsManager, session_manager: SessionManager
 ) -> None:
     """Saying the level is none would mislead: the tools do not exist at all."""
     configured.settings.permissions[PermissionCategory.WEB] = PermissionLevel.NONE
 
     assert (
-        PermissionsCommand.execute(category="web", settings_manager=configured)
+        PermissionsCommand.execute(
+            category="web",
+            settings_manager=configured,
+            session_manager=session_manager,
+        )
         == "No web permission set"
     )
 
 
-def test_permissions_sets_and_persists_a_level(configured: SettingsManager) -> None:
+def test_permissions_sets_and_persists_a_level(
+    configured: SettingsManager, session_manager: SessionManager, tmp_path: Path
+) -> None:
     """A granted level has to survive into the next session."""
+    session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+
     result = PermissionsCommand.execute(
-        category="write", level="AUTO", settings_manager=configured
+        category="write",
+        level="AUTO",
+        settings_manager=configured,
+        session_manager=session_manager,
     )
 
     assert result == "write permission level set to auto"
@@ -215,18 +319,40 @@ def test_permissions_sets_and_persists_a_level(configured: SettingsManager) -> N
         PermissionLevel.AUTO
     )
     assert _persisted()["permissions"]["write"] == "auto"
+    assert (
+        session_manager.get_current_session().configuration.permissions[
+            PermissionCategory.WRITE
+        ]
+        is PermissionLevel.AUTO
+    )
+    assert _records(session_manager)[-1]["type"] == "state_changed"
 
 
 def test_permissions_removes_a_grant_with_the_word_null(
-    configured: SettingsManager,
+    configured: SettingsManager, session_manager: SessionManager, tmp_path: Path
 ) -> None:
     """Revoking is what stops the tools being built at all."""
+    session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+
     result = PermissionsCommand.execute(
-        category="execute", level="null", settings_manager=configured
+        category="execute",
+        level="null",
+        settings_manager=configured,
+        session_manager=session_manager,
     )
 
     assert result == "execute permission removed"
     assert _persisted()["permissions"]["execute"] is None
+    assert (
+        session_manager.get_current_session().configuration.permissions[
+            PermissionCategory.EXECUTE
+        ]
+        is PermissionLevel.NONE
+    )
+    assert _records(session_manager)[-1]["type"] == "state_changed"
 
 
 @pytest.mark.parametrize(
@@ -235,12 +361,18 @@ def test_permissions_removes_a_grant_with_the_word_null(
     ids=["bad-category", "bad-level"],
 )
 def test_permissions_rejects_what_it_cannot_resolve(
-    configured: SettingsManager, category: str, level: str
+    configured: SettingsManager,
+    session_manager: SessionManager,
+    category: str,
+    level: str,
 ) -> None:
     """The error lists the valid options, since the user typed a free word."""
     with pytest.raises(ValueError, match="Valid"):
         PermissionsCommand.execute(
-            category=category, level=level, settings_manager=configured
+            category=category,
+            level=level,
+            settings_manager=configured,
+            session_manager=session_manager,
         )
 
 
@@ -266,7 +398,7 @@ def test_clear_starts_a_new_chat_everywhere_at_once(
         session_manager=session_manager,
     )
 
-    assert session_manager.require_current() is not first
+    assert session_manager.get_current_session() is not first
     assert configured.settings.model_name == "gpt-4o"
     assert app.cleared == 1
 
@@ -301,7 +433,7 @@ def test_resume_by_exact_id_restores_history_configuration_and_ui(
     )
 
     assert result is None
-    assert session_manager.require_current().id == first.id
+    assert session_manager.get_current_session().id == first.id
     assert configured.settings.model_name == "gpt-4o"
     assert agent._message_history == [UserMessage(content="from the first chat")]
     assert app.cleared == 1
@@ -331,7 +463,7 @@ def test_resume_by_a_name_fragment_finds_the_same_session(
     )
 
     assert result is None
-    assert session_manager.require_current().id == first.id
+    assert session_manager.get_current_session().id == first.id
 
 
 def test_resume_with_no_match_is_refused(
@@ -385,7 +517,7 @@ def test_resume_with_more_than_one_match_lists_them_instead_of_resuming(
     assert result is not None
     assert first.id in result
     assert "second" in result
-    assert session_manager.require_current().id == first.id
+    assert session_manager.get_current_session().id == first.id
     assert app.cleared == 0
 
 
@@ -417,7 +549,7 @@ def test_resume_from_a_different_directory_moves_to_it(
     )
 
     assert result is None
-    assert session_manager.require_current().id == elsewhere_session.id
+    assert session_manager.get_current_session().id == elsewhere_session.id
     assert app.working_directory == elsewhere.resolve()
 
 
@@ -447,8 +579,44 @@ def test_resume_moves_to_the_resumed_directory_even_when_unchanged(
     )
 
     assert result is None
-    assert session_manager.require_current().id == first.id
+    assert session_manager.get_current_session().id == first.id
     assert app.working_directory == tmp_path.resolve()
+
+
+def test_rename_updates_the_session_and_its_registry_entry(
+    configured: SettingsManager, session_manager: SessionManager, tmp_path: Path
+) -> None:
+    """The active session's own registry entry must reflect a rename immediately."""
+    session = session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+
+    result = RenameCommand.execute(new_name="demo", session_manager=session_manager)
+
+    assert result == f"Session {session.id} renamed to 'demo'"
+    assert session.name == "demo"
+    assert session_manager.registry.get(session.id).name == "demo"
+
+
+def test_a_rename_survives_a_reload(
+    configured: SettingsManager,
+    session_manager: SessionManager,
+    storage_manager: StorageManager,
+    tmp_path: Path,
+) -> None:
+    """The renamed session must come back under its new name, not its old one."""
+    session = session_manager.create(
+        working_directory=tmp_path,
+        configuration=SessionConfiguration.from_settings(configured.settings),
+    )
+    RenameCommand.execute(new_name="demo", session_manager=session_manager)
+
+    reopened = SessionManager(storage_manager, root=storage_manager.root)
+    restored = reopened.load(session.id)
+
+    assert restored.name == "demo"
+    assert reopened.registry.get(session.id).name == "demo"
 
 
 def test_exit_asks_the_app_to_quit(app: RecordingApp) -> None:

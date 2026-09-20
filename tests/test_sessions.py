@@ -215,9 +215,10 @@ def test_loading_restores_the_configuration_the_session_ended_with(
         thinking_effort=None,
         permissions={category: PermissionLevel.AUTO for category in PermissionCategory},
     )
-    session_manager.session_recorder.state_changed(changed, session.working_directory)
+    session.configuration = changed
+    session_manager.session_recorder.state_changed()
 
-    restored = _reopen(session, storage_manager).require_current()
+    restored = _reopen(session, storage_manager).get_current_session()
 
     assert restored.configuration == changed
 
@@ -237,14 +238,21 @@ def test_reading_picks_the_last_state_changed_across_intervening_messages(
         thinking_effort=None,
         permissions={category: PermissionLevel.AUTO for category in PermissionCategory},
     )
-    session_manager.session_recorder.state_changed(_configuration(), first_directory)
+    session.configuration = _configuration()
+    session.working_directory = first_directory.resolve()
+    session.name = "first-name"
+    session_manager.session_recorder.state_changed()
     session_manager.session_recorder.message(UserMessage(content="in between"))
-    session_manager.session_recorder.state_changed(second, second_directory)
+    session.configuration = second
+    session.working_directory = second_directory.resolve()
+    session.name = "second-name"
+    session_manager.session_recorder.state_changed()
 
-    restored = _reopen(session, storage_manager).require_current()
+    restored = _reopen(session, storage_manager).get_current_session()
 
     assert restored.configuration == second
     assert restored.working_directory == second_directory.resolve()
+    assert restored.name == "second-name"
 
 
 def test_scanning_recovers_the_same_latest_state_without_a_full_parse(
@@ -261,13 +269,17 @@ def test_scanning_recovers_the_same_latest_state_without_a_full_parse(
         thinking_effort=None,
         permissions={category: PermissionLevel.AUTO for category in PermissionCategory},
     )
-    session_manager.session_recorder.state_changed(changed, moved)
+    session.configuration = changed
+    session.working_directory = moved.resolve()
+    session.name = "renamed"
+    session_manager.session_recorder.state_changed()
 
     reopened = SessionManager(storage_manager, root=storage_manager.root)
     entry = reopened.registry.get(session.id)
 
     assert entry.working_directory == moved.resolve()
     assert entry.configuration == changed
+    assert entry.name == "renamed"
 
 
 def test_a_malformed_earlier_state_changed_only_fails_a_full_load(
@@ -283,11 +295,12 @@ def test_a_malformed_earlier_state_changed_only_fails_a_full_load(
             "timestamp": "2026-01-01T00:00:00Z",
             "working_directory": str(tmp_path),
             "configuration": "not-a-mapping",
+            "name": session.id,
         }
     )
     with session.path.open("a") as handle:
         handle.write(malformed + "\n")
-    session_manager.session_recorder.state_changed(_configuration(), tmp_path)
+    session_manager.session_recorder.state_changed()
 
     reopened = SessionManager(storage_manager, root=storage_manager.root)
     entry = reopened.registry.get(session.id)
