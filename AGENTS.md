@@ -241,7 +241,11 @@ asks to stay out of the replayed log while staying in model history.
 A command's plain-string result is wrapped into an `AssistantMessage` by
 the executor. A slash command subclasses `BaseCommand`, sets `name`/`description`,
 implements a typed `execute(...)`; `run` coerces the prompt words to `execute`'s parameter
-annotations. A parameter named after one of
+annotations. A command that changes the active session's *saved* state subclasses
+`StateChangeCommand` (`commands/state_change.py`) instead — an abstract layer between the
+two that carries the two helpers such a command needs (see **Sessions** below); the
+executor and the registry only ever type on `BaseCommand`, so nothing else changes.
+A parameter named after one of
 `prompt/actions/constants.py:INJECTABLE_COMMAND_PARAMETERS` (currently `application`,
 `settings_manager`, `agent`, `session_manager`) is supplied by the executor itself instead of being bound to a prompt
 word — this is how a command performs an action against the running app or mutates
@@ -372,21 +376,27 @@ and working directory are restored without overwriting global `settings.yml` def
 `session_recorder.state_changed()` takes no arguments: it only reads the session's *current*
 `configuration`/`working_directory`/`name` and persists them together as one `state_changed`
 record — **mutating those fields is not the recorder's job**. Each command that changes one of
-them mutates the session itself, then calls `state_changed()` to persist the result: `CdCommand`
-sets `session.working_directory` to the app's new (already-resolved) directory; `ModelCommand`,
-`ProviderCommand`, `EffortCommand` and the mutating branches of `PermissionsCommand` (the latter
-via a small `_record_configuration` helper, since it has two mutating branches) set
-`session.configuration = SessionConfiguration.from_settings(settings_manager.settings)` after
-applying and persisting the settings change; `RenameCommand` sets `session.name`. All three
-fields are re-sent together regardless of which one changed, so the log carries one atomic
-record of "the state at this point" rather than several independently-timed event types. Each
-of these commands is injected `session_manager` (`prompt/actions/constants.py`) for exactly this;
-the executor itself has no session-effect mapping — `ActionExecutor` only records the command's
-own confirmation text and its `command` line, nothing about session state. If `state_changed()`
-returns a persistence error, the command returns that `ErrorMessage` in place of its usual
-confirmation string, so the failure still reaches the user, from the command itself. Because the
-persisted record is a complete snapshot, the bottom-most one already *is* the session's current
-state on its own, so reading it back never needs to replay a record-by-record mutation:
+them mutates the session itself, then calls
+`StateChangeCommand._persist_state_change(session_manager, confirmation)`
+(`commands/state_change.py`), which calls `state_changed()` and returns either `confirmation`
+or the resulting `ErrorMessage`: `CdCommand` sets `session.working_directory`
+to the app's new (already-resolved) directory; `ModelCommand`, `ProviderCommand`, `EffortCommand`
+and the two mutating branches of `PermissionsCommand` reach the sibling helper
+`StateChangeCommand._apply_configuration`, which sets `session.configuration =
+SessionConfiguration.from_settings(settings_manager.settings)` after they applied and persisted
+the settings change; `RenameCommand` sets `session.name`. Those six are exactly the commands
+subclassing `StateChangeCommand` rather than `BaseCommand` directly — `/clear` and `/resume`
+replace the whole session through `discard_and_create`/`restore_runtime` and never write a
+`state_changed` record, so they stay on `BaseCommand`. All three fields are re-sent together
+regardless of which one changed, so the log carries one atomic record of "the state at this
+point" rather than several independently-timed event types. Each of these commands is injected
+`session_manager` (`prompt/actions/constants.py`) for exactly this; the executor itself has no
+session-effect mapping — `ActionExecutor` only records the command's own confirmation text and
+its `command` line, nothing about session state. `_persist_state_change` returning the
+`ErrorMessage` in place of `confirmation` is why a failed write still reaches the user, from the
+command itself rather than a side-channel. Because the persisted record is a complete snapshot,
+the bottom-most one already *is* the session's current state on its own, so reading it back
+never needs to replay a record-by-record mutation:
 `SessionValidator._state_from_record` converts a `session_created`/`state_changed` record into
 `(configuration, working_directory, name)` once, and both readers of that final state build on
 it — `_scan_state` (replacing the old
@@ -446,7 +456,9 @@ path/mtime state so a resumed session restores its read-first guard only for unc
 - **Exceptions**: prefer built-ins (`ValueError`, `TypeError`, …); do not define custom exception classes.
 - **New provider / tool / command**: follow the existing seams — subclass the relevant
   `base.py`, and for a tool also add its `harness/tools/<snake_name>/` prompt pair; for a
-  command register it in `commands/registry.py`.
+  command register it in `commands/registry.py`, and subclass
+  `commands/state_change.py:StateChangeCommand` instead when it changes the session's saved
+  configuration, working directory or name.
 - **Git**: branches `feature/snake_case` or `fix/snake_case`; commit messages in past tense
   naming the file(s) touched. Do not mention the contribution of coding agents (including
   Claude) in commit messages — attribute commits to the human author only.

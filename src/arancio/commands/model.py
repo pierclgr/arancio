@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from arancio.commands.base import BaseCommand
+from arancio.commands.state_change import StateChangeCommand
 from arancio.core.messages import ErrorMessage
-from arancio.sessions.session import SessionConfiguration
 
 if TYPE_CHECKING:
     from arancio.sessions.manager import SessionManager
@@ -14,7 +13,7 @@ if TYPE_CHECKING:
     from arancio.ui.app import App
 
 
-class ModelCommand(BaseCommand):
+class ModelCommand(StateChangeCommand):
     """Command that sets the model name, keeping the current provider."""
 
     name = "model"
@@ -66,9 +65,5 @@ class ModelCommand(BaseCommand):
         settings_manager.apply()
         settings_manager.save_model_name()
         application.set_displayed_model_id(model_id)
-        session = session_manager.get_current_session()
-        session.configuration = SessionConfiguration.from_settings(settings)
-        error = session_manager.session_recorder.state_changed()
-        if error is not None:
-            return error
-        return f"Model set to {model_id}"
+        cls._apply_configuration(session_manager, settings_manager)
+        return cls._persist_state_change(session_manager, f"Model set to {model_id}")

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from arancio.commands.base import BaseCommand
+from arancio.commands.state_change import StateChangeCommand
 from arancio.core.messages import ErrorMessage
 
 if TYPE_CHECKING:
     from arancio.sessions.manager import SessionManager
 
 
-class RenameCommand(BaseCommand):
+class RenameCommand(StateChangeCommand):
     """Command that renames the active chat session."""
 
     name = "rename"
@@ -39,7 +39,6 @@ class RenameCommand(BaseCommand):
         """
         session = session_manager.get_current_session()
         session.name = new_name
-        error = session_manager.session_recorder.state_changed()
-        if error is not None:
-            return error
-        return f"Session {session.id} renamed to {new_name!r}"
+        return cls._persist_state_change(
+            session_manager, f"Session {session.id} renamed to {new_name!r}"
+        )

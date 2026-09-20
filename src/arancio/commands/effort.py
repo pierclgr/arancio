@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from arancio.commands.base import BaseCommand
+from arancio.commands.state_change import StateChangeCommand
 from arancio.core.messages import ErrorMessage
-from arancio.sessions.session import SessionConfiguration
 
 if TYPE_CHECKING:
     from arancio.sessions.manager import SessionManager
@@ -14,7 +13,7 @@ if TYPE_CHECKING:
     from arancio.ui.app import App
 
 
-class EffortCommand(BaseCommand):
+class EffortCommand(StateChangeCommand):
     """Command that sets the model's thinking effort."""
 
     name = "effort"
@@ -57,13 +56,8 @@ class EffortCommand(BaseCommand):
         settings_manager.apply()
         settings_manager.save_thinking_effort()
         application.set_displayed_effort(new_effort)
-        session = session_manager.get_current_session()
-        session.configuration = SessionConfiguration.from_settings(
-            settings_manager.settings
-        )
-        error = session_manager.session_recorder.state_changed()
-        if error is not None:
-            return error
-        return (
-            f"Thinking effort set to {new_effort if new_effort is not None else 'null'}"
+        cls._apply_configuration(session_manager, settings_manager)
+        shown_effort = new_effort if new_effort is not None else "null"
+        return cls._persist_state_change(
+            session_manager, f"Thinking effort set to {shown_effort}"
         )

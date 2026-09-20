@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from arancio.commands.base import BaseCommand
+from arancio.commands.state_change import StateChangeCommand
 from arancio.core.messages import ErrorMessage
 
 if TYPE_CHECKING:
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from arancio.ui.app import App
 
 
-class CdCommand(BaseCommand):
+class CdCommand(StateChangeCommand):
     """Command that moves the working directory."""
 
     name = "cd"
@@ -46,7 +46,6 @@ class CdCommand(BaseCommand):
         application.set_working_directory(path)
         session = session_manager.get_current_session()
         session.working_directory = application.working_directory
-        error = session_manager.session_recorder.state_changed()
-        if error is not None:
-            return error
-        return f"Working directory set to {application.working_directory}"
+        return cls._persist_state_change(
+            session_manager, f"Working directory set to {application.working_directory}"
+        )

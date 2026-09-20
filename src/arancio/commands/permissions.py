@@ -4,17 +4,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from arancio.commands.base import BaseCommand
+from arancio.commands.state_change import StateChangeCommand
 from arancio.core.messages import ErrorMessage
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
-from arancio.sessions.session import SessionConfiguration
 
 if TYPE_CHECKING:
     from arancio.sessions.manager import SessionManager
     from arancio.settings.manager import SettingsManager
 
 
-class PermissionsCommand(BaseCommand):
+class PermissionsCommand(StateChangeCommand):
     """Command that gets or sets a permission category's autonomy level."""
 
     name = "permissions"
@@ -83,10 +82,10 @@ class PermissionsCommand(BaseCommand):
             )
             settings_manager.apply()
             settings_manager.save_permission(resolved_category)
-            error = cls._record_configuration(session_manager, settings_manager)
-            if error is not None:
-                return error
-            return f"{resolved_category.name.lower()} permission removed"
+            cls._apply_configuration(session_manager, settings_manager)
+            return cls._persist_state_change(
+                session_manager, f"{resolved_category.name.lower()} permission removed"
+            )
 
         try:
             new_level = PermissionLevel(level.lower())
@@ -102,30 +101,9 @@ class PermissionsCommand(BaseCommand):
         settings_manager.settings.permissions[resolved_category] = new_level
         settings_manager.apply()
         settings_manager.save_permission(resolved_category)
-        error = cls._record_configuration(session_manager, settings_manager)
-        if error is not None:
-            return error
-        return (
+        cls._apply_configuration(session_manager, settings_manager)
+        return cls._persist_state_change(
+            session_manager,
             f"{resolved_category.name.lower()} permission level set to "
-            f"{new_level.value}"
+            f"{new_level.value}",
         )
-
-    @classmethod
-    def _record_configuration(
-        cls, session_manager: SessionManager, settings_manager: SettingsManager
-    ) -> ErrorMessage | None:
-        """Snapshot the live settings onto the session and persist the change.
-
-        Args:
-            session_manager: the active session manager, whose current
-                session's configuration is updated.
-            settings_manager: the manager holding the just-applied settings.
-
-        Returns:
-            The temporary persistence error notice, or ``None`` on success.
-        """
-        session = session_manager.get_current_session()
-        session.configuration = SessionConfiguration.from_settings(
-            settings_manager.settings
-        )
-        return session_manager.session_recorder.state_changed()
