@@ -8,8 +8,7 @@ class Hook(Enum):
 
     Dispatched from :meth:`~arancio.core.agents.Agent.__call__` (most
     members, plus ``ERROR`` with ``source="model"``/``"agent"``),
-    :meth:`~arancio.core.agents.Agent._system_prompt`
-    (``SYSTEM_PROMPT_BUILD``), :meth:`~arancio.core.tools.base.BaseTool.call`
+    :meth:`~arancio.core.tools.base.BaseTool.call`
     (the ``TOOL_CALL`` members, plus ``ERROR`` with ``source="tool"``) and
     :meth:`~arancio.core.permissions.manager.PermissionManager.validate`
     (the ``PERMISSION_CHECK`` members); see AGENTS.md's Hooks section for the

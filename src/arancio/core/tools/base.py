@@ -13,7 +13,7 @@ from arancio.core.constants.path import (
 )
 from arancio.core.hooks.manager import HookManager
 from arancio.core.hooks.types import Hook
-from arancio.core.messages import ToolResultMessage
+from arancio.core.messages import Message, ToolResultMessage
 from arancio.core.parsers.tool_result.base import BaseToolResultParser
 from arancio.core.tools.schema import ToolSchema
 from arancio.core.tools.session import ToolSession, shared_session
@@ -25,7 +25,7 @@ class BaseTool(ABC):
 
     Subclasses implement :meth:`_call` to execute the tool and return
     raw output. The public :meth:`call` wrapper executes :meth:`_call`
-    and converts its output into a :class:`ToolResultMessage`.
+    and returns its :class:`ToolResultMessage` alongside hook messages.
 
     Attributes:
         description: natural-language description,
@@ -106,8 +106,8 @@ class BaseTool(ABC):
         """
         return type(self).__name__
 
-    def call(self, call_id: str, **kwargs) -> ToolResultMessage:
-        """Execute the tool and build ToolResultMessage output.
+    def call(self, call_id: str, **kwargs) -> tuple[ToolResultMessage, list[Message]]:
+        """Execute the tool and return its result alongside hook messages.
 
         Dispatches ``before_tool_call`` before running, ``error`` (with
         ``source="tool"``) when :meth:`_call` raises, and ``after_tool_call``
@@ -121,22 +121,24 @@ class BaseTool(ABC):
             **kwargs: tool arguments matching ``input_schema``.
 
         Returns:
-            The tool output build as message.
+            The tool result and hook messages in dispatch order.
         """
-        self._hook_manager.run(
+        messages = self._hook_manager.run(
             Hook.BEFORE_TOOL_CALL, name=self.name, call_id=call_id, arguments=kwargs
         )
         try:
             output = self._call(**kwargs)
             is_error = False
         except Exception as exc:
-            self._hook_manager.run(
-                Hook.ERROR,
-                source="tool",
-                name=self.name,
-                call_id=call_id,
-                arguments=kwargs,
-                error=exc,
+            messages.extend(
+                self._hook_manager.run(
+                    Hook.ERROR,
+                    source="tool",
+                    name=self.name,
+                    call_id=call_id,
+                    arguments=kwargs,
+                    error=exc,
+                )
             )
             output = f"Error while executing {self.name}: {exc}"
             is_error = True
@@ -146,14 +148,16 @@ class BaseTool(ABC):
             output=output,
             is_error=is_error,
         )
-        self._hook_manager.run(
-            Hook.AFTER_TOOL_CALL,
-            name=self.name,
-            call_id=call_id,
-            arguments=kwargs,
-            result=result,
+        messages.extend(
+            self._hook_manager.run(
+                Hook.AFTER_TOOL_CALL,
+                name=self.name,
+                call_id=call_id,
+                arguments=kwargs,
+                result=result,
+            )
         )
-        return result
+        return result, messages
 
     @abstractmethod
     def _call(self, **kwargs) -> Any:

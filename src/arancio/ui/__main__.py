@@ -4,6 +4,7 @@ from arancio.core.agents import Agent
 from arancio.core.clients.litellm import LiteLLMClient
 from arancio.core.hooks.manager import HookManager
 from arancio.core.permissions.manager import PermissionManager
+from arancio.core.plugins.manager import PluginManager
 from arancio.core.tools.manager import ToolManager
 from arancio.core.tools.session import shared_session
 from arancio.sessions.manager import SessionManager
@@ -22,14 +23,20 @@ def main() -> None:
     app exists. The hook manager is built alongside the controller and shared
     identically into ``tool_manager``, ``permission_manager``, ``agent`` and ``app``
     (which forwards it to its executor's own tool instances), so one handler registered
-    anywhere in that graph sees every dispatch from every component. The session manager
-    comes after the settings are loaded, because the session it opens snapshots them.
+    anywhere in that graph sees every dispatch from every component. The plugin manager
+    loads straight after, so the plugins are attached to that same hook manager before
+    anything can dispatch, and before ``settings_manager.load()`` applies the permission
+    grants and rebuilds the tool catalog. Its messages are shown alongside the settings
+    ones. The session manager comes after the settings are loaded, because the session
+    it opens snapshots them.
     """
     storage_manager = StorageManager()
     storage_manager.bind_litellm_login_dir()
 
     controller = UIController()
     hook_manager = HookManager()
+    plugin_manager = PluginManager(hook_manager=hook_manager)
+    plugin_messages = plugin_manager.load()
     client = LiteLLMClient(stream=True, controller=controller)
     summary_client = LiteLLMClient(stream=False, controller=controller)
     # the summary client never thinks (setters take None; the constructor ignores it)
@@ -53,7 +60,8 @@ def main() -> None:
         summary_client=summary_client,
         agent=agent,
     )
-    settings, startup_messages = settings_manager.load()
+    settings, settings_messages = settings_manager.load()
+    startup_messages = plugin_messages + settings_messages
 
     session_manager = SessionManager(
         storage_manager,

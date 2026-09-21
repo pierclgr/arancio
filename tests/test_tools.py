@@ -264,10 +264,11 @@ def test_shell_truncates_oversized_output() -> None:
 
 def test_a_failing_tool_call_becomes_a_tool_error_message() -> None:
     """``BaseTool.call`` never raises: the model gets the failure as a result."""
-    message = ReadFileTool(hook_manager=HookManager()).call(
+    message, hook_messages = ReadFileTool(hook_manager=HookManager()).call(
         call_id="c1", file_path="relative.txt"
     )
 
+    assert hook_messages == []
     assert isinstance(message, ToolErrorMessage)
     assert message.id == "c1"
     assert message.content.startswith("Error while executing ReadFileTool:")
@@ -337,10 +338,11 @@ def test_a_hook_handler_exception_escapes_call_unlike_a_tool_exception() -> None
 
 def test_call_with_no_registered_handlers_is_a_harmless_no_op(sample: Path) -> None:
     """An empty hook manager (no registered handlers) still returns a normal result."""
-    message = ReadFileTool(hook_manager=HookManager()).call(
+    message, hook_messages = ReadFileTool(hook_manager=HookManager()).call(
         call_id="c1", file_path=str(sample)
     )
 
+    assert hook_messages == []
     assert isinstance(message, ToolResultMessage)
 
 
@@ -511,3 +513,24 @@ def test_fetch_web_tool_forwards_its_hook_manager_to_base_tool(
 
     assert len(events) == 1
     assert events[0][1]["name"] == "FetchWebTool"
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_tool_hook_messages_preserve_result(sample: Path, fails: bool) -> None:
+    """Hook messages retain dispatch order independently of the tool result."""
+    from arancio.core.messages import ErrorMessage
+
+    hooks = HookManager()
+    before = ErrorMessage(content="before")
+    error = ErrorMessage(content="error")
+    after = ErrorMessage(content="after")
+    hooks.register(Hook.BEFORE_TOOL_CALL, lambda **_: before)
+    hooks.register(Hook.ERROR, lambda **_: error)
+    hooks.register(Hook.AFTER_TOOL_CALL, lambda **_: after)
+    result, messages = ReadFileTool(hook_manager=hooks).call(
+        call_id="c1", file_path="relative.txt" if fails else str(sample)
+    )
+    assert result.id == "c1"
+    assert isinstance(result, ToolErrorMessage) is fails
+    assert result.in_history
+    assert messages == ([before, error, after] if fails else [before, after])

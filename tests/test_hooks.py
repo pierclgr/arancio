@@ -107,7 +107,7 @@ def test_a_handlers_return_value_is_ignored() -> None:
     manager = HookManager()
     manager.register(Hook.MESSAGE_RECEIVED, lambda: False)
 
-    assert manager.run(Hook.MESSAGE_RECEIVED) is None
+    assert manager.run(Hook.MESSAGE_RECEIVED) == []
 
 
 def test_an_exception_propagates_and_stops_remaining_handlers() -> None:
@@ -152,3 +152,16 @@ def test_registering_during_dispatch_takes_effect_only_on_the_next_run() -> None
     manager.run(Hook.ERROR)
 
     assert calls == ["early", "late"]
+
+
+def test_handler_messages_are_returned_in_order() -> None:
+    """Messages survive dispatch while unrelated return values are ignored."""
+    from arancio.core.messages import ErrorMessage
+
+    manager = HookManager()
+    first = ErrorMessage(content="first")
+    second = ErrorMessage(content="second")
+    manager.register(Hook.TURN_START, lambda: first)
+    manager.register(Hook.TURN_START, lambda: None)
+    manager.register(Hook.TURN_START, lambda: second)
+    assert manager.run(Hook.TURN_START) == [first, second]

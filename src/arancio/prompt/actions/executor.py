@@ -177,7 +177,12 @@ class ActionExecutor:
         yield call
         yield from self._yield_notices(command_error, attribution_error, call_error)
 
-        result = self._shell_command_tool.call(call_id=call_id, **arguments)
+        result, hook_messages = self._shell_command_tool.call(
+            call_id=call_id, **arguments
+        )
+        yield from self._session_manager.session_recorder.record_stream(
+            iter(hook_messages)
+        )
         result.in_history = action.add_to_history
         if action.add_to_history:
             self._agent.add_message_to_history(result)
@@ -399,10 +404,11 @@ class ActionExecutor:
                 order.
 
         Returns:
-            A flat list alternating a ``ToolCallMessage`` named
+            A flat list containing a ``ToolCallMessage`` named
             ``"ReadFileTool"`` or ``"ShellCommandTool"`` and its paired
             ``ToolResultMessage``/``ToolErrorMessage``, one pair per
-            mention, in the same order as ``mentions``.
+            mention, in the same order as ``mentions``. Hook messages appear
+            between each call and its result.
         """
         if not mentions:
             return []
@@ -417,11 +423,15 @@ class ActionExecutor:
                 else:
                     command = f"ls -la -- {shlex.quote(str(target))}"
                 arguments = {"command": command}
-                result = self._shell_command_tool.call(call_id=call_id, **arguments)
+                result, hook_messages = self._shell_command_tool.call(
+                    call_id=call_id, **arguments
+                )
             else:
                 name = "ReadFileTool"
                 arguments = {"file_path": str(target)}
-                result = self._read_file_tool.call(call_id=call_id, **arguments)
+                result, hook_messages = self._read_file_tool.call(
+                    call_id=call_id, **arguments
+                )
             messages.append(
                 ToolCallMessage(
                     content=f"{name}({json.dumps(arguments)})",
@@ -430,5 +440,6 @@ class ActionExecutor:
                     arguments=arguments,
                 )
             )
+            messages.extend(hook_messages)
             messages.append(result)
         return messages

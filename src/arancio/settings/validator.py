@@ -12,19 +12,11 @@ from arancio.core.constants.agent import (
 from arancio.core.constants.litellm import (
     LITELLM_DEFAULT_THINKING_EFFORT,
     LITELLM_DEFAULT_THINKING_SUMMARY,
+    LITELLM_PROVIDER_NAMES,
 )
 from arancio.core.messages import ErrorMessage, Message, WarningMessage
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 from arancio.settings.settings import Settings
-from arancio.settings.utils.validations import (
-    is_int,
-    is_known_provider,
-    is_negative,
-    is_none,
-    is_number,
-    is_positive,
-    is_str,
-)
 
 
 class SettingsValidator:
@@ -40,44 +32,50 @@ class SettingsValidator:
     this validator only ever sees an already-parsed mapping.
     """
 
-    # each predicate composes the unit conditions from
-    # arancio.settings.utils.validations with the and/or the field needs
+    # each predicate composes the unit checks with the and/or the field needs
     _FIELD_RULES: ClassVar[tuple[tuple[str, Any, Callable[[Any], bool]], ...]] = (
         (
             "provider",
             None,
-            lambda v: is_str(v) and is_known_provider(v),
+            lambda v: isinstance(v, str) and v.lower() in LITELLM_PROVIDER_NAMES,
         ),
-        ("model_name", None, lambda v: is_str(v)),
+        ("model_name", None, lambda v: isinstance(v, str)),
         (
             "thinking_effort",
             LITELLM_DEFAULT_THINKING_EFFORT,
-            lambda v: is_none(v) or is_str(v),
+            lambda v: v is None or isinstance(v, str),
         ),
         (
             "thinking_summary",
             LITELLM_DEFAULT_THINKING_SUMMARY,
-            lambda v: is_none(v) or is_str(v),
+            lambda v: v is None or isinstance(v, str),
         ),
         (
             "max_turns",
             AGENT_DEFAULT_MAX_TURNS,
-            lambda v: v == AGENT_UNLIMITED_MAX_TURNS or (is_int(v) and is_positive(v)),
+            lambda v: (
+                v == AGENT_UNLIMITED_MAX_TURNS
+                or (isinstance(v, int) and not isinstance(v, bool) and v > 0)
+            ),
         ),
         (
             "max_retries",
             AGENT_DEFAULT_MAX_RETRIES,
-            lambda v: is_int(v) and not is_negative(v),
+            lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 0,
         ),
         (
             "turn_wait_time",
             AGENT_DEFAULT_TURN_WAIT_TIME,
-            lambda v: is_number(v) and not is_negative(v),
+            lambda v: (
+                isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0
+            ),
         ),
         (
             "turn_wait_time_multiplier",
             AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
-            lambda v: is_number(v) and not is_negative(v),
+            lambda v: (
+                isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0
+            ),
         ),
     )
 
@@ -176,7 +174,10 @@ class SettingsValidator:
         valid_levels = {level.value for level in PermissionLevel}
         messages: list[Message] = []
         for name, level in raw.items():
-            if not is_str(name) or name.upper() not in PermissionCategory.__members__:
+            if (
+                not isinstance(name, str)
+                or name.upper() not in PermissionCategory.__members__
+            ):
                 messages.append(
                     WarningMessage(
                         content=(

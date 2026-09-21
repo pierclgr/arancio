@@ -8,8 +8,9 @@ singleton that outlives any one test. This module repoints the first, isolates t
 second and resets the third.
 
 The harness repointing happens at import, because pytest imports this module before any
-test module, and importing :mod:`arancio.prompt.actions.executor` instantiates two tools
-as class attributes.
+test module: :meth:`~arancio.core.tools.base.BaseTool.__init__` reads the path when a
+tool is built and raises when the directory is missing, so the constants have to be
+redirected before the first tool exists.
 """
 
 from pathlib import Path
@@ -22,6 +23,7 @@ from arancio.core.agents import Agent
 from arancio.core.builders import system_prompt as system_prompt_builder
 from arancio.core.hooks.manager import HookManager
 from arancio.core.permissions.manager import PermissionManager
+from arancio.core.plugins import manager as plugin_manager_module
 from arancio.core.tools import base as tools_base
 from arancio.core.tools.manager import ToolManager
 from arancio.core.tools.session import shared_session
@@ -40,16 +42,18 @@ system_prompt_builder.SYSTEM_PROMPT_HARNESS_PATH = _REPO_HARNESS / "SYSTEM_PROMP
 
 @pytest.fixture(autouse=True)
 def _isolate_arancio_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Redirect the two absolute paths a storage manager's root does not cover.
+    """Redirect the three absolute paths a storage manager's root does not cover.
 
-    ``save_settings``/``load_settings`` and ``bind_litellm_login_dir`` read these module
-    globals at call time, so without this a test writes the real
-    ``~/.arancio/settings.yml`` or moves the real ChatGPT login directory.
+    ``save_settings``/``load_settings``, ``bind_litellm_login_dir`` and
+    ``PluginManager`` read these module globals at call time, so without this a test
+    writes the real ``~/.arancio/settings.yml``, moves the real ChatGPT login directory
+    or loads the user's real plugins.
     """
     monkeypatch.setattr(
         storage_module, "ARANCIO_SETTINGS_FILE", tmp_path / "settings.yml"
     )
     monkeypatch.setattr(storage_module, "ARANCIO_LITELLM_DIR", tmp_path / "litellm")
+    monkeypatch.setattr(plugin_manager_module, "PLUGINS_PATH", tmp_path / "plugins")
 
 
 @pytest.fixture(autouse=True)

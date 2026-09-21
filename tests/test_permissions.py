@@ -68,7 +68,7 @@ def test_a_manager_without_grants_asks_for_everything(
     permission_manager: PermissionManager,
 ) -> None:
     """Omitting the grants means every category is at ``ASK``, never absent."""
-    assert permission_manager.validate(_call()).outcome is PermissionOutcome.ALLOWED
+    assert permission_manager.validate(_call())[0].outcome is PermissionOutcome.ALLOWED
 
 
 def test_an_auto_category_never_reaches_the_user(
@@ -77,8 +77,9 @@ def test_an_auto_category_never_reaches_the_user(
     """An ``AUTO`` grant is the point where the controller is skipped entirely."""
     manager = _manager(tool_manager, controller, read=PermissionLevel.AUTO)
 
-    decision = manager.validate(_call())
+    decision, hook_messages = manager.validate(_call())
 
+    assert hook_messages == []
     assert decision.outcome is PermissionOutcome.ALLOWED
     assert controller.requests == []
 
@@ -102,8 +103,9 @@ def test_a_denial_carries_the_user_note(tool_manager: ToolManager) -> None:
     controller = ScriptedController([(Decision.DENY, "not that file")])
     manager = _manager(tool_manager, controller)
 
-    decision = manager.validate(_call())
+    decision, hook_messages = manager.validate(_call())
 
+    assert hook_messages == []
     assert decision.outcome is PermissionOutcome.DENIED
     assert decision.note == "not that file"
 
@@ -113,7 +115,7 @@ def test_an_empty_note_is_normalized_away(tool_manager: ToolManager) -> None:
     controller = ScriptedController([(Decision.ALLOW, "")])
     manager = _manager(tool_manager, controller)
 
-    assert manager.validate(_call()).note is None
+    assert manager.validate(_call())[0].note is None
 
 
 def test_a_tool_in_a_revoked_category_is_unavailable(
@@ -122,8 +124,9 @@ def test_a_tool_in_a_revoked_category_is_unavailable(
     """``NONE`` reads as "no such tool", which is what the model is told."""
     manager = _manager(tool_manager, controller, read=PermissionLevel.NONE)
 
-    decision = manager.validate(_call())
+    decision, hook_messages = manager.validate(_call())
 
+    assert hook_messages == []
     assert decision.outcome is PermissionOutcome.UNAVAILABLE
     assert controller.requests == []
 
@@ -132,8 +135,9 @@ def test_an_unknown_tool_name_is_unavailable(
     permission_manager: PermissionManager, controller: ScriptedController
 ) -> None:
     """A tool that does not exist resolves without asking anyone."""
-    decision = permission_manager.validate(_call("NoSuchTool"))
+    decision, hook_messages = permission_manager.validate(_call("NoSuchTool"))
 
+    assert hook_messages == []
     assert decision.outcome is PermissionOutcome.UNAVAILABLE
     assert controller.requests == []
 
@@ -259,3 +263,38 @@ def test_validate_dispatches_around_an_ask_denial_carrying_the_note(
     manager.validate(_call())
 
     assert events[0][1]["decision"].note == "not that file"
+
+
+@pytest.mark.parametrize(
+    "level, answer, outcome",
+    [
+        (PermissionLevel.AUTO, Decision.ALLOW, PermissionOutcome.ALLOWED),
+        (PermissionLevel.ASK, Decision.ALLOW, PermissionOutcome.ALLOWED),
+        (PermissionLevel.ASK, Decision.DENY, PermissionOutcome.DENIED),
+        (PermissionLevel.NONE, Decision.ALLOW, PermissionOutcome.UNAVAILABLE),
+    ],
+)
+def test_permission_hook_messages_preserve_decision(
+    tool_manager: ToolManager,
+    level: PermissionLevel,
+    answer: Decision,
+    outcome: PermissionOutcome,
+) -> None:
+    """Before and after messages do not replace any permission outcome or note."""
+    from arancio.core.messages import ErrorMessage
+
+    hooks = HookManager()
+    before = ErrorMessage(content="before")
+    after = ErrorMessage(content="after")
+    hooks.register(Hook.BEFORE_PERMISSION_CHECK, lambda **_: before)
+    hooks.register(Hook.AFTER_PERMISSION_CHECK, lambda **_: after)
+    manager = _manager(
+        tool_manager,
+        ScriptedController([(answer, "note")]),
+        hook_manager=hooks,
+        read=level,
+    )
+    decision, messages = manager.validate(_call())
+    assert decision.outcome is outcome
+    assert decision.note == ("note" if level is PermissionLevel.ASK else None)
+    assert messages == [before, after]

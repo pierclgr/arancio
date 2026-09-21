@@ -5,7 +5,7 @@ from arancio.core.controllers.requests import PermissionRequest
 from arancio.core.controllers.responses import Decision
 from arancio.core.hooks.manager import HookManager
 from arancio.core.hooks.types import Hook
-from arancio.core.messages import ToolCallMessage
+from arancio.core.messages import Message, ToolCallMessage
 from arancio.core.permissions.types import (
     PermissionCategory,
     PermissionDecision,
@@ -137,7 +137,9 @@ class PermissionManager:
         """
         return self._tool_manager.create_tools(self._permissions)
 
-    def validate(self, call: ToolCallMessage) -> PermissionDecision:
+    def validate(
+        self, call: ToolCallMessage
+    ) -> tuple[PermissionDecision, list[Message]]:
         """Decide whether a requested tool call may execute.
 
         Dispatches ``before_permission_check`` before resolving the call and
@@ -156,15 +158,18 @@ class PermissionManager:
 
         Returns:
             The :class:`~arancio.core.permissions.types.PermissionDecision`
-            resolving the call. The caller runs the tool and turns the decision
+            resolving the call, and hook messages in dispatch order.
+            The caller runs the tool and turns the decision
             into the messages the model sees.
         """
-        self._hook_manager.run(Hook.BEFORE_PERMISSION_CHECK, call=call)
+        messages = self._hook_manager.run(Hook.BEFORE_PERMISSION_CHECK, call=call)
         decision = self._resolve(call)
-        self._hook_manager.run(
-            Hook.AFTER_PERMISSION_CHECK, call=call, decision=decision
+        messages.extend(
+            self._hook_manager.run(
+                Hook.AFTER_PERMISSION_CHECK, call=call, decision=decision
+            )
         )
-        return decision
+        return decision, messages
 
     def _resolve(self, call: ToolCallMessage) -> PermissionDecision:
         """Resolve a tool call to a permission decision, without dispatching hooks.

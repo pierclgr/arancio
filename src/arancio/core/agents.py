@@ -1,5 +1,6 @@
 """Agent loop orchestrating client calls, tool use and message history."""
 
+import sys
 import time
 from collections.abc import Iterator
 from itertools import count
@@ -124,17 +125,6 @@ class Agent:
     @property
     def _tool_schemas(self) -> List[ToolSchema]:
         return [tool.schema() for tool in self._tools.values()]
-
-    @property
-    def _system_prompt(self) -> str:
-        """Build the system prompt, dispatching ``system_prompt_build``.
-
-        Returns:
-            The rendered system prompt string.
-        """
-        prompt = self._system_prompt_builder.build()
-        self._hook_manager.run(Hook.SYSTEM_PROMPT_BUILD, system_prompt=prompt)
-        return prompt
 
     @property
     def max_turns(self) -> int | str:
@@ -344,14 +334,16 @@ class Agent:
         """
         self._message_history = list(messages)
 
-    def _run_tool(self, call: ToolCallMessage) -> ToolResultMessage:
-        """Execute a tool call and return a ToolResultMessage.
+    def _run_tool(
+        self, call: ToolCallMessage
+    ) -> tuple[ToolResultMessage, list[Message]]:
+        """Execute a tool call and return its result alongside hook messages.
 
         Args:
             call: the tool call message to execute.
 
         Returns:
-            A ToolResultMessage with the tool output and error status.
+            The tool result and any hook messages.
         """
         tool = self._tools.get(call.name)
         if tool is None:
@@ -359,7 +351,7 @@ class Agent:
             return ToolErrorMessage(
                 content=message,
                 id=call.id,
-            )
+            ), []
         else:
             return tool.call(call_id=call.id, **(call.arguments or {}))
 
@@ -385,7 +377,9 @@ class Agent:
         :class:`ErrorMessage`; and ``turn_end`` fires from a ``finally``
         wrapping each turn, so a ``turn_end`` handler's own exception
         replaces an in-flight ``return`` or exception rather than following
-        it, per ordinary Python ``finally`` semantics.
+        it, per ordinary Python ``finally`` semantics. Returned hook messages
+        are yielded directly; turn-end messages are suppressed during generator
+        closure so cleanup never yields while handling GeneratorExit.
 
         Args:
             message: the initial user message that starts the turn.
@@ -400,7 +394,7 @@ class Agent:
             initial ``message`` is appended to history but never yielded, since
             the caller already holds it.
         """
-        self._hook_manager.run(Hook.AGENT_START, message=message)
+        yield from self._hook_manager.run(Hook.AGENT_START, message=message)
         self.add_message_to_history(message)
         for extra in prelude or []:
             yield from self._emit(extra)
@@ -422,14 +416,20 @@ class Agent:
 
             # try sending request to the client, if something goes wrong, retry
             try:
-                self._hook_manager.run(Hook.TURN_START, turn=turn)
+                yield from self._hook_manager.run(Hook.TURN_START, turn=turn)
 
+                system_prompt = self._system_prompt_builder.build()
+                yield from self._hook_manager.run(
+                    Hook.SYSTEM_PROMPT_BUILD, system_prompt=system_prompt
+                )
                 request = self._client.build_request(
                     messages=self._message_history,
-                    system_prompt=self._system_prompt,
+                    system_prompt=system_prompt,
                     tools=self._tool_schemas,
                 )
-                self._hook_manager.run(Hook.BEFORE_MODEL_REQUEST, request=request)
+                yield from self._hook_manager.run(
+                    Hook.BEFORE_MODEL_REQUEST, request=request
+                )
 
                 for response_message in self._client.send_request(request=request):
                     if isinstance(response_message, ChunkMessage):
@@ -438,12 +438,12 @@ class Agent:
                     received_finalized = True
                     if isinstance(response_message, ToolCallMessage):
                         tool_calls.append(response_message)
-                    self._hook_manager.run(
+                    yield from self._hook_manager.run(
                         Hook.MESSAGE_RECEIVED, response_message=response_message
                     )
                     yield from self._emit(response_message)
 
-                self._hook_manager.run(
+                yield from self._hook_manager.run(
                     Hook.AFTER_MODEL_RESPONSE, request=request, tool_calls=tool_calls
                 )
 
@@ -454,17 +454,20 @@ class Agent:
 
                 # natural stop: text-only reply
                 if not tool_calls:
-                    self._hook_manager.run(
+                    yield from self._hook_manager.run(
                         Hook.AGENT_END, message_history=self._message_history
                     )
                     return
 
                 # call the tools if tools are requested
                 for call in tool_calls:
-                    decision = self._permission_manager.validate(call)
+                    decision, hook_messages = self._permission_manager.validate(call)
+                    yield from hook_messages
                     feedback = self._permission_message(call, decision)
                     if decision.outcome is PermissionOutcome.ALLOWED:
-                        yield from self._emit(self._run_tool(call))
+                        result, hook_messages = self._run_tool(call)
+                        yield from hook_messages
+                        yield from self._emit(result)
 
                     # the note follows the result; a refusal is fed back to the
                     # model and surfaced to the user so the model can react
@@ -475,7 +478,7 @@ class Agent:
                 # dispatched for every failed turn, retried or not; the
                 # source="agent" dispatch below additionally fires only when
                 # the run is about to end
-                self._hook_manager.run(
+                yield from self._hook_manager.run(
                     Hook.ERROR, source="model", error=e, request=request
                 )
                 # always surface the error to the consumer for visibility, but
@@ -485,13 +488,17 @@ class Agent:
                 # must not trigger a retry
                 yield ErrorMessage(content=f"Error while executing user request: {e}")
                 if received_finalized:
-                    self._hook_manager.run(Hook.ERROR, source="agent", error=e)
+                    yield from self._hook_manager.run(
+                        Hook.ERROR, source="agent", error=e
+                    )
                     return
                 # abort once the failed turns in a row reach max_retries
                 consecutive_errors += 1
                 if consecutive_errors >= self._max_retries:
                     yield ErrorMessage(content="Max retries exceeded")
-                    self._hook_manager.run(Hook.ERROR, source="agent", error=e)
+                    yield from self._hook_manager.run(
+                        Hook.ERROR, source="agent", error=e
+                    )
                     return
                 # wait before retrying so the turn is not retried immediately;
                 # the wait grows by the multiplier on each consecutive retry
@@ -499,7 +506,11 @@ class Agent:
                 retry_wait *= self._retry_delay_multiplier
 
             finally:
-                self._hook_manager.run(Hook.TURN_END, turn=turn)
+                # closing a generator must run cleanup without yielding
+                closing = isinstance(sys.exception(), GeneratorExit)
+                hook_messages = self._hook_manager.run(Hook.TURN_END, turn=turn)
+                if not closing:
+                    yield from hook_messages
 
-        self._hook_manager.run(Hook.ERROR, source="agent", error=None)
+        yield from self._hook_manager.run(Hook.ERROR, source="agent", error=None)
         yield ErrorMessage(content="Max turns exceeded")
