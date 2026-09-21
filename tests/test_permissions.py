@@ -10,6 +10,8 @@ from fakes import ScriptedController
 
 from arancio.core.controllers.requests import PermissionRequest
 from arancio.core.controllers.responses import Decision
+from arancio.core.hooks.manager import HookManager
+from arancio.core.hooks.types import Hook
 from arancio.core.messages import ToolCallMessage
 from arancio.core.permissions.manager import PermissionManager
 from arancio.core.permissions.types import (
@@ -35,6 +37,7 @@ def _call(name: str = "ReadFileTool") -> ToolCallMessage:
 def _manager(
     tool_manager: ToolManager,
     controller: ScriptedController,
+    hook_manager: HookManager | None = None,
     **levels: PermissionLevel,
 ) -> PermissionManager:
     """Build a permission manager with named categories overridden.
@@ -42,6 +45,7 @@ def _manager(
     Args:
         tool_manager: the manager that builds granted tools.
         controller: the controller resolving ``ASK`` calls.
+        hook_manager: the hook manager ``validate`` dispatches through.
         **levels: category name (lowercase) to level, overriding ``ASK``.
 
     Returns:
@@ -50,8 +54,13 @@ def _manager(
     grants = {category: PermissionLevel.ASK for category in PermissionCategory}
     for name, level in levels.items():
         grants[PermissionCategory[name.upper()]] = level
+    if hook_manager is None:
+        hook_manager = HookManager()
     return PermissionManager(
-        tool_manager=tool_manager, controller=controller, permissions=grants
+        tool_manager=tool_manager,
+        controller=controller,
+        permissions=grants,
+        hook_manager=hook_manager,
     )
 
 
@@ -186,3 +195,67 @@ def test_a_category_maps_to_tool_classes_not_names() -> None:
     """The mapping is by class, so renaming a tool cannot silently ungate it."""
     assert PermissionCategory.for_tool("WriteFileTool") is PermissionCategory.WRITE
     assert PermissionCategory.for_tool("NoSuchTool") is None
+
+
+def _record(manager: HookManager, *hooks: Hook) -> list:
+    """Register a handler on each hook that appends its dispatch to a list.
+
+    Args:
+        manager: the hook manager to register against.
+        *hooks: the hooks to record.
+
+    Returns:
+        The list handlers append ``(hook, kwargs)`` to, in dispatch order.
+    """
+    events: list = []
+    for hook in hooks:
+        manager.register(
+            hook, lambda hook=hook, **kwargs: events.append((hook, kwargs))
+        )
+    return events
+
+
+def test_validate_dispatches_before_and_after_around_an_auto_allow(
+    tool_manager: ToolManager, controller: ScriptedController
+) -> None:
+    """A clean auto-allow fires exactly the before/after pair, in order."""
+    hooks = HookManager()
+    events = _record(hooks, Hook.BEFORE_PERMISSION_CHECK, Hook.AFTER_PERMISSION_CHECK)
+    manager = _manager(tool_manager, controller, hooks, read=PermissionLevel.AUTO)
+    call = _call()
+
+    manager.validate(call)
+
+    assert [hook for hook, _ in events] == [
+        Hook.BEFORE_PERMISSION_CHECK,
+        Hook.AFTER_PERMISSION_CHECK,
+    ]
+    assert events[0][1]["call"] is call
+    assert events[1][1]["decision"].outcome is PermissionOutcome.ALLOWED
+
+
+def test_validate_dispatches_exactly_one_pair_for_an_unavailable_call(
+    tool_manager: ToolManager, controller: ScriptedController
+) -> None:
+    """Only ``_resolve``'s unavailable branch runs, not all three."""
+    hooks = HookManager()
+    events = _record(hooks, Hook.BEFORE_PERMISSION_CHECK, Hook.AFTER_PERMISSION_CHECK)
+    manager = _manager(tool_manager, controller, hooks)
+
+    manager.validate(_call("NoSuchTool"))
+
+    assert len(events) == 2
+
+
+def test_validate_dispatches_around_an_ask_denial_carrying_the_note(
+    tool_manager: ToolManager,
+) -> None:
+    """The denial note the user typed reaches the ``after`` dispatch too."""
+    hooks = HookManager()
+    events = _record(hooks, Hook.AFTER_PERMISSION_CHECK)
+    controller = ScriptedController([(Decision.DENY, "not that file")])
+    manager = _manager(tool_manager, controller, hooks)
+
+    manager.validate(_call())
+
+    assert events[0][1]["decision"].note == "not that file"

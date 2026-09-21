@@ -11,6 +11,8 @@ from arancio.core.constants.path import (
     TOOL_INPUT_SCHEMA_FILENAME,
     TOOLS_HARNESS_PATH,
 )
+from arancio.core.hooks.manager import HookManager
+from arancio.core.hooks.types import Hook
 from arancio.core.messages import ToolResultMessage
 from arancio.core.parsers.tool_result.base import BaseToolResultParser
 from arancio.core.tools.schema import ToolSchema
@@ -38,12 +40,16 @@ class BaseTool(ABC):
         _session: the process-wide :class:`ToolSession` for cross-tool
             coordination (e.g. read-first guards), shared by every tool
             through this class attribute.
+        _hook_manager: the hook manager :meth:`call` dispatches
+            ``before_tool_call``/``after_tool_call``/``error`` through,
+            injected by the caller (typically
+            :meth:`~arancio.core.tools.manager.ToolManager.create_tools`).
     """
 
     _result_parser: Type[BaseToolResultParser] = BaseToolResultParser
     _session: ToolSession = shared_session
 
-    def __init__(self) -> None:
+    def __init__(self, hook_manager: HookManager) -> None:
         """Initialize the tool by loading description and input schema from disk.
 
         Reads ``description.md`` and ``input_schema.yml`` from
@@ -54,10 +60,14 @@ class BaseTool(ABC):
         include and script targets resolve against ``description.md``'s
         own directory.
 
+        Args:
+            hook_manager: the hook manager :meth:`call` dispatches through.
+
         Raises:
             FileNotFoundError: when the harness directory for this
                 tool does not exist.
         """
+        self._hook_manager = hook_manager
         self._harness_dir = TOOLS_HARNESS_PATH / camel_to_snake(self.name)
 
         if not self._harness_dir.is_dir():
@@ -99,6 +109,13 @@ class BaseTool(ABC):
     def call(self, call_id: str, **kwargs) -> ToolResultMessage:
         """Execute the tool and build ToolResultMessage output.
 
+        Dispatches ``before_tool_call`` before running, ``error`` (with
+        ``source="tool"``) when :meth:`_call` raises, and ``after_tool_call``
+        once the result is built, successful or not. Only a :meth:`_call`
+        failure is caught here — a hook handler's own exception during any
+        of these three dispatches propagates out of this method instead of
+        becoming a :class:`~arancio.core.messages.ToolErrorMessage`.
+
         Args:
             call_id: identifier of the tool call this result answers.
             **kwargs: tool arguments matching ``input_schema``.
@@ -106,18 +123,37 @@ class BaseTool(ABC):
         Returns:
             The tool output build as message.
         """
+        self._hook_manager.run(
+            Hook.BEFORE_TOOL_CALL, name=self.name, call_id=call_id, arguments=kwargs
+        )
         try:
             output = self._call(**kwargs)
             is_error = False
         except Exception as exc:
+            self._hook_manager.run(
+                Hook.ERROR,
+                source="tool",
+                name=self.name,
+                call_id=call_id,
+                arguments=kwargs,
+                error=exc,
+            )
             output = f"Error while executing {self.name}: {exc}"
             is_error = True
 
-        return self._result_parser.parse(
+        result = self._result_parser.parse(
             call_id=call_id,
             output=output,
             is_error=is_error,
         )
+        self._hook_manager.run(
+            Hook.AFTER_TOOL_CALL,
+            name=self.name,
+            call_id=call_id,
+            arguments=kwargs,
+            result=result,
+        )
+        return result
 
     @abstractmethod
     def _call(self, **kwargs) -> Any:

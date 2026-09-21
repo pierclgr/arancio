@@ -17,6 +17,7 @@ from arancio.commands.registry import (
     SESSION_DISCARDING_COMMANDS,
 )
 from arancio.core.agents import Agent
+from arancio.core.hooks.manager import HookManager
 from arancio.core.messages import (
     AssistantMessage,
     ErrorMessage,
@@ -54,17 +55,13 @@ class ActionExecutor:
     them the same way.
     """
 
-    # shared across every instance so resolving @mentions doesn't reload the
-    # harness files on every prompt
-    _read_file_tool: ReadFileTool = ReadFileTool()
-    _shell_command_tool: ShellCommandTool = ShellCommandTool()
-
     def __init__(
         self,
         agent: Agent,
         application: App,
         settings_manager: SettingsManager,
         session_manager: SessionManager,
+        hook_manager: HookManager,
     ) -> None:
         """Store the objects used to carry out actions.
 
@@ -76,11 +73,22 @@ class ActionExecutor:
             session_manager: the manager owning the active chat; every write
                 goes through its ``session_recorder``, and ``/clear`` receives the
                 manager itself.
+            hook_manager: the hook manager injected into this executor's own
+                ``ReadFileTool``/``ShellCommandTool`` instances (used for the
+                ``!``/``!!`` shell path and ``@mention`` reads), the same
+                shared instance threaded into the rest of the agent stack, so
+                a handler registered anywhere sees these calls too.
         """
         self._agent: Agent = agent
         self._application: App = application
         self._settings_manager: SettingsManager = settings_manager
         self._session_manager: SessionManager = session_manager
+        # instance attributes, built once here (not module-import-time class
+        # attributes), so the app's shared hook manager can reach them
+        self._read_file_tool: ReadFileTool = ReadFileTool(hook_manager=hook_manager)
+        self._shell_command_tool: ShellCommandTool = ShellCommandTool(
+            hook_manager=hook_manager
+        )
 
     def _writes_nothing(self, command: Type[BaseCommand] | None) -> bool:
         """Report whether this command must leave the log untouched.
@@ -373,8 +381,7 @@ class ActionExecutor:
             self._agent(message, prelude=prelude)
         )
 
-    @classmethod
-    def _resolve_mentions(cls, mentions: list[Path]) -> list[Message]:
+    def _resolve_mentions(self, mentions: list[Path]) -> list[Message]:
         """Synthesize a tool call/result pair for each resolved @mention.
 
         Bypasses :class:`arancio.core.permissions.manager.PermissionManager`
@@ -410,11 +417,11 @@ class ActionExecutor:
                 else:
                     command = f"ls -la -- {shlex.quote(str(target))}"
                 arguments = {"command": command}
-                result = cls._shell_command_tool.call(call_id=call_id, **arguments)
+                result = self._shell_command_tool.call(call_id=call_id, **arguments)
             else:
                 name = "ReadFileTool"
                 arguments = {"file_path": str(target)}
-                result = cls._read_file_tool.call(call_id=call_id, **arguments)
+                result = self._read_file_tool.call(call_id=call_id, **arguments)
             messages.append(
                 ToolCallMessage(
                     content=f"{name}({json.dumps(arguments)})",

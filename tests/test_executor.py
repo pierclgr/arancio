@@ -16,6 +16,7 @@ from fakes import RecordingApp, ScriptedClient
 
 import arancio.storage.manager as storage_module
 from arancio.core.agents import Agent
+from arancio.core.hooks.manager import HookManager
 from arancio.core.messages import (
     AssistantMessage,
     ErrorMessage,
@@ -55,6 +56,7 @@ def executor(
     app: RecordingApp,
     settings_manager: SettingsManager,
     session_manager: SessionManager,
+    hook_manager: HookManager,
     tmp_path: Path,
 ) -> ActionExecutor:
     """Return an executor over a real, configured, open session.
@@ -64,6 +66,8 @@ def executor(
         app: the fake app commands act on.
         settings_manager: the manager holding a usable provider and model.
         session_manager: the manager owning the open chat.
+        hook_manager: the hook manager the executor's own tools dispatch
+            through.
         tmp_path: pytest's per-test temporary directory.
 
     Returns:
@@ -82,6 +86,7 @@ def executor(
         application=app,
         settings_manager=settings_manager,
         session_manager=session_manager,
+        hook_manager=hook_manager,
     )
 
 
@@ -317,6 +322,7 @@ def test_a_prompt_without_a_model_is_an_error_not_a_crash(
     app: RecordingApp,
     settings_manager: SettingsManager,
     session_manager: SessionManager,
+    hook_manager: HookManager,
     tmp_path: Path,
 ) -> None:
     """A first run has no provider yet, and typing must still be safe."""
@@ -329,6 +335,7 @@ def test_a_prompt_without_a_model_is_an_error_not_a_crash(
         application=app,
         settings_manager=settings_manager,
         session_manager=session_manager,
+        hook_manager=hook_manager,
     )
 
     produced = list(executor.execute(PromptAction(prompt="hi", raw_input="hi")))

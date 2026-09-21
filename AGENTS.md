@@ -196,6 +196,100 @@ so model-facing wording stays in the one place that talks to the model. How a ca
 authorized is **not** recorded — the session keeps only what a resumed run needs, and the
 `ToolResultMessage`/`ToolErrorMessage` already say whether the tool ran.
 
+**Hooks** (`core/hooks/`) — `Hook` (`core/hooks/types.py`) is a string-valued enum naming
+every dispatch point: `agent_start`/`agent_end`, `turn_start`/`turn_end`,
+`system_prompt_build`, `before_model_request`/`after_model_response`,
+`message_received`, `before_tool_call`/`after_tool_call`,
+`before_permission_check`/`after_permission_check`, and a single `error`. `HookManager`
+(`core/hooks/manager.py`) owns its own registrations — there is no global singleton, so
+two managers never share handlers. `register(hook, handler)` appends a handler for a hook;
+registering the same callable twice adds two invocations. `run(hook, **kwargs)` calls every
+handler registered for that hook synchronously, on the caller's thread, in registration
+order, forwarding the keyword arguments unchanged (including object identity) to each one.
+Handler return values are ignored — there is no transformation or blocking-result
+protocol — and an exception raised by a handler propagates immediately, so handlers after
+it do not run. Dispatch iterates a snapshot of the handler list taken when `run` starts, so
+a handler that registers another handler mid-dispatch only affects the next call to `run`.
+A hook with no registered handlers is a no-op. Both `core/hooks/__init__.py` and every
+sibling `core` package's `__init__.py` are empty; a caller imports `Hook` from
+`core.hooks.types` and `HookManager` from `core.hooks.manager` directly, the same as any
+other two-file `types.py`/`manager.py` package (`core/permissions/`, `core/controllers/`).
+
+Threading follows the same explicit-constructor-injection pattern as
+`controller`/`tool_manager` — never the class-attribute singleton `BaseTool._session`
+uses, since two callers must be able to hold independent hook managers — stored as
+`self._hook_manager`. Every constructor that takes `hook_manager` (`Agent`,
+`PermissionManager`, `ToolManager`, `BaseTool`/`FetchWebTool`, `ActionExecutor`) requires
+it, with no `None` default: production code (`ui/__main__.py`) never has a reason to omit
+it for any of them, so requiring it catches a caller that forgot to thread the shared
+instance through, rather than silently falling back to a private no-op manager.
+`ui/__main__.py:main` builds **one** `HookManager()` alongside `controller` and passes the
+same instance into `ToolManager`, `PermissionManager`, `Agent` and `App` (which forwards it
+to the `ActionExecutor` it builds); `ToolManager.create_tools` re-threads it into every tool
+it builds, so one handler registered anywhere in that graph sees every dispatch from every
+component — including the `!`/`!!` shell path and `@mention` reads, which run through
+`ActionExecutor`'s own `ReadFileTool`/`ShellCommandTool` instances (built once in its
+`__init__`, not as module-import-time class attributes, precisely so the shared instance can
+reach them).
+`BaseClient`/`LiteLLMClient` never receive one: `before_model_request` /
+`after_model_response` / the model-sourced `error` are dispatched by `Agent.__call__`
+around its calls to `self._client.build_request`/`send_request`, not by the client itself —
+placing them inside `LiteLLMClient` would never fire for `ScriptedClient`, which overrides
+`send_request` outright and never calls into `LiteLLMClient` code. The same reasoning means
+`FetchWebTool._call`'s own internal summarization request (it calls
+`self._client.build_request`/`send_request` directly, outside any `Agent` loop) is
+invisible to those hooks too — only the `before_tool_call`/`after_tool_call`/`error`
+wrapped around the whole `FetchWebTool.call` see it.
+
+Dispatch sites, by hook:
+- `Agent.__call__`: `agent_start` (`message`) — first statement, before the message is
+  even recorded to history, and before the turn loop's own error handling exists: a
+  handler exception here is not caught, retried or turned into an `ErrorMessage`, unlike
+  every other dispatch below. Then per turn: `turn_start` (`turn`, the loop index, 0-based)
+  — first line inside that turn's `try`, so a broken handler is retried like any other turn
+  failure and still gets a paired `turn_end`; `before_model_request` (`request`) right after
+  `build_request` returns; `message_received` (`response_message`) for each finalized
+  (non-chunk) message as it streams in; `after_model_response` (`request`, `tool_calls`)
+  once the stream completes; then exactly one of `agent_end` (`message_history`,
+  natural text-only stop) or `error` with `source="model"` (`error`, `request` — `None`
+  when `build_request` itself failed before returning one), dispatched on *every* failed
+  turn, retried or not. `error` with `source="agent"` (`error`) additionally fires only
+  when the run is about to actually end on that failure (the `received_finalized` early
+  return, or `max_retries` exhausted), and once more with `error=None` when `max_turns` is
+  exhausted by loop exhaustion rather than an exception — so exactly one of
+  `agent_end`/`source="agent"` fires per completed run, modulo an unguarded `agent_start`
+  failure. `turn_end` (`turn`) fires from a `finally` wrapping the whole turn (one
+  `try`/`except`/`finally`, no extra nesting), exactly once per turn regardless of exit
+  path — including, per ordinary Python `finally` semantics, that a `turn_end` handler's
+  own exception replaces an in-flight `return` or exception rather than being appended
+  after it.
+- `Agent._system_prompt`: `system_prompt_build` (`system_prompt`), read inside
+  `build_request`'s call, so inside the same per-turn `try`.
+- `BaseTool.call`: `before_tool_call` (`name`, `call_id`, `arguments`) before running;
+  `error` with `source="tool"` (`name`, `call_id`, `arguments`, `error`) when `_call`
+  raises; `after_tool_call` (`name`, `call_id`, `arguments`, `result`) once the result
+  message is built, unconditionally — both the `source="tool"` `error` and
+  `after_tool_call` fire on a failed call. Only `_call`'s own exceptions are caught by
+  `call`'s try/except; a handler exception raised during any of these three dispatches
+  propagates out of `call` itself, unlike a tool's own failure. When that happens inside
+  `Agent.__call__`'s tool-calling loop, it is caught by the *same* `except Exception as
+  e:` that catches a genuine model-call failure and dispatched the same way — `error`
+  with `source="model"`, surfaced as `"Error while executing user request: ..."`, and
+  retried/backed-off exactly like a provider outage, never as `source="tool"` since
+  `_call` itself never ran. This is accepted, not fixed: splitting the turn's try/except
+  to disambiguate would change existing retry semantics beyond wiring dispatch calls.
+- `PermissionManager.validate`: `before_permission_check` (`call`) then
+  `after_permission_check` (`call`, `decision`), exactly one pair per call regardless of
+  which of the unavailable/auto/ask outcomes resolves it — `validate` is now a thin
+  before/after wrapper around `_resolve`, which holds the unchanged unavailable/auto/ask
+  logic `validate` used to hold directly, so the dispatch pair isn't tripled across the
+  three early returns.
+
+The three error sources (`tool`/`model`/`agent`) are unified under the single `error` hook
+rather than three separately named ones, distinguished by a `source` kwarg — a handler that
+wants every failure registers once for `error` and reads `source`; one that only cares about
+tool failures filters on `kwargs["source"] == "tool"`.
+
 **Controller port** (`core/controllers/`) — the core↔UI seam (ports & adapters). Core
 sends a `BaseControllerRequest` (e.g. `PermissionRequest`) and gets a
 `BaseControllerResponse` (e.g. `PermissionResponse` carrying a `Decision`), dispatched by

@@ -3,6 +3,8 @@
 from arancio.core.controllers.base import Controller
 from arancio.core.controllers.requests import PermissionRequest
 from arancio.core.controllers.responses import Decision
+from arancio.core.hooks.manager import HookManager
+from arancio.core.hooks.types import Hook
 from arancio.core.messages import ToolCallMessage
 from arancio.core.permissions.types import (
     PermissionCategory,
@@ -27,12 +29,14 @@ class PermissionManager:
         _permissions: mapping of every category to its permission level.
         _tool_manager: the tool manager that creates tools from the grants.
         _controller: the controller used to ask the user about ``ask`` grants.
+        _hook_manager: the hook manager :meth:`validate` dispatches through.
     """
 
     def __init__(
         self,
         tool_manager: ToolManager,
         controller: Controller,
+        hook_manager: HookManager,
         permissions: dict[PermissionCategory, PermissionLevel] | None = None,
     ) -> None:
         """Initialize the manager with a tool manager, controller and grants.
@@ -42,6 +46,8 @@ class PermissionManager:
                 to resolve which tools are available.
             controller: the controller through which the manager asks the user
                 to approve or deny ``ask`` grants.
+            hook_manager: the hook manager :meth:`validate` dispatches
+                through.
             permissions: initial category-to-level grants, covering every
                 category. When omitted (``None``) every category is granted at
                 :attr:`PermissionLevel.ASK`.
@@ -53,6 +59,7 @@ class PermissionManager:
         self._permissions: dict[PermissionCategory, PermissionLevel] = permissions
         self._tool_manager: ToolManager = tool_manager
         self._controller: Controller = controller
+        self._hook_manager: HookManager = hook_manager
 
     def __repr__(self) -> str:
         """Return a developer-friendly representation of the permission grants.
@@ -133,6 +140,9 @@ class PermissionManager:
     def validate(self, call: ToolCallMessage) -> PermissionDecision:
         """Decide whether a requested tool call may execute.
 
+        Dispatches ``before_permission_check`` before resolving the call and
+        ``after_permission_check`` once resolved, exactly once each
+        regardless of which of :meth:`_resolve`'s outcomes is reached.
         Allows ``auto`` grants without asking and asks the user through the
         controller for ``ask`` grants. A call whose category is at
         :attr:`PermissionLevel.NONE` (or maps to no category) resolves as
@@ -148,6 +158,26 @@ class PermissionManager:
             The :class:`~arancio.core.permissions.types.PermissionDecision`
             resolving the call. The caller runs the tool and turns the decision
             into the messages the model sees.
+        """
+        self._hook_manager.run(Hook.BEFORE_PERMISSION_CHECK, call=call)
+        decision = self._resolve(call)
+        self._hook_manager.run(
+            Hook.AFTER_PERMISSION_CHECK, call=call, decision=decision
+        )
+        return decision
+
+    def _resolve(self, call: ToolCallMessage) -> PermissionDecision:
+        """Resolve a tool call to a permission decision, without dispatching hooks.
+
+        Kept separate from :meth:`validate` so hook dispatch there wraps
+        exactly one before/after pair instead of tripling
+        ``after_permission_check`` across the three branches below.
+
+        Args:
+            call: the tool call the agent wants to execute.
+
+        Returns:
+            The resolved :class:`~arancio.core.permissions.types.PermissionDecision`.
         """
         # unavailable case
         if not self._tool_manager.is_tool_available(call.name, self._permissions):

@@ -1,6 +1,7 @@
 """Tool construction driven by a permission list."""
 
 from arancio.core.clients.base import BaseClient
+from arancio.core.hooks.manager import HookManager
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 from arancio.core.tools.base import BaseTool
 from arancio.core.tools.web.fetch import FetchWebTool
@@ -16,17 +17,24 @@ class ToolManager:
 
     Attributes:
         _web_summary_client: the client injected into :class:`FetchWebTool`.
+        _hook_manager: the hook manager injected into every tool this
+            manager builds.
     """
 
-    def __init__(self, web_summary_client: BaseClient) -> None:
-        """Initialize the manager with the summarization client to inject.
+    def __init__(
+        self, web_summary_client: BaseClient, hook_manager: HookManager
+    ) -> None:
+        """Initialize the manager with the summarization client and hooks to inject.
 
         Args:
             web_summary_client: the client injected into :class:`FetchWebTool`;
                 held by reference so its settings can be changed in place at
                 runtime and seen by the tool.
+            hook_manager: the hook manager injected into every tool this
+                manager builds.
         """
         self._web_summary_client = web_summary_client
+        self._hook_manager = hook_manager
 
     @staticmethod
     def available_tools(
@@ -80,12 +88,18 @@ class ToolManager:
                 :attr:`PermissionLevel.NONE` are skipped.
 
         Returns:
-            One instance per tool class across the granted categories.
+            One instance per tool class across the granted categories, each
+            built with this manager's hook manager injected.
         """
         tools = []
         for tool_cls in self.available_tools(permissions):
             if tool_cls is FetchWebTool:
-                tools.append(FetchWebTool(client=self._web_summary_client))
+                tools.append(
+                    FetchWebTool(
+                        client=self._web_summary_client,
+                        hook_manager=self._hook_manager,
+                    )
+                )
             else:
-                tools.append(tool_cls())
+                tools.append(tool_cls(hook_manager=self._hook_manager))
         return tools

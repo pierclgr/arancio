@@ -16,6 +16,7 @@ from fakes import RecordingApp, ScriptedClient, ScriptedController
 
 import arancio.storage.manager as storage_module
 from arancio.core.agents import Agent
+from arancio.core.hooks.manager import HookManager
 from arancio.core.messages import (
     AssistantMessage,
     Message,
@@ -51,11 +52,16 @@ def wired(
     storage_manager = StorageManager(root=tmp_path / "arancio")
     controller = ScriptedController()
     client = ScriptedClient()
-    tool_manager = ToolManager(web_summary_client=client)
+    hook_manager = HookManager()
+    tool_manager = ToolManager(web_summary_client=client, hook_manager=hook_manager)
     permission_manager = PermissionManager(
-        tool_manager=tool_manager, controller=controller
+        tool_manager=tool_manager, controller=controller, hook_manager=hook_manager
     )
-    agent = Agent(client=client, permission_manager=permission_manager)
+    agent = Agent(
+        client=client,
+        permission_manager=permission_manager,
+        hook_manager=hook_manager,
+    )
     settings_manager = SettingsManager(
         storage_manager=storage_manager,
         client=client,
@@ -76,6 +82,7 @@ def wired(
         application=RecordingApp(working_directory=tmp_path),
         settings_manager=settings_manager,
         session_manager=session_manager,
+        hook_manager=hook_manager,
     )
     return executor, session_manager, storage_manager, client
 

@@ -20,6 +20,7 @@ from fakes import ScriptedClient, ScriptedController
 
 from arancio.core.agents import Agent
 from arancio.core.builders import system_prompt as system_prompt_builder
+from arancio.core.hooks.manager import HookManager
 from arancio.core.permissions.manager import PermissionManager
 from arancio.core.tools import base as tools_base
 from arancio.core.tools.manager import ToolManager
@@ -97,46 +98,69 @@ def storage_manager(tmp_path: Path) -> StorageManager:
 
 
 @pytest.fixture
-def tool_manager(client: ScriptedClient) -> ToolManager:
+def hook_manager() -> HookManager:
+    """Return a fresh hook manager with no handlers registered.
+
+    Returns:
+        An empty hook manager for a test to register handlers on.
+    """
+    return HookManager()
+
+
+@pytest.fixture
+def tool_manager(client: ScriptedClient, hook_manager: HookManager) -> ToolManager:
     """Return a tool manager whose web summary client is scripted.
 
     Args:
         client: the scripted client handed to ``FetchWebTool``.
+        hook_manager: the hook manager injected into every tool built.
 
     Returns:
         A tool manager building real tools from the repo harness.
     """
-    return ToolManager(web_summary_client=client)
+    return ToolManager(web_summary_client=client, hook_manager=hook_manager)
 
 
 @pytest.fixture
 def permission_manager(
-    tool_manager: ToolManager, controller: ScriptedController
+    tool_manager: ToolManager,
+    controller: ScriptedController,
+    hook_manager: HookManager,
 ) -> PermissionManager:
     """Return a permission manager with every category at ``ASK``.
 
     Args:
         tool_manager: the manager that builds the granted tools.
         controller: the controller asked to resolve each ``ASK`` call.
+        hook_manager: the hook manager the manager dispatches through.
 
     Returns:
         A permission manager over real tools.
     """
-    return PermissionManager(tool_manager=tool_manager, controller=controller)
+    return PermissionManager(
+        tool_manager=tool_manager, controller=controller, hook_manager=hook_manager
+    )
 
 
 @pytest.fixture
-def agent(client: ScriptedClient, permission_manager: PermissionManager) -> Agent:
+def agent(
+    client: ScriptedClient,
+    permission_manager: PermissionManager,
+    hook_manager: HookManager,
+) -> Agent:
     """Return a real agent driven by the scripted client.
 
     Args:
         client: the scripted client standing in for the model.
         permission_manager: the manager gating the agent's tool calls.
+        hook_manager: the hook manager the agent dispatches through.
 
     Returns:
         An agent with an empty history.
     """
-    return Agent(client=client, permission_manager=permission_manager)
+    return Agent(
+        client=client, permission_manager=permission_manager, hook_manager=hook_manager
+    )
 
 
 @pytest.fixture

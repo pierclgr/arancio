@@ -17,10 +17,13 @@ from fakes import ScriptedClient
 
 import arancio.core.tools.web.fetch as fetch_module
 import arancio.core.tools.web.search as search_module
+from arancio.core.hooks.manager import HookManager
+from arancio.core.hooks.types import Hook
 from arancio.core.messages import (
     AssistantChunkMessage,
     AssistantMessage,
     ToolErrorMessage,
+    ToolResultMessage,
 )
 from arancio.core.tools.commands.shell import ShellCommandTool
 from arancio.core.tools.files.edit import EditFileTool
@@ -55,7 +58,7 @@ def _read(path: Path) -> dict:
     Returns:
         The tool's result payload.
     """
-    return ReadFileTool()._call(file_path=str(path))
+    return ReadFileTool(hook_manager=HookManager())._call(file_path=str(path))
 
 
 def test_read_numbers_every_line(sample: Path) -> None:
@@ -71,7 +74,9 @@ def test_read_numbers_every_line(sample: Path) -> None:
 
 def test_read_slices_with_offset_and_limit(sample: Path) -> None:
     """The window keeps the file's own line numbers, not the slice's."""
-    result = ReadFileTool()._call(file_path=str(sample), offset=2, limit=1)
+    result = ReadFileTool(hook_manager=HookManager())._call(
+        file_path=str(sample), offset=2, limit=1
+    )
 
     assert result["content"] == "     2\tbeta"
     assert result["start_line"] == 2
@@ -81,7 +86,9 @@ def test_read_slices_with_offset_and_limit(sample: Path) -> None:
 
 def test_read_past_the_end_returns_an_empty_slice(sample: Path) -> None:
     """An offset beyond the file reports no lines rather than failing."""
-    result = ReadFileTool()._call(file_path=str(sample), offset=99)
+    result = ReadFileTool(hook_manager=HookManager())._call(
+        file_path=str(sample), offset=99
+    )
 
     assert result["content"] == ""
     assert result["start_line"] == 0
@@ -94,7 +101,7 @@ def test_read_caps_a_very_long_line(tmp_path: Path) -> None:
     path = tmp_path / "long.txt"
     path.write_text("x" * 2500)
 
-    result = ReadFileTool()._call(file_path=str(path))
+    result = ReadFileTool(hook_manager=HookManager())._call(file_path=str(path))
 
     assert result["truncated_lines"] == 1
     assert result["content"].endswith("… [line truncated]")
@@ -111,26 +118,30 @@ def test_read_arms_the_shared_guard(sample: Path) -> None:
 def test_read_rejects_a_relative_path(tmp_path: Path) -> None:
     """Every file tool works in absolute paths only."""
     with pytest.raises(ValueError):
-        ReadFileTool()._call(file_path="sample.txt")
+        ReadFileTool(hook_manager=HookManager())._call(file_path="sample.txt")
 
 
 def test_read_rejects_a_missing_file(tmp_path: Path) -> None:
     """A missing file is a plain ``FileNotFoundError``."""
     with pytest.raises(FileNotFoundError):
-        ReadFileTool()._call(file_path=str(tmp_path / "nope.txt"))
+        ReadFileTool(hook_manager=HookManager())._call(
+            file_path=str(tmp_path / "nope.txt")
+        )
 
 
 def test_read_rejects_a_directory(tmp_path: Path) -> None:
     """A directory is not a readable file."""
     with pytest.raises(IsADirectoryError):
-        ReadFileTool()._call(file_path=str(tmp_path))
+        ReadFileTool(hook_manager=HookManager())._call(file_path=str(tmp_path))
 
 
 def test_write_creates_a_new_file_without_a_prior_read(tmp_path: Path) -> None:
     """The guard protects existing content, so a new file needs no read."""
     path = tmp_path / "nested" / "new.txt"
 
-    result = WriteFileTool()._call(file_path=str(path), content="hello\n")
+    result = WriteFileTool(hook_manager=HookManager())._call(
+        file_path=str(path), content="hello\n"
+    )
 
     assert result["action"] == "created"
     assert result["bytes_written"] == 6
@@ -140,7 +151,9 @@ def test_write_creates_a_new_file_without_a_prior_read(tmp_path: Path) -> None:
 def test_write_refuses_to_overwrite_a_file_it_never_read(sample: Path) -> None:
     """Blind overwrites are the exact thing the guard exists to stop."""
     with pytest.raises(PermissionError):
-        WriteFileTool()._call(file_path=str(sample), content="clobbered")
+        WriteFileTool(hook_manager=HookManager())._call(
+            file_path=str(sample), content="clobbered"
+        )
 
     assert sample.read_text() == "alpha\nbeta\ngamma\n"
 
@@ -149,7 +162,9 @@ def test_write_overwrites_after_a_real_read(sample: Path) -> None:
     """Reading first is what unlocks the overwrite."""
     _read(sample)
 
-    result = WriteFileTool()._call(file_path=str(sample), content="replaced\n")
+    result = WriteFileTool(hook_manager=HookManager())._call(
+        file_path=str(sample), content="replaced\n"
+    )
 
     assert result["action"] == "overwritten"
     assert sample.read_text() == "replaced\n"
@@ -161,14 +176,16 @@ def test_write_refuses_when_the_file_changed_since_the_read(sample: Path) -> Non
     os.utime(sample, (0, 0))
 
     with pytest.raises(PermissionError):
-        WriteFileTool()._call(file_path=str(sample), content="clobbered")
+        WriteFileTool(hook_manager=HookManager())._call(
+            file_path=str(sample), content="clobbered"
+        )
 
 
 def test_edit_replaces_a_unique_match(sample: Path) -> None:
     """A unique match is edited in place and reported as a diff."""
     _read(sample)
 
-    result = EditFileTool()._call(
+    result = EditFileTool(hook_manager=HookManager())._call(
         file_path=str(sample), old_string="beta", new_string="delta"
     )
 
@@ -186,7 +203,9 @@ def test_edit_refuses_an_ambiguous_match(tmp_path: Path) -> None:
     _read(path)
 
     with pytest.raises(ValueError):
-        EditFileTool()._call(file_path=str(path), old_string="x", new_string="y")
+        EditFileTool(hook_manager=HookManager())._call(
+            file_path=str(path), old_string="x", new_string="y"
+        )
 
     assert path.read_text() == "x\nx\n"
 
@@ -197,7 +216,7 @@ def test_edit_replaces_every_occurrence_when_asked(tmp_path: Path) -> None:
     path.write_text("x\nx\nx\n")
     _read(path)
 
-    result = EditFileTool()._call(
+    result = EditFileTool(hook_manager=HookManager())._call(
         file_path=str(path), old_string="x", new_string="y", replace_all=True
     )
 
@@ -208,14 +227,14 @@ def test_edit_replaces_every_occurrence_when_asked(tmp_path: Path) -> None:
 def test_edit_refuses_a_file_it_never_read(sample: Path) -> None:
     """Edit carries the same read-first guard as write."""
     with pytest.raises(PermissionError):
-        EditFileTool()._call(
+        EditFileTool(hook_manager=HookManager())._call(
             file_path=str(sample), old_string="beta", new_string="delta"
         )
 
 
 def test_shell_captures_both_streams_and_the_exit_code() -> None:
     """Stdout, stderr and the status are reported separately."""
-    result = ShellCommandTool()._call(
+    result = ShellCommandTool(hook_manager=HookManager())._call(
         command="printf out; printf err >&2; exit 3",
     )
 
@@ -227,7 +246,9 @@ def test_shell_captures_both_streams_and_the_exit_code() -> None:
 
 def test_shell_reports_a_timeout_instead_of_raising() -> None:
     """A timeout is data the model can act on, not an exception."""
-    result = ShellCommandTool()._call(command="sleep 5", timeout=1)
+    result = ShellCommandTool(hook_manager=HookManager())._call(
+        command="sleep 5", timeout=1
+    )
 
     assert result["timed_out"] is True
     assert result["exit_code"] == -1
@@ -243,11 +264,84 @@ def test_shell_truncates_oversized_output() -> None:
 
 def test_a_failing_tool_call_becomes_a_tool_error_message() -> None:
     """``BaseTool.call`` never raises: the model gets the failure as a result."""
-    message = ReadFileTool().call(call_id="c1", file_path="relative.txt")
+    message = ReadFileTool(hook_manager=HookManager()).call(
+        call_id="c1", file_path="relative.txt"
+    )
 
     assert isinstance(message, ToolErrorMessage)
     assert message.id == "c1"
     assert message.content.startswith("Error while executing ReadFileTool:")
+
+
+def _record(manager: HookManager, *hooks: Hook) -> List[Any]:
+    """Register a handler on each hook that appends its dispatch to a list.
+
+    Args:
+        manager: the hook manager to register against.
+        *hooks: the hooks to record.
+
+    Returns:
+        The list handlers append ``(hook, kwargs)`` to, in dispatch order.
+    """
+    events: List[Any] = []
+    for hook in hooks:
+        manager.register(
+            hook, lambda hook=hook, **kwargs: events.append((hook, kwargs))
+        )
+    return events
+
+
+def test_call_dispatches_before_and_after_tool_call_around_a_successful_run(
+    sample: Path,
+) -> None:
+    """A clean call fires exactly the before/after pair, in order."""
+    hooks = HookManager()
+    events = _record(hooks, Hook.BEFORE_TOOL_CALL, Hook.AFTER_TOOL_CALL)
+
+    ReadFileTool(hook_manager=hooks).call(call_id="c1", file_path=str(sample))
+
+    assert [hook for hook, _ in events] == [Hook.BEFORE_TOOL_CALL, Hook.AFTER_TOOL_CALL]
+    before, after = events[0][1], events[1][1]
+    assert before["name"] == after["name"] == "ReadFileTool"
+    assert before["call_id"] == after["call_id"] == "c1"
+    assert isinstance(after["result"], ToolResultMessage)
+
+
+def test_call_dispatches_error_then_after_tool_call_when_the_call_raises() -> None:
+    """A ``_call`` failure fires ``error`` (source tool), then ``after_tool_call``."""
+    hooks = HookManager()
+    events = _record(hooks, Hook.BEFORE_TOOL_CALL, Hook.ERROR, Hook.AFTER_TOOL_CALL)
+
+    ReadFileTool(hook_manager=hooks).call(call_id="c1", file_path="relative.txt")
+
+    assert [hook for hook, _ in events] == [
+        Hook.BEFORE_TOOL_CALL,
+        Hook.ERROR,
+        Hook.AFTER_TOOL_CALL,
+    ]
+    assert events[1][1]["source"] == "tool"
+    assert isinstance(events[1][1]["error"], ValueError)
+    assert isinstance(events[2][1]["result"], ToolErrorMessage)
+
+
+def test_a_hook_handler_exception_escapes_call_unlike_a_tool_exception() -> None:
+    """Unlike a ``_call`` failure, a handler's own exception is not caught."""
+    hooks = HookManager()
+    hooks.register(
+        Hook.BEFORE_TOOL_CALL, lambda **_: (_ for _ in ()).throw(RuntimeError)
+    )
+
+    with pytest.raises(RuntimeError):
+        ReadFileTool(hook_manager=hooks).call(call_id="c1", file_path="relative.txt")
+
+
+def test_call_with_no_registered_handlers_is_a_harmless_no_op(sample: Path) -> None:
+    """An empty hook manager (no registered handlers) still returns a normal result."""
+    message = ReadFileTool(hook_manager=HookManager()).call(
+        call_id="c1", file_path=str(sample)
+    )
+
+    assert isinstance(message, ToolResultMessage)
 
 
 class _FakeDDGS:
@@ -299,7 +393,7 @@ def test_search_normalizes_every_hit(monkeypatch: pytest.MonkeyPatch) -> None:
     _FakeDDGS.hits = [{"href": "https://a", "title": "A", "body": "about a"}]
     monkeypatch.setattr(search_module, "DDGS", _FakeDDGS)
 
-    result = SearchWebTool()._call(query="a")
+    result = SearchWebTool(hook_manager=HookManager())._call(query="a")
 
     assert result["results"] == [
         {"url": "https://a", "title": "A", "excerpt": "about a"}
@@ -327,7 +421,7 @@ def test_search_reports_a_timeout_as_data(monkeypatch: pytest.MonkeyPatch) -> No
 
     monkeypatch.setattr(search_module, "DDGS", _TimingOutDDGS)
 
-    result = SearchWebTool()._call(query="a")
+    result = SearchWebTool(hook_manager=HookManager())._call(query="a")
 
     assert result == {"query": "a", "results": [], "timed_out": True}
 
@@ -362,7 +456,9 @@ def test_fetch_answers_the_query_through_the_summary_client(
     _stub_trafilatura(monkeypatch, "page body")
     client = ScriptedClient([[AssistantMessage(content="the answer")]])
 
-    result = FetchWebTool(client=client)._call(url="https://x", query="what?")
+    result = FetchWebTool(client=client, hook_manager=HookManager())._call(
+        url="https://x", query="what?"
+    )
 
     assert result["answer"] == "the answer"
     assert result["title"] == "A Page"
@@ -383,7 +479,9 @@ def test_fetch_joins_only_finalized_assistant_text(
         [[AssistantChunkMessage(content="frag"), AssistantMessage(content="whole")]]
     )
 
-    result = FetchWebTool(client=client)._call(url="https://x", query="what?")
+    result = FetchWebTool(client=client, hook_manager=HookManager())._call(
+        url="https://x", query="what?"
+    )
 
     assert result["answer"] == "whole"
 
@@ -393,4 +491,23 @@ def test_fetch_rejects_a_non_http_url() -> None:
     client = ScriptedClient()
 
     with pytest.raises(ValueError):
-        FetchWebTool(client=client)._call(url="file:///etc/passwd", query="what?")
+        FetchWebTool(client=client, hook_manager=HookManager())._call(
+            url="file:///etc/passwd", query="what?"
+        )
+
+
+def test_fetch_web_tool_forwards_its_hook_manager_to_base_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hook manager threads through to the shared ``BaseTool.call`` dispatch."""
+    _stub_trafilatura(monkeypatch, "page body")
+    client = ScriptedClient([[AssistantMessage(content="the answer")]])
+    hooks = HookManager()
+    events = _record(hooks, Hook.BEFORE_TOOL_CALL)
+
+    FetchWebTool(client=client, hook_manager=hooks).call(
+        call_id="c1", url="https://x", query="what?"
+    )
+
+    assert len(events) == 1
+    assert events[0][1]["name"] == "FetchWebTool"
