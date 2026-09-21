@@ -68,7 +68,7 @@ def test_the_opening_message_is_remembered_but_not_echoed(
     """The caller already holds what it sent, so yielding it would show it twice."""
     agent, client = _agent(permission_manager, [[AssistantMessage(content="hi")]])
 
-    produced = list(agent.run(UserMessage(content="hello")))
+    produced = list(agent(UserMessage(content="hello")))
 
     assert produced == [AssistantMessage(content="hi")]
     assert client.histories[0][0] == UserMessage(content="hello")
@@ -81,7 +81,7 @@ def test_prelude_messages_are_both_remembered_and_echoed(
     agent, client = _agent(permission_manager, [[AssistantMessage(content="hi")]])
     prelude: List[Message] = [UserMessage(content="file contents")]
 
-    produced = list(agent.run(UserMessage(content="hello"), prelude=prelude))
+    produced = list(agent(UserMessage(content="hello"), prelude=prelude))
 
     assert produced[0] == UserMessage(content="file contents")
     assert client.histories[0][1] == UserMessage(content="file contents")
@@ -103,7 +103,7 @@ def test_streaming_chunks_reach_the_user_but_not_the_model(
         ],
     )
 
-    produced = list(agent.run(UserMessage(content="x")))
+    produced = list(agent(UserMessage(content="x")))
 
     assert produced[0] == AssistantChunkMessage(content="he")
     assert produced[1] == AssistantMessage(content="hello")
@@ -117,7 +117,7 @@ def test_a_text_only_reply_ends_the_loop(
     """No tool calls means the model is finished; no closing message is added."""
     agent, client = _agent(permission_manager, [[AssistantMessage(content="done")]])
 
-    produced = list(agent.run(UserMessage(content="x")))
+    produced = list(agent(UserMessage(content="x")))
 
     assert produced == [AssistantMessage(content="done")]
     assert len(client.requests) == 1
@@ -141,7 +141,7 @@ def test_a_tool_call_runs_and_the_loop_takes_another_turn(
         permission_manager, [[call], [AssistantMessage(content="read it")]]
     )
 
-    produced = list(agent.run(UserMessage(content="x")))
+    produced = list(agent(UserMessage(content="x")))
 
     assert produced[0] is call
     result = produced[1]
@@ -171,7 +171,7 @@ def test_an_approval_note_arrives_after_the_result(
     )
     agent, _ = _agent(permission_manager, [[call], [AssistantMessage(content="ok")]])
 
-    produced = list(agent.run(UserMessage(content="x")))
+    produced = list(agent(UserMessage(content="x")))
 
     result = produced[1]
     assert isinstance(result, ToolResultMessage)
@@ -197,7 +197,7 @@ def test_a_denial_is_reported_to_the_model_and_the_loop_goes_on(
         permission_manager, [[call], [AssistantMessage(content="understood")]]
     )
 
-    produced = list(agent.run(UserMessage(content="x")))
+    produced = list(agent(UserMessage(content="x")))
 
     refusal = produced[1]
     assert isinstance(refusal, ToolErrorMessage)
@@ -216,7 +216,7 @@ def test_a_tool_the_run_does_not_have_is_not_reported_as_a_refusal(
         permission_manager, [[_tool_call()], [AssistantMessage(content="ok")]]
     )
 
-    produced = list(agent.run(UserMessage(content="x")))
+    produced = list(agent(UserMessage(content="x")))
 
     assert produced[1].content == "Tool NoSuchTool does not exist."
 
@@ -231,7 +231,7 @@ def test_a_turn_failure_is_shown_but_never_sent_back_to_the_model(
         [[RuntimeError("provider down")], [AssistantMessage(content="recovered")]],
     )
 
-    produced = list(agent.run(UserMessage(content="x")))
+    produced = list(agent(UserMessage(content="x")))
 
     assert isinstance(produced[0], ErrorMessage)
     assert produced[0].content == "Error while executing user request: provider down"
@@ -252,7 +252,7 @@ def test_consecutive_failures_back_off_and_then_give_up(
         retry_delay_multiplier=2.0,
     )
 
-    produced = list(agent.run(UserMessage(content="x")))
+    produced = list(agent(UserMessage(content="x")))
 
     assert waits == [1.0, 2.0]
     assert produced[-1].content == "Max retries exceeded"
@@ -276,7 +276,7 @@ def test_a_good_turn_clears_the_backoff(
         retry_delay_multiplier=2.0,
     )
 
-    list(agent.run(UserMessage(content="x")))
+    list(agent(UserMessage(content="x")))
 
     assert waits == [1.0, 1.0]
 
@@ -292,7 +292,7 @@ def test_a_failure_after_delivered_messages_does_not_retry(
         [[AssistantMessage(content="partial"), RuntimeError("late failure")]],
     )
 
-    produced = list(agent.run(UserMessage(content="x")))
+    produced = list(agent(UserMessage(content="x")))
 
     assert produced[0] == AssistantMessage(content="partial")
     assert isinstance(produced[1], ErrorMessage)
@@ -308,7 +308,7 @@ def test_a_bounded_run_stops_after_its_turn_budget(
         permission_manager, [[_tool_call()], [_tool_call()]], max_turns=2
     )
 
-    produced = list(agent.run(UserMessage(content="x")))
+    produced = list(agent(UserMessage(content="x")))
 
     assert produced[-1].content == "Max turns exceeded"
     assert len(client.requests) == 2
@@ -323,7 +323,7 @@ def test_restored_history_is_what_the_next_request_is_built_from(
         [UserMessage(content="earlier"), AssistantMessage(content="reply")]
     )
 
-    list(agent.run(UserMessage(content="now")))
+    list(agent(UserMessage(content="now")))
 
     contents = [m.content for m in client.histories[0]]
     assert contents == ["earlier", "reply", "now"]
@@ -364,6 +364,6 @@ def test_a_provided_history_is_copied_not_aliased(
         client=client, permission_manager=permission_manager, message_history=history
     )
 
-    list(agent.run(UserMessage(content="now")))
+    list(agent(UserMessage(content="now")))
 
     assert history == [UserMessage(content="earlier")]

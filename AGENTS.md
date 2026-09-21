@@ -129,7 +129,8 @@ backoff up to `max_retries` consecutive failures. A post-stream exception that f
 *after* finalized messages were delivered does not retry.
 
 **The agent does not save anything.** Persistence is not agent business logic, and core
-owns no session. `run()` yields `Iterator[Message]`: `_emit` appends a message to history
+owns no session. The agent is called directly — `__call__()` (there is no `run()`) yields
+`Iterator[Message]`: `_emit` appends a message to history
 and yields it, nothing more. Every message it yields is meant for the user, so a consumer
 forwards the stream unfiltered — see `ActionExecutor` under **Prompt & commands**.
 The initial `message` is appended to history but **never yielded**, because the caller
@@ -230,7 +231,7 @@ them identically. **The executor holds no recording logic of its own**: it has n
 or wrapper methods, and every write is a direct
 `self._session_manager.session_recorder.<method>(...)` call — the recorder is reached through the
 manager at the point of use, never cached. `_execute_prompt` records the user message it
-just built, then wraps `agent.run(...)` in `session_recorder.record_stream` and yields the
+just built, then wraps `agent(...)` in `session_recorder.record_stream` and yields the
 whole stream. What to skip lives in `SessionRecorder.message`, and every recorder write
 returns an `ErrorMessage | None` rather than an error string, so the executor has nothing
 left to wrap. The executor has no session-effect mapping of its own: which command changes

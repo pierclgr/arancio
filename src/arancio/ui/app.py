@@ -35,8 +35,8 @@ from arancio.ui.widgets.chatgpt_login import ChatGPTLoginNotice
 class App(TextualApp):
     """Terminal UI streaming the agent's output and gating its tool use.
 
-    A worker thread iterates ``Agent.run`` so the blocking agent loop never freezes the
-    UI; each produced message is rendered on the main thread via
+    A worker thread iterates ``Agent.__call__`` so the blocking agent loop never
+    freezes the UI; each produced message is rendered on the main thread via
     :meth:`call_from_thread`. Assistant and reasoning text render as markdown (reasoning
     dimmed), for both finalized messages and streaming chunks.
     """

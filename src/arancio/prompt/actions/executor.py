@@ -370,7 +370,7 @@ class ActionExecutor:
         save_error = self._session_manager.session_recorder.message(message)
         yield from self._yield_notices(save_error)
         yield from self._session_manager.session_recorder.record_stream(
-            self._agent.run(message, prelude=prelude)
+            self._agent(message, prelude=prelude)
         )
 
     @classmethod

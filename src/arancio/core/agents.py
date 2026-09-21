@@ -355,7 +355,7 @@ class Agent:
         else:
             return tool.call(call_id=call.id, **(call.arguments or {}))
 
-    def run(
+    def __call__(
         self, message: Message, prelude: List[Message] | None = None
     ) -> Iterator[Message]:
         """Run the agent loop starting from the given user message.
