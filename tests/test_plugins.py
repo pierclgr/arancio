@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fakes import RecordingApp, ScriptedClient
+from fakes import RecordingApp, ScriptedClient, ScriptedController
 
 from arancio.core.agents import Agent
 from arancio.core.hooks.manager import HookManager
@@ -19,8 +19,11 @@ from arancio.core.messages import (
     UserMessage,
     WarningMessage,
 )
+from arancio.core.permissions.manager import PermissionManager
+from arancio.core.permissions.types import PermissionCategory
 from arancio.core.plugins.manager import PluginManager
 from arancio.core.plugins.manifest import PluginManifestValidator
+from arancio.core.tools.manager import ToolManager
 from arancio.prompt.actions.executor import ActionExecutor
 from arancio.prompt.actions.types import PromptAction, ShellCommandAction
 from arancio.sessions.manager import SessionManager
@@ -291,10 +294,10 @@ def test_a_module_with_two_plugin_classes_is_an_error(
     assert "Logger, Second" in messages[0].content
 
 
-def test_a_hook_plugin_with_no_hooks_is_an_error(
+def test_a_plugin_with_no_hooks_and_no_tools_is_an_error(
     plugins_root: Path, plugin_manager: PluginManager
 ) -> None:
-    """A hook plugin binding nothing could never run, so it is refused."""
+    """A plugin binding nothing and defining no tools could never run."""
     _write_plugin(
         plugins_root,
         "no_hooks",
@@ -313,7 +316,32 @@ def test_a_hook_plugin_with_no_hooks_is_an_error(
     assert plugin_manager.plugins == []
     assert len(messages) == 1
     assert isinstance(messages[0], ErrorMessage)
-    assert "declares no hooks" in messages[0].content
+    assert "declares no hooks and no tools" in messages[0].content
+
+
+def test_a_tools_only_plugin_with_no_hooks_loads_successfully(
+    plugins_root: Path, plugin_manager: PluginManager
+) -> None:
+    """A plugin defining only a @tool method no longer needs any hooks."""
+    _write_plugin(
+        plugins_root,
+        "tools_only",
+        module="""
+        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.tool import tool
+
+
+        class Idle(Plugin):
+            @tool(description="Does nothing.", input_schema={"properties": {}})
+            def noop(self) -> None:
+                pass
+        """,
+    )
+
+    messages = plugin_manager.load()
+
+    assert messages == []
+    assert [type(plugin).__name__ for plugin in plugin_manager.plugins] == ["Idle"]
 
 
 def test_a_disabled_plugin_loads_nothing_and_reports_nothing(
@@ -736,3 +764,184 @@ class Broken(Plugin):
     failures = [m for m in produced if "stop boom" in str(m.content)]
     assert len(failures) == 2
     assert len(client.requests) == 1
+
+
+def test_a_tool_with_no_category_lands_in_the_plugin_category(
+    plugins_root: Path, plugin_manager: PluginManager
+) -> None:
+    """The decorator's default category is PLUGIN."""
+    _write_plugin(
+        plugins_root,
+        "defaulter",
+        module="""
+        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.tool import tool
+
+
+        class Defaulter(Plugin):
+            @tool(description="Does nothing.", input_schema={"properties": {}})
+            def noop(self) -> None:
+                pass
+        """,
+    )
+
+    assert plugin_manager.load() == []
+
+    assert "noop" in {tool_cls.__name__ for tool_cls in PermissionCategory.PLUGIN.tools}
+
+
+def test_a_tool_can_join_an_existing_built_in_category(
+    plugins_root: Path, plugin_manager: PluginManager
+) -> None:
+    """A ``@tool(category="READ")`` method joins READ alongside ReadFileTool."""
+    _write_plugin(
+        plugins_root,
+        "extra_reader",
+        module="""
+        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.tool import tool
+
+
+        class ExtraReader(Plugin):
+            @tool(
+                description="Reads something else.",
+                input_schema={"properties": {}},
+                category="READ",
+            )
+            def read_extra(self) -> None:
+                pass
+        """,
+    )
+
+    assert plugin_manager.load() == []
+
+    names = {tool_cls.__name__ for tool_cls in PermissionCategory.READ.tools}
+    assert "ReadFileTool" in names
+    assert "read_extra" in names
+
+
+def test_custom_tools_on_one_plugin_share_one_dynamic_category(
+    plugins_root: Path, plugin_manager: PluginManager
+) -> None:
+    """CUSTOM tools on the same plugin land in one PLUGIN:<ClassName> category."""
+    _write_plugin(
+        plugins_root,
+        "custom_plugin",
+        module="""
+        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.tool import tool
+
+
+        class TestPlugin(Plugin):
+            @tool(
+                description="First.",
+                input_schema={"properties": {}},
+                category="CUSTOM",
+            )
+            def first(self) -> None:
+                pass
+
+            @tool(
+                description="Second.",
+                input_schema={"properties": {}},
+                category="CUSTOM",
+            )
+            def second(self) -> None:
+                pass
+        """,
+    )
+
+    assert plugin_manager.load() == []
+
+    category = PermissionCategory.get("PLUGIN:TestPlugin")
+    assert category is not None
+    assert {tool_cls.__name__ for tool_cls in category.tools} == {"first", "second"}
+
+
+def test_an_unknown_category_is_an_error_and_skips_only_that_tool(
+    plugins_root: Path, plugin_manager: PluginManager
+) -> None:
+    """One bad category costs one message and does not sink the whole plugin."""
+    _write_plugin(
+        plugins_root,
+        "half_broken",
+        module="""
+        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.tool import tool
+
+
+        class HalfBroken(Plugin):
+            @tool(description="Fine.", input_schema={"properties": {}})
+            def fine(self) -> None:
+                pass
+
+            @tool(
+                description="Broken.",
+                input_schema={"properties": {}},
+                category="BOGUS",
+            )
+            def broken(self) -> None:
+                pass
+        """,
+    )
+
+    messages = plugin_manager.load()
+
+    assert len(messages) == 1
+    assert isinstance(messages[0], ErrorMessage)
+    assert "'broken'" in messages[0].content
+    assert "unknown permission category" in messages[0].content
+    loaded_names = [type(plugin).__name__ for plugin in plugin_manager.plugins]
+    assert loaded_names == ["HalfBroken"]
+    assert "fine" in {tool_cls.__name__ for tool_cls in PermissionCategory.PLUGIN.tools}
+    all_tool_names = {
+        tool_cls.__name__
+        for category in PermissionCategory
+        for tool_cls in category.tools
+    }
+    assert "broken" not in all_tool_names
+
+
+def test_a_plugin_tool_is_callable_end_to_end(
+    plugins_root: Path,
+    plugin_manager: PluginManager,
+    tool_manager: ToolManager,
+    controller: ScriptedController,
+    hook_manager: HookManager,
+) -> None:
+    """A @tool method reaches the bound plugin instance and returns its result."""
+    _write_plugin(
+        plugins_root,
+        "doubler",
+        module="""
+        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.tool import tool
+
+
+        class Doubler(Plugin):
+            @tool(
+                description="Doubles a number.",
+                input_schema={
+                    "properties": {"x": {"type": "integer"}},
+                    "required": ["x"],
+                },
+            )
+            def double(self, x: int) -> int:
+                return x * 2
+        """,
+    )
+
+    assert plugin_manager.load() == []
+
+    # constructed only after plugin_manager.load(), so the default grants it
+    # builds already cover the newly registered PLUGIN-category tool
+    permission_manager = PermissionManager(
+        tool_manager=tool_manager, controller=controller, hook_manager=hook_manager
+    )
+    tools = {tool.name: tool for tool in permission_manager.allowed_tools}
+
+    result, hook_messages = tools["double"].call(call_id="c1", x=21)
+
+    assert hook_messages == []
+    assert isinstance(result, ToolResultMessage)
+    assert result.content == 42

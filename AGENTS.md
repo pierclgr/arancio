@@ -99,9 +99,12 @@ fallback messages) → `SessionManager` → Textual `App`, which also receives t
 `SettingsManager` so
 settings-mutating commands (e.g. `/model`) can apply and persist their changes, and the
 plugin plus `load()` messages as `startup_messages`, rendered once in `on_mount`. The
-plugins load right after the hook manager they attach to, and **before**
-`SettingsManager.load()`, which applies the permission grants and rebuilds the tool
-catalog — the point future tool plugins have to be part of. The controller is
+plugins load right after the hook manager they attach to, and **before** `ToolManager`/
+`PermissionManager` are even constructed and `SettingsManager.load()` applies the
+permission grants and rebuilds the tool catalog — the point any plugin-defined tool
+(see **Plugins** below) must already be registered by, since `PermissionManager`'s and
+`SettingsValidator`'s default-grants loops both iterate `PermissionCategory` once, early.
+The controller is
 created before the app because app→agent→permission-manager→controller; `controller.app`
 is assigned once the app exists. The `SessionManager` comes **after** `SettingsManager.load()`
 because its constructor opens the process's session and that session snapshots the loaded
@@ -193,10 +196,23 @@ no per-instance override. Families: `files/` (read, write, edit),
 `commands/` (shell), `web/` (search, fetch — fetch takes an
 injected summary client).
 
-**Permissions** (`core/permissions/`) — `PermissionCategory` (READ/WRITE/WEB/EXECUTE) maps
-each member to a **frozenset of tool classes** (not names → refactor-safe);
-`PermissionLevel` is NONE, ASK or AUTO. The grants dict always covers every category — a
-category not granted is present at `NONE`, never absent. `PermissionManager` owns the
+**Permissions** (`core/permissions/`) — `PermissionCategory` groups tool classes sharing a
+capability: the built-in `READ`/`WRITE`/`WEB`/`EXECUTE`/`PLUGIN`, plus whatever per-plugin
+categories `@tool(category="CUSTOM")` creates at plugin-load time (see **Plugins** below).
+It is **not** an `enum.Enum` — a category's tool set has to stay open for a plugin tool
+to join it, or for a wholly new category to appear, after the built-ins already exist,
+which a closed `Enum` cannot do. A small `_PermissionCategoryMeta` metaclass gives it the
+same class-level surface an `Enum` would (`for category in PermissionCategory`,
+`PermissionCategory[name]`, `PermissionCategory.__members__`), backed by a `_registry`
+dict keyed by uppercased name so lookup stays case-insensitive; `get(name)`/
+`get_or_create(name)` are the non-raising, idempotent ways to read or register a category,
+and `add_tool(tool_cls)` grows its mutable `.tools` set (not names → still refactor-safe).
+`PermissionLevel` is NONE, ASK or AUTO. The grants dict always covers every *currently
+registered* category — a category not granted is present at `NONE`, never absent — which
+is why `PluginManager.load()` (see **Plugins**) has to run, and does run, before any
+`PermissionManager`/`SettingsManager` is built: both seed their default grants by
+iterating `PermissionCategory`, so a category registered afterward would be invisible to
+them. `PermissionManager` owns the
 `ToolManager`, so tools in a NONE category are **never even instantiated**; the
 `allowed_tools` property is what builds them. `validate` runs
 AUTO calls silently and delegates ASK calls to the controller; denials and user notes are
@@ -330,17 +346,44 @@ desync.
 `module.py` defines **exactly one** plugin class; zero or several is an error. Every
 plugin extends `Plugin` (`core/plugins/base.py`), which supplies `manifest` and
 `directory` so a plugin reaches the extra files it ships without the loader knowing they
-exist, plus the `hooks: ClassVar[frozenset[Hook]]` it binds to and the
-`execute(hook=..., **kwargs)` method it implements to run on each one. `hooks` lives in
-code rather than in the manifest — there is deliberately no `kind:` field, since a
-manifest field can contradict the code while `execute`'s body cannot — and a plugin
-declaring none is reported and skipped since it could never run.
+exist. A plugin participates two independent ways: it binds to hook entry points via
+`hooks: ClassVar[frozenset[Hook]]` and overrides `execute(hook=..., **kwargs)` to run on
+each one — the base `execute` is a no-op default, not `@abstractmethod`, so a tools-only
+plugin never has to override it — and/or it defines tools by decorating instance methods
+with `@tool(...)` (below). `hooks` lives in code rather than in the manifest — there is
+deliberately no `kind:` field, since a manifest field can contradict the code while the
+code cannot — and a plugin declaring **neither hooks nor tools** is reported and skipped
+since it could never run.
+
+`@tool(...)` (`core/plugins/tool.py`) marks a `Plugin` instance method as a real tool:
+`description`/`input_schema` are given directly as decorator keyword arguments — a plugin
+cannot ship harness files, so this bypasses `BaseTool`'s on-disk
+`~/.arancio/harness/tools/<name>/` requirement entirely, unlike a built-in tool — and
+`category` picks the `PermissionCategory` (see **Permissions** above) it falls under: an
+existing one (`READ`/`WRITE`/`WEB`/`EXECUTE`), the fixed `PLUGIN` category (the default
+when omitted), or the keyword `CUSTOM`, which resolves to a category dedicated to the
+owning plugin, `PLUGIN:<PluginClassName>`, created on first use and shared by every
+`CUSTOM` tool that plugin defines. Every category defaults to `PermissionLevel.ASK` the
+same way regardless of how it came to exist, since nothing about `CUSTOM` is
+special-cased in the default-grants loops. `find_tool_specs(plugin_cls)` finds the
+decorated methods — only those defined directly on the class, mirroring
+`_find_plugin_class`'s own rule — and `PluginManager._register` resolves each one's
+category (an unknown name is one `ErrorMessage` that skips only that tool, not the whole
+plugin) and hands it to `build_plugin_tool_class`, which synthesizes a fresh `PluginTool`
+subclass per method via `type()`, with the plugin instance, the underlying function and
+the spec baked in as class attributes. The function is wrapped in `staticmethod` there —
+otherwise `self._method` would be auto-bound by Python's descriptor protocol to the
+*tool* instance instead of staying the plain function called as
+`method(plugin, **kwargs)`, silently double-passing the plugin instance as the method's
+first argument. Binding it this way keeps `PluginTool` constructible as
+`tool_cls(hook_manager=...)` like any built-in tool, so `ToolManager.create_tools` needs
+no plugin-specific branch.
 
 `PluginLoader.load(directory)` (`core/plugins/loader.py`) returns
 `(Plugin | None, list[Message])` and **never raises**: a manifest that cannot be read,
 is not YAML or is not a mapping; a missing `module.py` or one that raises on import; a
-module with no plugin class or several; a hookless plugin — each is one
-`ErrorMessage` that skips only that folder. `module.py` is imported as
+module with no plugin class or several; a plugin declaring neither hooks nor tools — each
+is one `ErrorMessage` that skips only that folder. `module.py` is imported as
 `arancio_plugins.<folder>.module`, under a synthetic parent package whose `__path__` is
 the plugin folder, so `from .helpers import X` works inside it and two plugins each
 shipping a `helpers.py` never collide — `sys.path` is left alone. Class discovery only
@@ -724,7 +767,8 @@ path/mtime state so a resumed session restores its read-first guard only for unc
   configuration, working directory or name. A command that ends or switches the active
   session also goes into `commands/registry.py:SESSION_DISCARDING_COMMANDS`.
 - **New plugin**: subclass `core/plugins/base.py:Plugin`, declare the `hooks` it binds to
-  and implement `execute(hook=..., **kwargs)` — never add a `kind:` field to
+  and implement `execute(hook=..., **kwargs)`, define tools by decorating instance
+  methods with `core/plugins/tool.py:tool(...)`, or both — never add a `kind:` field to
   `manifest.yml`.
 - **Git**: branches `feature/snake_case` or `fix/snake_case`; commit messages in past tense
   naming the file(s) touched. Do not mention the contribution of coding agents (including

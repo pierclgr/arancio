@@ -16,6 +16,7 @@ from arancio.core.messages import ErrorMessage, Message
 from arancio.core.plugins.base import Plugin
 from arancio.core.plugins.constants import PLUGIN_PACKAGE_ROOT
 from arancio.core.plugins.manifest import PluginManifest, PluginManifestValidator
+from arancio.core.plugins.tool import find_tool_specs
 
 
 class PluginLoader:
@@ -24,9 +25,9 @@ class PluginLoader:
     :meth:`load` never raises: every way a folder can be a broken plugin — unreadable or
     malformed ``manifest.yml``, a ``module.py`` that is missing or raises on import, a
     module holding no plugin class or several, a
-    :class:`~arancio.core.plugins.base.Plugin` declaring no hooks — comes back as
-    one :class:`~arancio.core.messages.ErrorMessage` with no plugin, so a single bad
-    folder never stops the others from loading.
+    :class:`~arancio.core.plugins.base.Plugin` declaring neither hooks nor tools —
+    comes back as one :class:`~arancio.core.messages.ErrorMessage` with no plugin,
+    so a single bad folder never stops the others from loading.
     """
 
     @classmethod
@@ -58,13 +59,13 @@ class PluginLoader:
         if plugin_cls is None:
             return None, [*messages, *errors]
 
-        if not plugin_cls.hooks:
+        if not plugin_cls.hooks and not find_tool_specs(plugin_cls):
             return None, [
                 *messages,
                 ErrorMessage(
                     content=(
                         f"plugins/{directory.name}: {plugin_cls.__name__} declares "
-                        "no hooks; plugin ignored."
+                        "no hooks and no tools; plugin ignored."
                     )
                 ),
             ]

@@ -8,8 +8,10 @@ from arancio.core.constants.path import PLUGIN_MANIFEST_FILENAME, PLUGINS_PATH
 from arancio.core.hooks.manager import HookManager
 from arancio.core.hooks.types import Hook
 from arancio.core.messages import ErrorMessage, Message
+from arancio.core.permissions.types import PermissionCategory
 from arancio.core.plugins.base import Plugin
 from arancio.core.plugins.loader import PluginLoader
+from arancio.core.plugins.tool import CUSTOM, build_plugin_tool_class, find_tool_specs
 
 
 class PluginManager:
@@ -84,7 +86,7 @@ class PluginManager:
             if plugin is None:
                 continue
             self._plugins.append(plugin)
-            self._register(plugin)
+            messages.extend(self._register(plugin))
         return messages
 
     def _discover(self) -> list[Path]:
@@ -114,14 +116,40 @@ class PluginManager:
             key=lambda directory: directory.name,
         )
 
-    def _register(self, plugin: Plugin) -> None:
-        """Register a loaded plugin's hooks with the hook manager.
+    def _register(self, plugin: Plugin) -> list[Message]:
+        """Register a loaded plugin's hooks and tools.
 
         Args:
             plugin: the plugin to attach.
+
+        Returns:
+            One error per tool spec naming an unknown category, in
+            definition order.
         """
+        messages: list[Message] = []
         for hook in plugin.hooks:
             self._hook_manager.register(hook, partial(self._run_plugin, plugin, hook))
+
+        for func, spec in find_tool_specs(type(plugin)):
+            if spec.category == CUSTOM:
+                category = PermissionCategory.get_or_create(
+                    f"PLUGIN:{type(plugin).__name__}"
+                )
+            else:
+                category = PermissionCategory.get(spec.category)
+                if category is None:
+                    messages.append(
+                        ErrorMessage(
+                            content=(
+                                f"plugins/{plugin.directory.name}: tool {spec.name!r} "
+                                f"names unknown permission category "
+                                f"{spec.category!r}; tool ignored."
+                            )
+                        )
+                    )
+                    continue
+            category.add_tool(build_plugin_tool_class(plugin, func, spec))
+        return messages
 
     def _run_plugin(
         self, plugin: Plugin, hook: Hook, **kwargs: Any

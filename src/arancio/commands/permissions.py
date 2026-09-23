@@ -14,10 +14,10 @@ if TYPE_CHECKING:
 
 
 class PermissionsCommand(StateChangeCommand):
-    """Command that gets or sets a permission category's autonomy level."""
+    """Command that gets or sets one or all permission categories' autonomy levels."""
 
     name = "permissions"
-    description = "Get or set a permission category's autonomy level."
+    description = "Get or set a permission category's autonomy level, or all at once."
 
     @classmethod
     def execute(
@@ -27,19 +27,23 @@ class PermissionsCommand(StateChangeCommand):
         session_manager: SessionManager,
         level: str | None = None,
     ) -> str | ErrorMessage:
-        """Report or replace the autonomy level for a permission category.
+        """Report or replace the autonomy level for one or every permission category.
 
         With only ``category``, reports its currently set level, or that none
         is set when the category is at :attr:`PermissionLevel.NONE`. With
         ``level`` too, replaces it and applies/persists the change; the
         literal word ``"null"`` (case-insensitive) instead removes the grant,
         setting the category to :attr:`PermissionLevel.NONE` so its tools are
-        never instantiated. Both arguments are case-insensitive and must
-        match an existing category or level; anything else raises.
+        never instantiated. The literal word ``"all"`` (case-insensitive) in
+        place of ``category`` acts on every currently registered category at
+        once instead of a single one. Both arguments are case-insensitive and
+        must match an existing category (or ``"all"``) or level; anything
+        else raises.
 
         Args:
-            category: the permission category's name (e.g. ``"read"``),
-                bound to the prompt's first word.
+            category: the permission category's name (e.g. ``"read"``), or
+                ``"all"`` for every category; bound to the prompt's first
+                word.
             settings_manager: the manager used to read, apply and persist the
                 permission grants.
             session_manager: the active session manager, whose current
@@ -48,62 +52,78 @@ class PermissionsCommand(StateChangeCommand):
                 reading the current level.
             level: the new autonomy level (e.g. ``"ask"``/``"auto"``), or
                 ``"null"`` to remove the grant; bound to the prompt's second
-                word. Omitted to only report the current level.
+                word. Omitted to only report the current level(s).
 
         Returns:
-            The current level (when only reading) or confirmation text naming
-            the newly set level, or the persistence error notice when saving
-            a mutating change failed.
+            The current level(s) (when only reading) or confirmation text
+            naming the newly set level, or the persistence error notice when
+            saving a mutating change failed.
 
         Raises:
-            ValueError: when ``category`` does not name an existing category,
-                or ``level`` is given but does not name an existing level.
+            ValueError: when ``category`` does not name an existing category
+                or ``"all"``, or ``level`` is given but does not name an
+                existing level.
         """
-        try:
-            resolved_category = PermissionCategory[category.upper()]
-        except KeyError:
-            valid = ", ".join(member.name.lower() for member in PermissionCategory)
-            raise ValueError(
-                f"Unknown permission category: {category!r}. Valid categories: {valid}."
-            ) from None
+        if category.lower() == "all":
+            categories = tuple(PermissionCategory)
+        else:
+            try:
+                categories = (PermissionCategory[category.upper()],)
+            except KeyError:
+                valid = ", ".join(
+                    ["all"] + [member.name.lower() for member in PermissionCategory]
+                )
+                raise ValueError(
+                    f"Unknown permission category: {category!r}. "
+                    f"Valid categories: {valid}."
+                ) from None
 
         if level is None:
-            current_level = settings_manager.settings.permissions[resolved_category]
-            if current_level is PermissionLevel.NONE:
-                return f"No {resolved_category.name.lower()} permission set"
-            return (
-                f"{resolved_category.name.lower()} permission level: "
-                f"{current_level.value}"
-            )
+            lines = []
+            for resolved_category in categories:
+                name = resolved_category.name.lower()
+                current_level = settings_manager.settings.permissions[resolved_category]
+                if current_level is PermissionLevel.NONE:
+                    lines.append(f"No {name} permission set")
+                else:
+                    lines.append(f"{name} permission level: {current_level.value}")
+            # two trailing spaces force a markdown hard line break, since the
+            # result renders through a Markdown widget where a lone "\n" is
+            # just a soft break (collapsed to a space)
+            return "  \n".join(lines)
 
         if level.lower() == "null":
-            settings_manager.settings.permissions[resolved_category] = (
-                PermissionLevel.NONE
-            )
-            settings_manager.apply()
-            settings_manager.save_permission(resolved_category)
-            cls._apply_configuration(session_manager, settings_manager)
-            return cls._persist_state_change(
-                session_manager, f"{resolved_category.name.lower()} permission removed"
-            )
+            new_level = PermissionLevel.NONE
+        else:
+            try:
+                new_level = PermissionLevel(level.lower())
+            except ValueError:
+                other_levels = [
+                    m.value for m in PermissionLevel if m is not PermissionLevel.NONE
+                ]
+                valid = ", ".join(["null"] + other_levels)
+                raise ValueError(
+                    f"Unknown permission level: {level!r}. Valid levels: {valid}."
+                ) from None
 
-        try:
-            new_level = PermissionLevel(level.lower())
-        except ValueError:
-            valid = ", ".join(
-                ["null"]
-                + [m.value for m in PermissionLevel if m is not PermissionLevel.NONE]
-            )
-            raise ValueError(
-                f"Unknown permission level: {level!r}. Valid levels: {valid}."
-            ) from None
-
-        settings_manager.settings.permissions[resolved_category] = new_level
+        for resolved_category in categories:
+            settings_manager.settings.permissions[resolved_category] = new_level
         settings_manager.apply()
-        settings_manager.save_permission(resolved_category)
+        for resolved_category in categories:
+            settings_manager.save_permission(resolved_category)
         cls._apply_configuration(session_manager, settings_manager)
-        return cls._persist_state_change(
-            session_manager,
-            f"{resolved_category.name.lower()} permission level set to "
-            f"{new_level.value}",
-        )
+
+        if len(categories) > 1:
+            confirmation = (
+                "all permissions removed"
+                if new_level is PermissionLevel.NONE
+                else f"all permission levels set to {new_level.value}"
+            )
+        else:
+            name = categories[0].name.lower()
+            confirmation = (
+                f"{name} permission removed"
+                if new_level is PermissionLevel.NONE
+                else f"{name} permission level set to {new_level.value}"
+            )
+        return cls._persist_state_change(session_manager, confirmation)
