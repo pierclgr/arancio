@@ -20,6 +20,7 @@ from arancio.core.permissions.types import (
     PermissionOutcome,
 )
 from arancio.core.tools.manager import ToolManager
+from arancio.settings.settings import Settings
 
 
 def _call(name: str = "ReadFileTool") -> ToolCallMessage:
@@ -199,6 +200,32 @@ def test_a_category_maps_to_tool_classes_not_names() -> None:
     """The mapping is by class, so renaming a tool cannot silently ungate it."""
     assert PermissionCategory.for_tool("WriteFileTool") is PermissionCategory.WRITE
     assert PermissionCategory.for_tool("NoSuchTool") is None
+
+
+def test_registering_a_category_name_twice_is_refused() -> None:
+    """Two categories sharing a name would defeat the registry's identity guarantee."""
+    PermissionCategory("PLUGIN:Foo")
+    with pytest.raises(ValueError):
+        PermissionCategory("plugin:foo")
+
+
+def test_get_or_create_is_idempotent() -> None:
+    """A second call returns the same instance instead of minting a duplicate."""
+    first = PermissionCategory.get_or_create("PLUGIN:Foo")
+    second = PermissionCategory.get_or_create("PLUGIN:Foo")
+    assert first is second
+    assert PermissionCategory.get("plugin:foo") is first
+
+
+def test_a_dynamic_category_round_trips_through_settings_despite_mixed_case() -> None:
+    """Mixed-case names only round-trip if lookup is case-insensitive."""
+    category = PermissionCategory.get_or_create("PLUGIN:TestPlugin")
+    settings = Settings.default()
+    settings.permissions[category] = PermissionLevel.AUTO
+
+    restored = Settings.from_dict(settings.to_dict())
+
+    assert restored.permissions[category] is PermissionLevel.AUTO
 
 
 def _record(manager: HookManager, *hooks: Hook) -> list:

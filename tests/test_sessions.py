@@ -46,6 +46,7 @@ def _configuration() -> SessionConfiguration:
             PermissionCategory.WRITE: PermissionLevel.ASK,
             PermissionCategory.WEB: PermissionLevel.NONE,
             PermissionCategory.EXECUTE: PermissionLevel.ASK,
+            PermissionCategory.PLUGIN: PermissionLevel.ASK,
         },
     )
 

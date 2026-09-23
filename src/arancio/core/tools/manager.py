@@ -10,10 +10,11 @@ from arancio.core.tools.web.fetch import FetchWebTool
 class ToolManager:
     """Construct tool instances for a set of granted categories.
 
-    Reads each category's tool classes from :class:`PermissionCategory` (the
-    enum value is the frozen set of classes) and instantiates them. Every tool
-    builds with no required arguments except :class:`FetchWebTool`, which
-    receives the summarization client this manager holds and injects.
+    Reads each category's tool classes from :class:`PermissionCategory`'s
+    :attr:`~arancio.core.permissions.types.PermissionCategory.tools` and
+    instantiates them. Every tool builds with no required arguments except
+    :class:`FetchWebTool`, which receives the summarization client this
+    manager holds and injects.
 
     Attributes:
         _web_summary_client: the client injected into :class:`FetchWebTool`.
@@ -53,7 +54,7 @@ class ToolManager:
             tool_cls
             for category, level in permissions.items()
             if level is not PermissionLevel.NONE
-            for tool_cls in category.value
+            for tool_cls in category.tools
         ]
 
     @classmethod

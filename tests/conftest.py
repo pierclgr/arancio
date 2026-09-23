@@ -23,6 +23,7 @@ from arancio.core.agents import Agent
 from arancio.core.builders import system_prompt as system_prompt_builder
 from arancio.core.hooks.manager import HookManager
 from arancio.core.permissions.manager import PermissionManager
+from arancio.core.permissions.types import PermissionCategory
 from arancio.core.plugins import manager as plugin_manager_module
 from arancio.core.tools import base as tools_base
 from arancio.core.tools.manager import ToolManager
@@ -66,6 +67,29 @@ def _reset_tool_session() -> Iterator[None]:
     shared_session.clear()
     yield
     shared_session.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_permission_categories() -> Iterator[None]:
+    """Restore PermissionCategory's registry and tool sets after every test.
+
+    ``PermissionCategory._registry`` and each category's ``tools`` set are
+    process-wide mutable state, exactly like ``shared_session`` — a test that
+    registers a plugin category or adds a tool to an existing one must not
+    leak it into the next test.
+
+    Yields:
+        Control to the test, with the registry known to match production's
+        built-in categories.
+    """
+    registry_snapshot = dict(PermissionCategory._registry)
+    tools_snapshot = {category: set(category.tools) for category in PermissionCategory}
+    yield
+    PermissionCategory._registry.clear()
+    PermissionCategory._registry.update(registry_snapshot)
+    for category, tools in tools_snapshot.items():
+        category.tools.clear()
+        category.tools.update(tools)
 
 
 @pytest.fixture
