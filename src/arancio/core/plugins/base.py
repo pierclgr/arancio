@@ -1,4 +1,4 @@
-"""Base classes a plugin extends, one per kind of plugin."""
+"""Base class every plugin extends."""
 
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -8,21 +8,21 @@ from arancio.core.hooks.types import Hook
 from arancio.core.plugins.manifest import PluginManifest
 
 
-class BasePlugin(ABC):
-    """Base class for every plugin, whatever kind it is.
+class Plugin(ABC):
+    """Base class every plugin extends.
 
-    A plugin implements one method, :meth:`execute`, and declares what kind of
-    plugin it is by **which subclass of this class it extends** — there is no
-    ``kind`` field in ``manifest.yml``, because a manifest field can contradict
-    the code while a base class cannot.
-
-    A plugin reaches the extra files shipped in its own folder through
-    :attr:`directory`; the loader never reads them.
+    A plugin binds to one or more hook entry points via :attr:`hooks` and
+    implements :meth:`execute` to run on each one. A plugin reaches the extra
+    files shipped in its own folder through :attr:`directory`; the loader
+    never reads them.
 
     Attributes:
         manifest: the metadata parsed from the plugin's ``manifest.yml``.
         directory: the plugin's own folder.
+        hooks: the hooks this plugin runs on.
     """
+
+    hooks: ClassVar[frozenset[Hook]] = frozenset()
 
     def __init__(self, manifest: PluginManifest, directory: Path) -> None:
         """Initialize the plugin with its metadata and its own folder.
@@ -51,38 +51,6 @@ class BasePlugin(ABC):
             The manifest's name, which defaults to the plugin's folder name.
         """
         return self.manifest.name
-
-    @abstractmethod
-    def execute(self, **kwargs: Any) -> Any:
-        """Run the plugin.
-
-        Args:
-            **kwargs: the arguments the plugin's kind supplies.
-
-        Returns:
-            Whatever the plugin's kind expects back.
-
-        Raises:
-            NotImplementedError: when the method is not implemented by the
-                subclass.
-        """
-        raise NotImplementedError("Subclasses must implement this method.")
-
-
-class HookPlugin(BasePlugin):
-    """A plugin bound to one or more hook entry points.
-
-    The binding lives here rather than in ``manifest.yml`` because
-    :meth:`execute`'s body depends on each hook's keyword arguments; splitting
-    the two across files would invite a mismatch the manifest cannot catch. A
-    subclass declaring no hooks could never run, so the loader reports it and
-    skips it.
-
-    Attributes:
-        hooks: the hooks this plugin runs on.
-    """
-
-    hooks: ClassVar[frozenset[Hook]] = frozenset()
 
     @abstractmethod
     def execute(self, *, hook: Hook, **kwargs: Any) -> None:

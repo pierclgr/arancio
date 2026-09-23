@@ -310,11 +310,9 @@ tool failures filters on `kwargs["source"] == "tool"`.
 core**, and `core` imports nothing outside `core` — `grep -rn "from arancio\." src/arancio/core | grep -v arancio.core`
 should stay empty. One thing follows from that and is load-bearing: the plugins
 directory is a module constant rather than a `StorageManager` call (below). Only
-`ui/__main__.py` imports `core.plugins`. See `docs/features/plugin_system.md` for the
-full spec, including how tool and command plugins will slot in — a command plugin is the
-one kind that will need care here, since attaching it means reaching
-`commands/registry.py`, which core may not import; that branch of
-`PluginManager._register` will have to take a registrar from outside instead.
+`ui/__main__.py` imports `core.plugins`. A future command plugin will need care here,
+since attaching it means reaching `commands/registry.py`, which core may not import;
+`PluginManager` will have to take a registrar from outside instead.
 
 `manifest.yml` is the **marker** that makes a folder a plugin, the way `pyproject.toml`
 marks a project — a folder without one is not a broken plugin, it is not a plugin, and is
@@ -330,24 +328,23 @@ message); the manifest's `name` is only a display name defaulting to it, so the 
 desync.
 
 `module.py` defines **exactly one** plugin class; zero or several is an error. Every
-plugin implements one method, `execute()`, and declares what kind of plugin it is by
-**which subclass of `BasePlugin` it extends** — there is deliberately no `kind:` field,
-because a manifest field can contradict the code while a base class cannot. `HookPlugin`
-(`core/plugins/base.py`) is the only kind so far: it adds `hooks: ClassVar[frozenset[Hook]]`,
-which lives in code rather than in the manifest because `execute`'s body depends on each
-hook's kwargs, and a `HookPlugin` declaring none is reported and skipped since it could
-never run. `BasePlugin` gives every plugin its `manifest` and its `directory`, so a plugin
-reaches the extra files it ships without the loader knowing they exist.
+plugin extends `Plugin` (`core/plugins/base.py`), which supplies `manifest` and
+`directory` so a plugin reaches the extra files it ships without the loader knowing they
+exist, plus the `hooks: ClassVar[frozenset[Hook]]` it binds to and the
+`execute(hook=..., **kwargs)` method it implements to run on each one. `hooks` lives in
+code rather than in the manifest — there is deliberately no `kind:` field, since a
+manifest field can contradict the code while `execute`'s body cannot — and a plugin
+declaring none is reported and skipped since it could never run.
 
 `PluginLoader.load(directory)` (`core/plugins/loader.py`) returns
-`(BasePlugin | None, list[Message])` and **never raises**: a manifest that cannot be read,
+`(Plugin | None, list[Message])` and **never raises**: a manifest that cannot be read,
 is not YAML or is not a mapping; a missing `module.py` or one that raises on import; a
-module with no plugin class or several; a hookless `HookPlugin` — each is one
+module with no plugin class or several; a hookless plugin — each is one
 `ErrorMessage` that skips only that folder. `module.py` is imported as
 `arancio_plugins.<folder>.module`, under a synthetic parent package whose `__path__` is
 the plugin folder, so `from .helpers import X` works inside it and two plugins each
 shipping a `helpers.py` never collide — `sys.path` is left alone. Class discovery only
-accepts a concrete `BasePlugin` subclass whose `__module__` is that module, so the base
+accepts a concrete `Plugin` subclass whose `__module__` is that module, so the base
 the plugin imports at the top of its own file is not mistaken for the plugin.
 
 `PluginManager` (`core/plugins/manager.py`) discovers, loads and registers in one
@@ -726,9 +723,9 @@ path/mtime state so a resumed session restores its read-first guard only for unc
   `commands/state_change.py:StateChangeCommand` instead when it changes the session's saved
   configuration, working directory or name. A command that ends or switches the active
   session also goes into `commands/registry.py:SESSION_DISCARDING_COMMANDS`.
-- **New plugin kind**: subclass `core/plugins/base.py:BasePlugin` — the subclass *is* the
-  kind, so never add a `kind:` field to `manifest.yml` — and give
-  `PluginManager._register` a branch attaching it to whatever it binds to.
+- **New plugin**: subclass `core/plugins/base.py:Plugin`, declare the `hooks` it binds to
+  and implement `execute(hook=..., **kwargs)` — never add a `kind:` field to
+  `manifest.yml`.
 - **Git**: branches `feature/snake_case` or `fix/snake_case`; commit messages in past tense
   naming the file(s) touched. Do not mention the contribution of coding agents (including
   Claude) in commit messages — attribute commits to the human author only.

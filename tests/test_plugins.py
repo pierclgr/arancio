@@ -31,12 +31,12 @@ _LOGGER_MODULE = """
 from typing import ClassVar
 
 from arancio.core.hooks.types import Hook
-from arancio.core.plugins.base import HookPlugin
+from arancio.core.plugins.base import Plugin
 
 calls = []
 
 
-class Logger(HookPlugin):
+class Logger(Plugin):
     hooks: ClassVar[frozenset[Hook]] = frozenset({Hook.AGENT_START})
 
     def execute(self, hook, **kwargs) -> None:
@@ -45,7 +45,7 @@ class Logger(HookPlugin):
 
 _SECOND_CLASS = """
 
-class Second(HookPlugin):
+class Second(Plugin):
     hooks: ClassVar[frozenset[Hook]] = frozenset({Hook.AGENT_END})
 
     def execute(self, hook, **kwargs) -> None:
@@ -265,7 +265,7 @@ def test_a_module_with_no_plugin_class_is_an_error(
     _write_plugin(
         plugins_root,
         "empty_module",
-        module="from arancio.core.plugins.base import HookPlugin\n",
+        module="from arancio.core.plugins.base import Plugin\n",
     )
 
     messages = plugin_manager.load()
@@ -299,10 +299,10 @@ def test_a_hook_plugin_with_no_hooks_is_an_error(
         plugins_root,
         "no_hooks",
         module="""
-        from arancio.core.plugins.base import HookPlugin
+        from arancio.core.plugins.base import Plugin
 
 
-        class Idle(HookPlugin):
+        class Idle(Plugin):
             def execute(self, hook, **kwargs) -> None:
                 pass
         """,
@@ -339,12 +339,12 @@ def test_a_plugin_can_import_a_sibling_module_from_its_own_folder(
         from typing import ClassVar
 
         from arancio.core.hooks.types import Hook
-        from arancio.core.plugins.base import HookPlugin
+        from arancio.core.plugins.base import Plugin
 
         from .helpers import GREETING
 
 
-        class Greeter(HookPlugin):
+        class Greeter(Plugin):
             hooks: ClassVar[frozenset[Hook]] = frozenset({Hook.AGENT_START})
 
             def execute(self, hook, **kwargs) -> None:
@@ -389,12 +389,12 @@ def test_a_plugin_bound_to_two_hooks_tells_them_apart(
         from typing import ClassVar
 
         from arancio.core.hooks.types import Hook
-        from arancio.core.plugins.base import HookPlugin
+        from arancio.core.plugins.base import Plugin
 
         seen = []
 
 
-        class Both(HookPlugin):
+        class Both(Plugin):
             hooks: ClassVar[frozenset[Hook]] = frozenset(
                 {Hook.TURN_START, Hook.TURN_END}
             )
@@ -426,10 +426,10 @@ def test_a_failing_plugin_does_not_stop_the_plugins_behind_it(
         from typing import ClassVar
 
         from arancio.core.hooks.types import Hook
-        from arancio.core.plugins.base import HookPlugin
+        from arancio.core.plugins.base import Plugin
 
 
-        class Broken(HookPlugin):
+        class Broken(Plugin):
             hooks: ClassVar[frozenset[Hook]] = frozenset({Hook.AGENT_START})
 
             def execute(self, hook, **kwargs) -> None:
@@ -458,12 +458,12 @@ def test_a_failing_plugin_is_disabled_and_reported_once(
         from typing import ClassVar
 
         from arancio.core.hooks.types import Hook
-        from arancio.core.plugins.base import HookPlugin
+        from arancio.core.plugins.base import Plugin
 
         runs = []
 
 
-        class Broken(HookPlugin):
+        class Broken(Plugin):
             hooks: ClassVar[frozenset[Hook]] = frozenset({Hook.AGENT_START})
 
             def execute(self, hook, **kwargs) -> None:
@@ -497,12 +497,12 @@ def test_a_failing_plugin_stops_running_on_its_other_hooks(
         from typing import ClassVar
 
         from arancio.core.hooks.types import Hook
-        from arancio.core.plugins.base import HookPlugin
+        from arancio.core.plugins.base import Plugin
 
         runs = []
 
 
-        class Broken(HookPlugin):
+        class Broken(Plugin):
             hooks: ClassVar[frozenset[Hook]] = frozenset(
                 {Hook.TURN_START, Hook.TURN_END}
             )
@@ -536,10 +536,10 @@ def test_a_failing_plugin_does_not_break_an_agent_run(
         from typing import ClassVar
 
         from arancio.core.hooks.types import Hook
-        from arancio.core.plugins.base import HookPlugin
+        from arancio.core.plugins.base import Plugin
 
 
-        class Broken(HookPlugin):
+        class Broken(Plugin):
             hooks: ClassVar[frozenset[Hook]] = frozenset({Hook.TURN_START})
 
             def execute(self, hook, **kwargs) -> None:
@@ -569,8 +569,8 @@ def test_plugin_failures_reach_agent_without_retry(
         name,
         module=f"""
 from arancio.core.hooks.types import Hook
-from arancio.core.plugins.base import HookPlugin
-class Broken(HookPlugin):
+from arancio.core.plugins.base import Plugin
+class Broken(Plugin):
     hooks = frozenset({{Hook.{hook.name}}})
     def execute(self, **kwargs):
         raise RuntimeError("plugin boom")
@@ -608,9 +608,9 @@ def test_closing_agent_runs_final_hook_without_yielding(
         "close_turn",
         module="""
 from arancio.core.hooks.types import Hook
-from arancio.core.plugins.base import HookPlugin
+from arancio.core.plugins.base import Plugin
 runs = []
-class Broken(HookPlugin):
+class Broken(Plugin):
     hooks = frozenset({Hook.TURN_END})
     def execute(self, **kwargs):
         runs.append(1)
@@ -645,8 +645,8 @@ def test_plugin_errors_are_saved_once_and_restored_outside_model_history(
         f"persist_{action_kind}",
         module=f"""
 from arancio.core.hooks.types import Hook
-from arancio.core.plugins.base import HookPlugin
-class Broken(HookPlugin):
+from arancio.core.plugins.base import Plugin
+class Broken(Plugin):
     hooks = frozenset({{Hook.{hook}}})
     def execute(self, **kwargs):
         raise RuntimeError("persist boom")
@@ -714,8 +714,8 @@ def test_final_hook_errors_survive_abnormal_agent_stops(
             f"stop_{stop}_{name}",
             module=f"""
 from arancio.core.hooks.types import Hook
-from arancio.core.plugins.base import HookPlugin
-class Broken(HookPlugin):
+from arancio.core.plugins.base import Plugin
+class Broken(Plugin):
     hooks = frozenset({{Hook.{hook}}})
     def execute(self, **kwargs):
         raise RuntimeError("stop boom")

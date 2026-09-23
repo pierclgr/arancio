@@ -8,7 +8,7 @@ from arancio.core.constants.path import PLUGIN_MANIFEST_FILENAME, PLUGINS_PATH
 from arancio.core.hooks.manager import HookManager
 from arancio.core.hooks.types import Hook
 from arancio.core.messages import ErrorMessage, Message
-from arancio.core.plugins.base import BasePlugin, HookPlugin
+from arancio.core.plugins.base import Plugin
 from arancio.core.plugins.loader import PluginLoader
 
 
@@ -40,13 +40,13 @@ class PluginManager:
 
         Args:
             hook_manager: the shared hook manager
-                :class:`~arancio.core.plugins.base.HookPlugin` instances are
+                :class:`~arancio.core.plugins.base.Plugin` instances are
                 registered on.
         """
         self._root: Path = PLUGINS_PATH
         self._hook_manager = hook_manager
-        self._plugins: list[BasePlugin] = []
-        self._disabled: set[BasePlugin] = set()
+        self._plugins: list[Plugin] = []
+        self._disabled: set[Plugin] = set()
 
     def __repr__(self) -> str:
         """Return a developer-friendly representation of the manager.
@@ -57,7 +57,7 @@ class PluginManager:
         return f"{type(self).__name__}({self._root})"
 
     @property
-    def plugins(self) -> list[BasePlugin]:
+    def plugins(self) -> list[Plugin]:
         """Return the plugins that loaded and are enabled.
 
         Returns:
@@ -114,21 +114,17 @@ class PluginManager:
             key=lambda directory: directory.name,
         )
 
-    def _register(self, plugin: BasePlugin) -> None:
-        """Attach a loaded plugin to what its kind binds to.
+    def _register(self, plugin: Plugin) -> None:
+        """Register a loaded plugin's hooks with the hook manager.
 
         Args:
-            plugin: the plugin to attach. A kind with nothing to bind to is
-                simply held in :attr:`plugins`.
+            plugin: the plugin to attach.
         """
-        if isinstance(plugin, HookPlugin):
-            for hook in plugin.hooks:
-                self._hook_manager.register(
-                    hook, partial(self._run_plugin, plugin, hook)
-                )
+        for hook in plugin.hooks:
+            self._hook_manager.register(hook, partial(self._run_plugin, plugin, hook))
 
     def _run_plugin(
-        self, plugin: HookPlugin, hook: Hook, **kwargs: Any
+        self, plugin: Plugin, hook: Hook, **kwargs: Any
     ) -> ErrorMessage | None:
         """Run one plugin for one dispatch, disabling it if it raises.
 
