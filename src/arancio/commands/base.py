@@ -18,50 +18,57 @@ class BaseCommand(ABC):
     needs none of them declares a ``**kwargs`` catch-all to absorb them (and
     any other argument it doesn't care about) instead of listing them
     explicitly. The concrete
-    :meth:`run` receives the arguments as keywords, coerces them to
-    :meth:`execute`'s parameter types via :meth:`_validate_args` (rejecting a
-    missing mandatory argument or a value that cannot be coerced), then forwards
-    them all to :meth:`execute`.
+    :meth:`run` receives the raw prompt words plus the injectable objects,
+    binds the words to :meth:`execute`'s parameters and coerces them to their
+    types via :meth:`_validate_args` (rejecting a missing mandatory argument or
+    a value that cannot be coerced), then forwards them all to :meth:`execute`.
 
     Attributes:
         name: the command name typed after the leading slash.
         description: a short natural-language summary of the command.
+        joins_arguments: when true, the prompt words beyond the command's
+            parameters are joined with a space into its last parameter instead
+            of being dropped.
     """
 
     name: ClassVar[str]
     description: ClassVar[str]
+    joins_arguments: ClassVar[bool] = False
 
     @classmethod
-    def run(cls, **kwargs) -> Any:
-        """Validate and coerce the arguments, then run :meth:`execute`.
+    def run(cls, args: list[str], **kwargs) -> Any:
+        """Bind and coerce the arguments, then run :meth:`execute`.
 
         Args:
-            **kwargs: the arguments keyed by :meth:`execute`'s parameter names,
-                including ``application``.
+            args: the raw prompt words.
+            **kwargs: the injectable objects (``application``, ``agent``, …),
+                keyed by their parameter names.
 
         Returns:
             Whatever :meth:`execute` returns.
         """
-        arguments = cls._validate_args(**kwargs)
+        arguments = cls._validate_args(args, **kwargs)
         return cls.execute(**arguments)
 
     @classmethod
-    def _validate_args(cls, **kwargs) -> dict[str, Any]:
-        """Coerce the keyword arguments to :meth:`execute`'s parameter types.
+    def _validate_args(cls, args: list[str], **kwargs) -> dict[str, Any]:
+        """Bind the prompt words to :meth:`execute`'s parameters and coerce them.
 
-        ``application``, ``settings_manager`` and ``agent`` are forwarded
-        untouched; each other argument bound to a named, annotated parameter
-        of :meth:`execute`
-        is converted to its type annotation (e.g. ``"3"`` to ``3`` for an
-        ``int`` parameter). An argument absorbed by :meth:`execute`'s
-        ``**kwargs`` catch-all, if it has one, is also forwarded untouched. A
-        value that cannot be converted to its annotated type raises
-        :class:`TypeError`; a missing mandatory argument or an unexpected
-        keyword argument raises :class:`TypeError` when :meth:`execute` is
-        actually called with the result.
+        Each word is matched, in order, to the next prompt parameter
+        :meth:`execute` declares (excluding the injectable ones); a word beyond
+        the number of declared parameters is dropped rather than rejected,
+        unless :attr:`joins_arguments` is set, in which case the last parameter
+        receives every remaining word joined with a space. Each bound word is
+        converted to its parameter's type annotation (e.g. ``"3"`` to ``3`` for
+        an ``int`` parameter). An injectable object is forwarded untouched, and
+        only when :meth:`execute` declares a parameter for it. A value that
+        cannot be converted to its annotated type raises :class:`TypeError`; a
+        missing mandatory argument raises :class:`TypeError` when
+        :meth:`execute` is actually called with the result.
 
         Args:
-            **kwargs: the arguments keyed by :meth:`execute`'s parameter names.
+            args: the raw prompt words.
+            **kwargs: the injectable objects, keyed by their parameter names.
 
         Returns:
             The keyword arguments to pass to :meth:`execute`.
@@ -70,14 +77,24 @@ class BaseCommand(ABC):
             TypeError: when a value cannot be coerced to its annotated type.
         """
         signature = inspect.signature(cls.execute)
+        prompt_parameter_names = [
+            parameter_name
+            for parameter_name, parameter in signature.parameters.items()
+            if parameter_name not in INJECTABLE_COMMAND_PARAMETERS
+            and parameter.kind
+            in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.POSITIONAL_ONLY,
+            )
+        ]
+        if cls.joins_arguments and len(args) > len(prompt_parameter_names):
+            last = len(prompt_parameter_names) - 1
+            args = [*args[:last], " ".join(args[last:])]
         arguments = {}
-        for parameter_name, value in kwargs.items():
-            parameter = signature.parameters.get(parameter_name)
-            annotation = parameter.annotation if parameter else inspect.Parameter.empty
-            if (
-                parameter_name not in INJECTABLE_COMMAND_PARAMETERS
-                and annotation is not inspect.Parameter.empty
-                and isinstance(annotation, type)
+        for parameter_name, value in zip(prompt_parameter_names, args):
+            annotation = signature.parameters[parameter_name].annotation
+            if annotation is not inspect.Parameter.empty and isinstance(
+                annotation, type
             ):
                 try:
                     value = annotation(value)
@@ -87,6 +104,9 @@ class BaseCommand(ABC):
                         f"{annotation.__name__}, got {value!r}"
                     ) from exc
             arguments[parameter_name] = value
+        for name, value in kwargs.items():
+            if name in signature.parameters:
+                arguments[name] = value
         return arguments
 
     @classmethod

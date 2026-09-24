@@ -112,15 +112,13 @@ def test_every_discarding_command_is_a_registered_command() -> None:
 
 def test_a_typed_argument_is_coerced_from_its_prompt_word() -> None:
     """Prompt words are strings, so an ``int`` parameter needs converting."""
-    assert HelloWorldCommand.run(name="Ada", times="2") == (
-        "Hello World, Ada\nHello World, Ada"
-    )
+    assert HelloWorldCommand.run(["Ada", "2"]) == "Hello World, Ada\nHello World, Ada"
 
 
 def test_an_uncoercible_argument_is_reported_by_name() -> None:
     """The message names the argument, so the user knows which word to fix."""
     with pytest.raises(TypeError, match="times"):
-        HelloWorldCommand.run(name="Ada", times="lots")
+        HelloWorldCommand.run(["Ada", "lots"])
 
 
 def test_cd_moves_the_working_directory(

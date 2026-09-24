@@ -468,6 +468,35 @@ def test_extra_prompt_words_are_dropped(executor: ActionExecutor) -> None:
     assert produced[0].content == "Hello World, Ada\nHello World, Ada"
 
 
+def test_a_joining_command_receives_every_word_as_one_argument(
+    executor: ActionExecutor, session_manager: SessionManager
+) -> None:
+    """``/rename`` joins its words, so a spaced name is not cut to its first word."""
+    produced = list(
+        executor.execute(
+            CommandAction(
+                name="rename",
+                args=["my", "new", "name"],
+                raw_input="/rename my new name",
+            )
+        )
+    )
+
+    assert produced[0].content == "Session renamed to 'my new name'"
+    assert session_manager.current.name == "my new name"
+
+
+def test_a_joining_command_without_words_still_reports_the_missing_argument(
+    executor: ActionExecutor,
+) -> None:
+    """Joining nothing must not bind an empty name in place of the error."""
+    produced = list(
+        executor.execute(CommandAction(name="rename", args=[], raw_input="/rename"))
+    )
+
+    assert isinstance(produced[0], ErrorMessage)
+
+
 def test_an_unknown_action_type_is_refused(executor: ActionExecutor) -> None:
     """Dispatch is exhaustive by design, so a new action cannot pass silently."""
 

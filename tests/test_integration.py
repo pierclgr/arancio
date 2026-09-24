@@ -442,3 +442,31 @@ def test_renaming_then_resuming_by_the_new_name_finds_the_same_session(
     restored = session_manager.current
     assert restored.id == first.id
     assert restored.name == "project-x"
+
+
+def test_resuming_by_a_spaced_name_searches_the_whole_name(
+    wired: tuple[ActionExecutor, SessionManager, StorageManager, ScriptedClient],
+) -> None:
+    """Only the first word, ``my``, would match both sessions and resume neither."""
+    executor, session_manager, _, _ = wired
+    first = session_manager.current
+
+    for name in ("my project", "my other"):
+        list(
+            executor.execute(
+                CommandAction(
+                    name="rename", args=name.split(), raw_input=f"/rename {name}"
+                )
+            )
+        )
+        list(executor.execute(CommandAction(name="clear", args=[], raw_input="/clear")))
+
+    list(
+        executor.execute(
+            CommandAction(
+                name="resume", args=["my", "project"], raw_input="/resume my project"
+            )
+        )
+    )
+
+    assert session_manager.current.id == first.id

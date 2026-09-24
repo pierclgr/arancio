@@ -468,8 +468,13 @@ asks to stay out of the replayed log while staying in model history.
 
 A command's plain-string result is wrapped into an `AssistantMessage` by
 the executor. A slash command subclasses `BaseCommand`, sets `name`/`description`,
-implements a typed `execute(...)`; `run` coerces the prompt words to `execute`'s parameter
-annotations. A command that changes the active session's *saved* state subclasses
+implements a typed `execute(...)`; `run` receives the raw prompt words plus the
+injectable objects, binds the words in order to `execute`'s parameters and coerces them to
+their annotations — the executor never reads `execute`'s signature. Words beyond the
+declared parameters are dropped, unless the command sets `joins_arguments = True`
+(default `False`): then its last parameter receives every remaining word joined with a
+space, which is how `/rename my new name` gets the whole name and `/resume my new name`
+searches for all of it. A command that changes the active session's *saved* state subclasses
 `StateChangeCommand` (`commands/state_change.py`) instead — an abstract layer between the
 two that carries the two helpers such a command needs (see **Sessions** below); the
 executor and the registry only ever type on `BaseCommand`, so nothing else changes.

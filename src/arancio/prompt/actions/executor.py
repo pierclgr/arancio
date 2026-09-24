@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import inspect
 import json
 import platform
 import shlex
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Type
+from typing import TYPE_CHECKING, Type
 
 from arancio.commands.base import BaseCommand
 from arancio.commands.registry import (
@@ -49,7 +48,7 @@ class ActionExecutor:
     tool-permission gate. A :class:`arancio.prompt.actions.types.CommandAction`
     is resolved against
     :data:`arancio.commands.registry.COMMAND_REGISTRY`: its raw prompt words are
-    bound to the command's parameter names and run locally. A
+    handed to the command, which binds them to its parameters, and run locally. A
     :class:`arancio.prompt.actions.types.PromptAction` is sent to the model
     through the agent. Both produce the same message stream so callers render
     them the same way.
@@ -248,7 +247,7 @@ class ActionExecutor:
         )
 
     def _execute_command(self, action: CommandAction) -> Iterator[Message]:
-        """Bind the action's words to the command's parameters and run it.
+        """Run the command with the action's words and the injectable objects.
 
         ``command.run`` executes via ``application.call_from_thread`` because
         this executor runs on the agent's worker thread, and a command can
@@ -270,20 +269,19 @@ class ActionExecutor:
             yield from self._yield_error(f"Command not found: {action.name}")
             return
 
-        try:
-            kwargs = self._build_command_kwargs(command, action.args)
-        except Exception as exc:
-            yield from self._yield_error(
-                f"Error while executing command {action.name}: {exc}", command
-            )
-            return
-
+        # each injectable parameter name maps to a same-named private attribute
+        # on the executor (``application`` -> ``self._application``, etc.)
+        injectable = {
+            name: getattr(self, f"_{name}") for name in INJECTABLE_COMMAND_PARAMETERS
+        }
         discards_session = command in SESSION_DISCARDING_COMMANDS
         command_error = (
             self._record_command(action, command) if discards_session else None
         )
         try:
-            result = self._application.call_from_thread(command.run, **kwargs)
+            result = self._application.call_from_thread(
+                command.run, action.args, **injectable
+            )
         except Exception as exc:
             yield from self._yield_error(
                 f"Error while executing command {action.name}: {exc}", command
@@ -313,47 +311,6 @@ class ActionExecutor:
             result_error = None
         yield message
         yield from self._yield_notices(command_error, result_error)
-
-    def _build_command_kwargs(
-        self, command: Type[BaseCommand], args: list[str]
-    ) -> dict[str, Any]:
-        """Match the prompt words to the command's parameters and inject dependencies.
-
-        Each word is matched, in order, to the next prompt parameter the command
-        declares (excluding the injected ones below); a word beyond the number of
-        declared parameters is dropped rather than rejected.
-
-        Args:
-            command: the command whose ``execute`` parameters to match against.
-            args: the raw prompt words.
-
-        Returns:
-            The keyword arguments for :meth:`command.run`: the prompt words keyed
-            by their matching parameter name, plus the running application, the
-            settings manager and/or the agent for any the command declares a
-            parameter for.
-        """
-        # each injectable parameter name maps to a same-named private attribute
-        # on the executor (``application`` -> ``self._application``, etc.)
-        injectable = {
-            name: getattr(self, f"_{name}") for name in INJECTABLE_COMMAND_PARAMETERS
-        }
-        signature = inspect.signature(command.execute)
-        prompt_parameter_names = [
-            parameter_name
-            for parameter_name, parameter in signature.parameters.items()
-            if parameter_name not in INJECTABLE_COMMAND_PARAMETERS
-            and parameter.kind
-            in (
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                inspect.Parameter.POSITIONAL_ONLY,
-            )
-        ]
-        kwargs = dict(zip(prompt_parameter_names, args))
-        for name, value in injectable.items():
-            if name in signature.parameters:
-                kwargs[name] = value
-        return kwargs
 
     def _execute_prompt(self, action: PromptAction) -> Iterator[Message]:
         """Send the action's text to the model through the agent.
