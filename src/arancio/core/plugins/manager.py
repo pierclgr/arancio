@@ -2,7 +2,7 @@
 
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from arancio.core.constants.path import PLUGIN_MANIFEST_FILENAME, PLUGINS_PATH
 from arancio.core.hooks.manager import HookManager
@@ -10,6 +10,7 @@ from arancio.core.hooks.types import Hook
 from arancio.core.messages import ErrorMessage, Message
 from arancio.core.permissions.types import PermissionCategory
 from arancio.core.plugins.base import Plugin
+from arancio.core.plugins.hook import find_hook_methods
 from arancio.core.plugins.loader import PluginLoader
 from arancio.core.plugins.tool import CUSTOM, build_plugin_tool_class, find_tool_specs
 
@@ -17,10 +18,11 @@ from arancio.core.plugins.tool import CUSTOM, build_plugin_tool_class, find_tool
 class PluginManager:
     """Find the plugins on disk, load them and attach them to the hook manager.
 
-    A plugin that raises is disabled across all its hooks for the rest of the
-    process. Its wrapper returns one ErrorMessage through the hook caller's
-    normal message stream, without interrupting other plugins or retrying the
-    agent. Ordinary hook handler exceptions still propagate.
+    A hook method that raises is disabled across all its hooks for the rest
+    of the process; the plugin's other hook methods keep running. Its wrapper
+    returns one ErrorMessage through the hook caller's normal message stream,
+    without interrupting other plugins or retrying the agent. Ordinary hook
+    handler exceptions still propagate.
 
     Like the tool harness, the plugins directory is read straight from the
     module constant :data:`~arancio.core.constants.path.PLUGINS_PATH` rather
@@ -34,7 +36,7 @@ class PluginManager:
         _root: the directory the plugin folders are discovered in.
         _hook_manager: the shared hook manager plugins are registered on.
         _plugins: the plugins that loaded and are enabled.
-        _disabled: the plugins switched off after raising at runtime.
+        _disabled: the hook methods switched off after raising at runtime.
     """
 
     def __init__(self, hook_manager: HookManager) -> None:
@@ -46,9 +48,9 @@ class PluginManager:
                 registered on.
         """
         self._root: Path = PLUGINS_PATH
-        self._hook_manager = hook_manager
+        self._hook_manager: HookManager = hook_manager
         self._plugins: list[Plugin] = []
-        self._disabled: set[Plugin] = set()
+        self._disabled: set[Callable] = set()
 
     def __repr__(self) -> str:
         """Return a developer-friendly representation of the manager.
@@ -127,8 +129,11 @@ class PluginManager:
             definition order.
         """
         messages: list[Message] = []
-        for hook in plugin.hooks:
-            self._hook_manager.register(hook, partial(self._run_plugin, plugin, hook))
+        for func, hooks in find_hook_methods(type(plugin)):
+            for hook in hooks:
+                self._hook_manager.register(
+                    hook, partial(self._run_hook, plugin, func, hook)
+                )
 
         for func, spec in find_tool_specs(type(plugin)):
             if spec.category == CUSTOM:
@@ -151,34 +156,34 @@ class PluginManager:
             category.add_tool(build_plugin_tool_class(plugin, func, spec))
         return messages
 
-    def _run_plugin(
-        self, plugin: Plugin, hook: Hook, **kwargs: Any
+    def _run_hook(
+        self, plugin: Plugin, func: Callable, hook: Hook, **kwargs: Any
     ) -> ErrorMessage | None:
-        """Run one plugin for one dispatch, disabling it if it raises.
+        """Run one hook method for one dispatch, disabling it if it raises.
 
-        ``plugin`` and ``hook`` are bound through
-        :func:`functools.partial`, so the plugin learns which hook fired:
-        :meth:`~arancio.core.hooks.manager.HookManager.run` forwards only the
-        hook's own keyword arguments and never names the hook itself. A plugin
-        already disabled is skipped, so it never runs again.
+        ``plugin``, ``func`` and ``hook`` are bound through
+        :func:`functools.partial`; ``hook`` is only used to name the failing
+        dispatch. A method already disabled is skipped, so it never runs again.
 
         Args:
-            plugin: the plugin to run.
+            plugin: the plugin the method belongs to.
+            func: the @hook-decorated function, called as
+                ``func(plugin, **kwargs)``.
             hook: the hook this dispatch is for.
             **kwargs: the hook's own keyword arguments, unchanged.
 
         Returns:
-            One error when the plugin fails, otherwise None.
+            One error when the method fails, otherwise None.
         """
-        if plugin in self._disabled:
+        if func in self._disabled:
             return
         try:
-            plugin.execute(hook=hook, **kwargs)
+            func(plugin, **kwargs)
         except Exception as exc:
-            self._disabled.add(plugin)
+            self._disabled.add(func)
             return ErrorMessage(
                 content=(
-                    f"Plugin {plugin.name!r} failed on {hook.value} and was disabled: "
-                    f"{exc}"
+                    f"Plugin {plugin.name!r} failed on {hook.value} in "
+                    f"{func.__name__}; method disabled: {exc}"
                 )
             )

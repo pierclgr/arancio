@@ -346,14 +346,15 @@ desync.
 `module.py` defines **exactly one** plugin class; zero or several is an error. Every
 plugin extends `Plugin` (`core/plugins/base.py`), which supplies `manifest` and
 `directory` so a plugin reaches the extra files it ships without the loader knowing they
-exist. A plugin participates two independent ways: it binds to hook entry points via
-`hooks: ClassVar[frozenset[Hook]]` and overrides `execute(hook=..., **kwargs)` to run on
-each one — the base `execute` is a no-op default, not `@abstractmethod`, so a tools-only
-plugin never has to override it — and/or it defines tools by decorating instance methods
-with `@tool(...)` (below). `hooks` lives in code rather than in the manifest — there is
-deliberately no `kind:` field, since a manifest field can contradict the code while the
-code cannot — and a plugin declaring **neither hooks nor tools** is reported and skipped
-since it could never run.
+exist. A plugin participates two independent ways: it binds instance methods to hooks
+with `@hook(Hook.X)` (`core/plugins/hook.py`), and/or it defines tools by decorating
+instance methods with `@tool(...)` (below). Each `@hook` method runs on its own hook and
+receives only that hook's keyword arguments; stacking several `@hook`s binds one method
+to several hooks. `find_hook_methods(plugin_cls)` finds them with the same "defined
+directly on the class" rule as `find_tool_specs`. Hooks live in code rather than in the
+manifest — there is deliberately no `kind:` field, since a manifest field can contradict
+the code while the code cannot — and a plugin declaring **neither hooks nor tools** is
+reported and skipped since it could never run.
 
 `@tool(...)` (`core/plugins/tool.py`) marks a `Plugin` instance method as a real tool:
 `description`/`input_schema` are given directly as decorator keyword arguments — a plugin
@@ -404,11 +405,12 @@ plugins. **That makes it a fourth root-unaware absolute path**: a test must repo
 `tools_base.TOOLS_HARNESS_PATH`, or it loads the user's real plugins. `conftest.py`'s
 autouse `_isolate_arancio_home` does this, so no test can forget.
 
-A plugin is registered as a `functools.partial` binding its hook to
-`PluginManager._run_plugin`, so `execute(hook=..., **kwargs)` knows which hook fired.
-The wrapper catches plugin exceptions, disables that plugin across all its hooks for
-the rest of the process, and returns one `ErrorMessage`. Later plugins still run;
-ordinary handler exceptions retain the hook manager's propagation behavior.
+Each `@hook` method is registered once per hook as a `functools.partial` binding the
+plugin, the method and the hook to `PluginManager._run_hook`. The wrapper catches the
+method's exceptions, disables **that method** across all its hooks for the rest of the
+process, and returns one `ErrorMessage`. The plugin's other hook methods, its tools and
+later plugins still run; ordinary handler exceptions retain the hook manager's
+propagation behavior.
 
 `HookManager.run()` collects returned messages. Tools and permissions return those
 messages alongside their result or decision; the agent yields them before the normal
@@ -771,9 +773,9 @@ path/mtime state so a resumed session restores its read-first guard only for unc
   `commands/state_change.py:StateChangeCommand` instead when it changes the session's saved
   configuration, working directory or name. A command that ends or switches the active
   session also goes into `commands/registry.py:SESSION_DISCARDING_COMMANDS`.
-- **New plugin**: subclass `core/plugins/base.py:Plugin`, declare the `hooks` it binds to
-  and implement `execute(hook=..., **kwargs)`, define tools by decorating instance
-  methods with `core/plugins/tool.py:tool(...)`, or both — never add a `kind:` field to
+- **New plugin**: subclass `core/plugins/base.py:Plugin`, bind instance methods to hooks
+  with `core/plugins/hook.py:hook(...)`, define tools by decorating instance methods
+  with `core/plugins/tool.py:tool(...)`, or both — never add a `kind:` field to
   `manifest.yml`.
 - **Git**: branches `feature/snake_case` or `fix/snake_case`; commit messages in past tense
   naming the file(s) touched. Do not mention the contribution of coding agents (including

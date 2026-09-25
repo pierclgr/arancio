@@ -31,27 +31,24 @@ from arancio.settings.manager import SettingsManager
 from arancio.storage.manager import StorageManager
 
 _LOGGER_MODULE = """
-from typing import ClassVar
-
 from arancio.core.hooks.types import Hook
 from arancio.core.plugins.base import Plugin
+from arancio.core.plugins.hook import hook
 
 calls = []
 
 
 class Logger(Plugin):
-    hooks: ClassVar[frozenset[Hook]] = frozenset({Hook.AGENT_START})
-
-    def execute(self, hook, **kwargs) -> None:
-        calls.append((hook, kwargs))
+    @hook(Hook.AGENT_START)
+    def on_agent_start(self, **kwargs) -> None:
+        calls.append(kwargs)
 """
 
 _SECOND_CLASS = """
 
 class Second(Plugin):
-    hooks: ClassVar[frozenset[Hook]] = frozenset({Hook.AGENT_END})
-
-    def execute(self, hook, **kwargs) -> None:
+    @hook(Hook.AGENT_END)
+    def on_agent_end(self, **kwargs) -> None:
         pass
 """
 
@@ -306,7 +303,7 @@ def test_a_plugin_with_no_hooks_and_no_tools_is_an_error(
 
 
         class Idle(Plugin):
-            def execute(self, hook, **kwargs) -> None:
+            def not_a_hook(self, **kwargs) -> None:
                 pass
         """,
     )
@@ -364,18 +361,16 @@ def test_a_plugin_can_import_a_sibling_module_from_its_own_folder(
         plugins_root,
         "with_helpers",
         module="""
-        from typing import ClassVar
-
         from arancio.core.hooks.types import Hook
         from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.hook import hook
 
         from .helpers import GREETING
 
 
         class Greeter(Plugin):
-            hooks: ClassVar[frozenset[Hook]] = frozenset({Hook.AGENT_START})
-
-            def execute(self, hook, **kwargs) -> None:
+            @hook(Hook.AGENT_START)
+            def greet(self, **kwargs) -> None:
                 (self.directory / "out.txt").write_text(GREETING)
         """,
         extra_files={"helpers.py": "GREETING = 'hello'\n"},
@@ -391,7 +386,7 @@ def test_a_plugin_can_import_a_sibling_module_from_its_own_folder(
 def test_a_registered_plugin_runs_on_dispatch_with_the_hook_kwargs(
     plugins_root: Path, plugin_manager: PluginManager, hook_manager: HookManager
 ) -> None:
-    """The plugin receives the hook that fired plus that hook's own kwargs."""
+    """The hook method receives that hook's own kwargs."""
     directory = _write_plugin(plugins_root, "records_calls")
 
     assert plugin_manager.load() == []
@@ -401,43 +396,72 @@ def test_a_registered_plugin_runs_on_dispatch_with_the_hook_kwargs(
     message = UserMessage(content="hi")
     hook_manager.run(Hook.AGENT_START, message=message)
 
-    assert _loaded_module("records_calls").calls == [
-        (Hook.AGENT_START, {"message": message})
-    ]
+    assert _loaded_module("records_calls").calls == [{"message": message}]
 
 
-def test_a_plugin_bound_to_two_hooks_tells_them_apart(
+def test_two_hook_methods_each_run_only_on_their_own_hook(
     plugins_root: Path, plugin_manager: PluginManager, hook_manager: HookManager
 ) -> None:
-    """``HookManager.run`` never names the hook, so the manager passes it in."""
+    """One plugin can bind a different method to each hook."""
     _write_plugin(
         plugins_root,
-        "two_hooks",
+        "two_methods",
         module="""
-        from typing import ClassVar
-
         from arancio.core.hooks.types import Hook
         from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.hook import hook
 
         seen = []
 
 
-        class Both(Plugin):
-            hooks: ClassVar[frozenset[Hook]] = frozenset(
-                {Hook.TURN_START, Hook.TURN_END}
-            )
+        class Split(Plugin):
+            @hook(Hook.TURN_START)
+            def on_start(self, turn) -> None:
+                seen.append(("start", turn))
 
-            def execute(self, hook, **kwargs) -> None:
-                seen.append(hook)
+            @hook(Hook.TURN_END)
+            def on_end(self, turn) -> None:
+                seen.append(("end", turn))
         """,
     )
 
     assert plugin_manager.load() == []
 
     hook_manager.run(Hook.TURN_START, turn=0)
-    hook_manager.run(Hook.TURN_END, turn=0)
+    hook_manager.run(Hook.TURN_END, turn=1)
 
-    assert _loaded_module("two_hooks").seen == [Hook.TURN_START, Hook.TURN_END]
+    assert _loaded_module("two_methods").seen == [("start", 0), ("end", 1)]
+
+
+def test_a_method_with_stacked_hooks_runs_on_each_of_them(
+    plugins_root: Path, plugin_manager: PluginManager, hook_manager: HookManager
+) -> None:
+    """Stacking ``@hook`` binds one method to several hooks."""
+    _write_plugin(
+        plugins_root,
+        "stacked_hooks",
+        module="""
+        from arancio.core.hooks.types import Hook
+        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.hook import hook
+
+        seen = []
+
+
+        class Both(Plugin):
+            @hook(Hook.TURN_START)
+            @hook(Hook.TURN_END)
+            def on_turn(self, turn) -> None:
+                seen.append(turn)
+        """,
+    )
+
+    assert plugin_manager.load() == []
+
+    hook_manager.run(Hook.TURN_START, turn=0)
+    hook_manager.run(Hook.TURN_END, turn=1)
+
+    assert _loaded_module("stacked_hooks").seen == [0, 1]
 
 
 def test_a_failing_plugin_does_not_stop_the_plugins_behind_it(
@@ -451,16 +475,14 @@ def test_a_failing_plugin_does_not_stop_the_plugins_behind_it(
         plugins_root,
         "aaa_raises",
         module="""
-        from typing import ClassVar
-
         from arancio.core.hooks.types import Hook
         from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.hook import hook
 
 
         class Broken(Plugin):
-            hooks: ClassVar[frozenset[Hook]] = frozenset({Hook.AGENT_START})
-
-            def execute(self, hook, **kwargs) -> None:
+            @hook(Hook.AGENT_START)
+            def on_agent_start(self, **kwargs) -> None:
                 raise RuntimeError("boom")
         """,
     )
@@ -478,24 +500,22 @@ def test_a_failing_plugin_is_disabled_and_reported_once(
     plugin_manager: PluginManager,
     hook_manager: HookManager,
 ) -> None:
-    """A raising plugin never runs again, and the user is told exactly once."""
+    """A raising hook method never runs again, and the user is told exactly once."""
     _write_plugin(
         plugins_root,
         "always_raises",
         module="""
-        from typing import ClassVar
-
         from arancio.core.hooks.types import Hook
         from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.hook import hook
 
         runs = []
 
 
         class Broken(Plugin):
-            hooks: ClassVar[frozenset[Hook]] = frozenset({Hook.AGENT_START})
-
-            def execute(self, hook, **kwargs) -> None:
-                runs.append(hook)
+            @hook(Hook.AGENT_START)
+            def explode(self, **kwargs) -> None:
+                runs.append(1)
                 raise RuntimeError("boom")
         """,
     )
@@ -505,39 +525,42 @@ def test_a_failing_plugin_is_disabled_and_reported_once(
     notices = hook_manager.run(Hook.AGENT_START, message=UserMessage(content="one"))
     assert hook_manager.run(Hook.AGENT_START, message=UserMessage(content="two")) == []
 
-    assert _loaded_module("always_raises").runs == [Hook.AGENT_START]
+    assert _loaded_module("always_raises").runs == [1]
 
     assert len(notices) == 1
     assert isinstance(notices[0], ErrorMessage)
     assert not notices[0].in_history
     assert "always_raises" in notices[0].content
+    assert "explode" in notices[0].content
     assert "boom" in notices[0].content
 
 
-def test_a_failing_plugin_stops_running_on_its_other_hooks(
+def test_a_failing_method_stops_on_all_its_hooks_but_siblings_keep_running(
     plugins_root: Path, plugin_manager: PluginManager, hook_manager: HookManager
 ) -> None:
-    """Disabling is per plugin, not per hook."""
+    """Disabling is per method: its stacked hooks stop, other methods do not."""
     _write_plugin(
         plugins_root,
         "fails_then_quiet",
         module="""
-        from typing import ClassVar
-
         from arancio.core.hooks.types import Hook
         from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.hook import hook
 
-        runs = []
+        broken_runs = []
+        healthy_runs = []
 
 
-        class Broken(Plugin):
-            hooks: ClassVar[frozenset[Hook]] = frozenset(
-                {Hook.TURN_START, Hook.TURN_END}
-            )
-
-            def execute(self, hook, **kwargs) -> None:
-                runs.append(hook)
+        class Mixed(Plugin):
+            @hook(Hook.TURN_START)
+            @hook(Hook.TURN_END)
+            def broken(self, turn) -> None:
+                broken_runs.append(turn)
                 raise RuntimeError("boom")
+
+            @hook(Hook.TURN_END)
+            def healthy(self, turn) -> None:
+                healthy_runs.append(turn)
         """,
     )
 
@@ -545,8 +568,11 @@ def test_a_failing_plugin_stops_running_on_its_other_hooks(
 
     hook_manager.run(Hook.TURN_START, turn=0)
     hook_manager.run(Hook.TURN_END, turn=0)
+    hook_manager.run(Hook.TURN_END, turn=1)
 
-    assert _loaded_module("fails_then_quiet").runs == [Hook.TURN_START]
+    module = _loaded_module("fails_then_quiet")
+    assert module.broken_runs == [0]
+    assert module.healthy_runs == [0, 1]
 
 
 def test_a_failing_plugin_does_not_break_an_agent_run(
@@ -561,16 +587,14 @@ def test_a_failing_plugin_does_not_break_an_agent_run(
         plugins_root,
         "breaks_turns",
         module="""
-        from typing import ClassVar
-
         from arancio.core.hooks.types import Hook
         from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.hook import hook
 
 
         class Broken(Plugin):
-            hooks: ClassVar[frozenset[Hook]] = frozenset({Hook.TURN_START})
-
-            def execute(self, hook, **kwargs) -> None:
+            @hook(Hook.TURN_START)
+            def on_turn_start(self, **kwargs) -> None:
                 raise RuntimeError("boom")
         """,
     )
@@ -598,9 +622,10 @@ def test_plugin_failures_reach_agent_without_retry(
         module=f"""
 from arancio.core.hooks.types import Hook
 from arancio.core.plugins.base import Plugin
+from arancio.core.plugins.hook import hook
 class Broken(Plugin):
-    hooks = frozenset({{Hook.{hook.name}}})
-    def execute(self, **kwargs):
+    @hook(Hook.{hook.name})
+    def explode(self, **kwargs):
         raise RuntimeError("plugin boom")
 """,
     )
@@ -637,10 +662,11 @@ def test_closing_agent_runs_final_hook_without_yielding(
         module="""
 from arancio.core.hooks.types import Hook
 from arancio.core.plugins.base import Plugin
+from arancio.core.plugins.hook import hook
 runs = []
 class Broken(Plugin):
-    hooks = frozenset({Hook.TURN_END})
-    def execute(self, **kwargs):
+    @hook(Hook.TURN_END)
+    def explode(self, **kwargs):
         runs.append(1)
         raise RuntimeError("close boom")
 """,
@@ -674,9 +700,10 @@ def test_plugin_errors_are_saved_once_and_restored_outside_model_history(
         module=f"""
 from arancio.core.hooks.types import Hook
 from arancio.core.plugins.base import Plugin
+from arancio.core.plugins.hook import hook
 class Broken(Plugin):
-    hooks = frozenset({{Hook.{hook}}})
-    def execute(self, **kwargs):
+    @hook(Hook.{hook})
+    def explode(self, **kwargs):
         raise RuntimeError("persist boom")
 """,
     )
@@ -743,9 +770,10 @@ def test_final_hook_errors_survive_abnormal_agent_stops(
             module=f"""
 from arancio.core.hooks.types import Hook
 from arancio.core.plugins.base import Plugin
+from arancio.core.plugins.hook import hook
 class Broken(Plugin):
-    hooks = frozenset({{Hook.{hook}}})
-    def execute(self, **kwargs):
+    @hook(Hook.{hook})
+    def explode(self, **kwargs):
         raise RuntimeError("stop boom")
 """,
         )

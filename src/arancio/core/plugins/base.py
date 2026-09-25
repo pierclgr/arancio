@@ -2,29 +2,23 @@
 
 from abc import ABC
 from pathlib import Path
-from typing import Any, ClassVar
 
-from arancio.core.hooks.types import Hook
 from arancio.core.plugins.manifest import PluginManifest
 
 
 class Plugin(ABC):
     """Base class every plugin extends.
 
-    A plugin binds to one or more hook entry points via :attr:`hooks` and
-    implements :meth:`execute` to run on each one, defines tools via
-    ``@tool``-decorated methods (see
-    :mod:`~arancio.core.plugins.tool`), or both. A plugin reaches the extra
-    files shipped in its own folder through :attr:`directory`; the loader
-    never reads them.
+    A plugin runs on hooks via ``@hook``-decorated methods (see
+    :mod:`~arancio.core.plugins.hook`), defines tools via ``@tool``-decorated
+    methods (see :mod:`~arancio.core.plugins.tool`), or both. A plugin
+    reaches the extra files shipped in its own folder through
+    :attr:`directory`; the loader never reads them.
 
     Attributes:
         manifest: the metadata parsed from the plugin's ``manifest.yml``.
         directory: the plugin's own folder.
-        hooks: the hooks this plugin runs on.
     """
-
-    hooks: ClassVar[frozenset[Hook]] = frozenset()
 
     def __init__(self, manifest: PluginManifest, directory: Path) -> None:
         """Initialize the plugin with its metadata and its own folder.
@@ -34,8 +28,8 @@ class Plugin(ABC):
             directory: the plugin's own folder, holding any extra files it
                 ships.
         """
-        self.manifest = manifest
-        self.directory = directory
+        self.manifest: PluginManifest = manifest
+        self.directory: Path = directory
 
     def __repr__(self) -> str:
         """Return a developer-friendly representation of the plugin.
@@ -53,22 +47,3 @@ class Plugin(ABC):
             The manifest's name, which defaults to the plugin's folder name.
         """
         return self.manifest.name
-
-    def execute(self, *, hook: Hook, **kwargs: Any) -> None:
-        """Run the plugin for one dispatched hook.
-
-        The default does nothing — a plugin that only defines tools and no
-        hooks never has this called (:attr:`hooks` is empty, so
-        :class:`~arancio.core.plugins.manager.PluginManager` never registers
-        it against any hook) and has no reason to override it.
-
-        Args:
-            hook: the hook that fired.
-                :meth:`~arancio.core.hooks.manager.HookManager.run` forwards
-                only the hook's own keyword arguments and never says which
-                hook it is dispatching, so the plugin manager passes it here —
-                a plugin bound to two hooks could not otherwise tell them
-                apart.
-            **kwargs: that hook's own keyword arguments, unchanged. See
-                AGENTS.md's Hooks section for each hook's contract.
-        """
