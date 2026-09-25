@@ -31,8 +31,8 @@ class _PermissionCategoryMeta(type):
     """Metaclass giving PermissionCategory class-level iteration and lookup.
 
     Mirrors the surface :class:`enum.EnumMeta` gives ``for x in Enum``/
-    ``Enum[name]``/``Enum.__members__``, so every existing call site keeps
-    working unchanged even though categories are no longer enum members.
+    ``Enum[name]``/``Enum.__members__``, so every existing call site keeps working
+    unchanged even though categories are no longer enum members.
     """
 
     def __iter__(cls) -> Iterator["PermissionCategory"]:
