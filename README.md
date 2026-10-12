@@ -1,4 +1,4 @@
-<h3 align="center">ARANCIO</h3>
+<h2 align="center">ARANCIO</h2>
 
 <p align="center"><em>Just another coding agent, written in Python</em></p>
 
