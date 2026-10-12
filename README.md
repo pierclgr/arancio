@@ -1,6 +1,6 @@
 # Arancio
 
-[![Project Status: WIP – Initial development is in progress, but there has not yet been a stable, usable release suitable for the public.](https://badgen.net/badge/repo%20status/WIP/yellow)](https://www.repostatus.org/#wip)
+[![Project Status: WIP – Initial development is in progress, but there has not yet been a stable, usable release suitable for the public.](https://badgen.net/badge/repo%20status/WIP/orange)](https://www.repostatus.org/#wip)
 
 Arancio ("another coding agent") is a terminal-based coding assistant. It provides a Textual TUI and runs a multi-turn agent loop against LLM providers through LiteLLM's Responses API. The provider is selected by model identifier, so the same interface can work with providers supported by LiteLLM.
 
