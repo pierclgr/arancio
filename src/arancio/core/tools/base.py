@@ -11,7 +11,9 @@ from arancio.core.constants.path import (
     TOOL_INPUT_SCHEMA_FILENAME,
     TOOLS_HARNESS_PATH,
 )
-from arancio.core.messages import ToolResultMessage
+from arancio.core.hooks.manager import HookManager
+from arancio.core.hooks.types import Hook
+from arancio.core.messages import Message, ToolResultMessage
 from arancio.core.parsers.tool_result.base import BaseToolResultParser
 from arancio.core.tools.schema import ToolSchema
 from arancio.core.tools.session import ToolSession, shared_session
@@ -23,7 +25,7 @@ class BaseTool(ABC):
 
     Subclasses implement :meth:`_call` to execute the tool and return
     raw output. The public :meth:`call` wrapper executes :meth:`_call`
-    and converts its output into a :class:`ToolResultMessage`.
+    and returns its :class:`ToolResultMessage` alongside hook messages.
 
     Attributes:
         description: natural-language description,
@@ -38,21 +40,44 @@ class BaseTool(ABC):
         _session: the process-wide :class:`ToolSession` for cross-tool
             coordination (e.g. read-first guards), shared by every tool
             through this class attribute.
+        _hook_manager: the hook manager :meth:`call` dispatches
+            ``before_tool_call``/``after_tool_call``/``error`` through,
+            injected by the caller (typically
+            :meth:`~arancio.core.tools.manager.ToolManager.create_tools`).
     """
 
     _result_parser: Type[BaseToolResultParser] = BaseToolResultParser
     _session: ToolSession = shared_session
 
-    def __init__(self) -> None:
-        """Initialize the tool by loading description and input schema from disk.
+    def __init__(self, hook_manager: HookManager) -> None:
+        """Initialize the tool with its hook manager, description and input schema.
+
+        The description and raw input schema come from :meth:`_load_prompt`;
+        the schema is then wrapped as a closed JSON object.
+
+        Args:
+            hook_manager: the hook manager :meth:`call` dispatches through.
+        """
+        self._hook_manager = hook_manager
+        self.description, raw_input_schema = self._load_prompt()
+        self.input_schema = {
+            "type": "object",
+            "additionalProperties": False,
+            **raw_input_schema,
+        }
+
+    def _load_prompt(self) -> tuple[str, dict[str, Any]]:
+        """Load the tool's description and raw input schema from disk.
 
         Reads ``description.md`` and ``input_schema.yml`` from
-        ``harness/tools/<snake_name>/`` and stores them as instance
-        attributes. The description is parsed as dynamic markdown:
-        ``<include>``/``@path``, ``<field>`` and ``<script>`` tags are
-        expanded with the tool instance as the field source; relative
-        include and script targets resolve against ``description.md``'s
-        own directory.
+        ``harness/tools/<snake_name>/``. The description is parsed as dynamic
+        markdown: ``<include>``/``@path``, ``<field>`` and ``<script>`` tags
+        are expanded with the tool instance as the field source; relative
+        include and script targets resolve against ``description.md``'s own
+        directory.
+
+        Returns:
+            The description and the raw input schema.
 
         Raises:
             FileNotFoundError: when the harness directory for this
@@ -68,16 +93,10 @@ class BaseTool(ABC):
         self._description_file = DynamicMarkdownFile(
             self._harness_dir / TOOL_DESCRIPTION_FILENAME, tool=self
         )
-        self.description = self._description_file.content
-
         raw_input_schema = yaml.safe_load(
             (self._harness_dir / TOOL_INPUT_SCHEMA_FILENAME).read_text()
         )
-        self.input_schema = {
-            "type": "object",
-            "additionalProperties": False,
-            **raw_input_schema,
-        }
+        return self._description_file.content, raw_input_schema
 
     def __repr__(self) -> str:
         """Return a developer-friendly representation of the tool.
@@ -96,28 +115,62 @@ class BaseTool(ABC):
         """
         return type(self).__name__
 
-    def call(self, call_id: str, **kwargs) -> ToolResultMessage:
-        """Execute the tool and build ToolResultMessage output.
+    def call(self, call_id: str, **kwargs) -> tuple[ToolResultMessage, list[Message]]:
+        """Execute the tool and return its result alongside hook messages.
+
+        Dispatches ``before_tool_call`` before running, ``error`` (with
+        ``source="tool"``) when :meth:`_call` raises, and ``after_tool_call``
+        once the result is built, successful or not. The result returned is
+        read back from the hook context after ``after_tool_call``, so a
+        handler that replaces ``context["result"]`` changes what the caller
+        gets. Only a :meth:`_call`
+        failure is caught here — a hook handler's own exception during any
+        of these three dispatches propagates out of this method instead of
+        becoming a :class:`~arancio.core.messages.ToolErrorMessage`.
 
         Args:
             call_id: identifier of the tool call this result answers.
             **kwargs: tool arguments matching ``input_schema``.
 
         Returns:
-            The tool output build as message.
+            The tool result and hook messages in dispatch order.
         """
+        messages = self._hook_manager.run(
+            Hook.BEFORE_TOOL_CALL, name=self.name, call_id=call_id, arguments=kwargs
+        )
         try:
             output = self._call(**kwargs)
             is_error = False
         except Exception as exc:
+            messages.extend(
+                self._hook_manager.run(
+                    Hook.ERROR,
+                    source="tool",
+                    name=self.name,
+                    call_id=call_id,
+                    arguments=kwargs,
+                    error=exc,
+                )
+            )
             output = f"Error while executing {self.name}: {exc}"
             is_error = True
 
-        return self._result_parser.parse(
+        result = self._result_parser.parse(
             call_id=call_id,
             output=output,
             is_error=is_error,
         )
+        messages.extend(
+            self._hook_manager.run(
+                Hook.AFTER_TOOL_CALL,
+                name=self.name,
+                call_id=call_id,
+                arguments=kwargs,
+                result=result,
+            )
+        )
+        # a handler may have replaced the result in the shared context
+        return self._hook_manager.context["result"], messages
 
     @abstractmethod
     def _call(self, **kwargs) -> Any:

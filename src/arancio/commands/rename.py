@@ -16,6 +16,7 @@ class RenameCommand(StateChangeCommand):
 
     name = "rename"
     description = "Rename the active session."
+    joins_arguments = True
 
     @classmethod
     def execute(
@@ -28,8 +29,8 @@ class RenameCommand(StateChangeCommand):
         name.
 
         Args:
-            new_name: the session's new name, bound to the prompt's first
-                word.
+            new_name: the session's new name, bound to every prompt word,
+                joined with a space.
             session_manager: the active session manager, whose current
                 session is renamed.
 

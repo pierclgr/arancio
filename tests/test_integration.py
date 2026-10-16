@@ -16,6 +16,7 @@ from fakes import RecordingApp, ScriptedClient, ScriptedController
 
 import arancio.storage.manager as storage_module
 from arancio.core.agents import Agent
+from arancio.core.hooks.manager import HookManager
 from arancio.core.messages import (
     AssistantMessage,
     Message,
@@ -51,11 +52,16 @@ def wired(
     storage_manager = StorageManager(root=tmp_path / "arancio")
     controller = ScriptedController()
     client = ScriptedClient()
-    tool_manager = ToolManager(web_summary_client=client)
+    hook_manager = HookManager()
+    tool_manager = ToolManager(web_summary_client=client, hook_manager=hook_manager)
     permission_manager = PermissionManager(
-        tool_manager=tool_manager, controller=controller
+        tool_manager=tool_manager, controller=controller, hook_manager=hook_manager
     )
-    agent = Agent(client=client, permission_manager=permission_manager)
+    agent = Agent(
+        client=client,
+        permission_manager=permission_manager,
+        hook_manager=hook_manager,
+    )
     settings_manager = SettingsManager(
         storage_manager=storage_manager,
         client=client,
@@ -76,6 +82,7 @@ def wired(
         application=RecordingApp(working_directory=tmp_path),
         settings_manager=settings_manager,
         session_manager=session_manager,
+        hook_manager=hook_manager,
     )
     return executor, session_manager, storage_manager, client
 
@@ -435,3 +442,31 @@ def test_renaming_then_resuming_by_the_new_name_finds_the_same_session(
     restored = session_manager.current
     assert restored.id == first.id
     assert restored.name == "project-x"
+
+
+def test_resuming_by_a_spaced_name_searches_the_whole_name(
+    wired: tuple[ActionExecutor, SessionManager, StorageManager, ScriptedClient],
+) -> None:
+    """Only the first word, ``my``, would match both sessions and resume neither."""
+    executor, session_manager, _, _ = wired
+    first = session_manager.current
+
+    for name in ("my project", "my other"):
+        list(
+            executor.execute(
+                CommandAction(
+                    name="rename", args=name.split(), raw_input=f"/rename {name}"
+                )
+            )
+        )
+        list(executor.execute(CommandAction(name="clear", args=[], raw_input="/clear")))
+
+    list(
+        executor.execute(
+            CommandAction(
+                name="resume", args=["my", "project"], raw_input="/resume my project"
+            )
+        )
+    )
+
+    assert session_manager.current.id == first.id

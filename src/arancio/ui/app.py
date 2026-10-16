@@ -12,6 +12,7 @@ from textual.widgets import Input, Markdown, Static
 from textual.widgets.markdown import MarkdownStream
 
 from arancio.core.agents import Agent
+from arancio.core.hooks.manager import HookManager
 from arancio.core.messages import (
     AssistantChunkMessage,
     AssistantMessage,
@@ -35,8 +36,8 @@ from arancio.ui.widgets.chatgpt_login import ChatGPTLoginNotice
 class App(TextualApp):
     """Terminal UI streaming the agent's output and gating its tool use.
 
-    A worker thread iterates ``Agent.__call__`` so the blocking agent loop never
-    freezes the UI; each produced message is rendered on the main thread via
+    A worker thread iterates ``Agent.__call__`` so the blocking agent loop never freezes
+    the UI; each produced message is rendered on the main thread via
     :meth:`call_from_thread`. Assistant and reasoning text render as markdown (reasoning
     dimmed), for both finalized messages and streaming chunks.
     """
@@ -71,6 +72,7 @@ class App(TextualApp):
         model_id: str,
         settings_manager: SettingsManager,
         session_manager: SessionManager,
+        hook_manager: HookManager,
         startup_messages: list[Message] | None = None,
     ) -> None:
         """Initialize the app with the agent it drives and the model label.
@@ -81,6 +83,10 @@ class App(TextualApp):
             settings_manager: the manager used to apply and persist settings
                 changes made through commands (e.g. ``/model``, ``/effort``).
             session_manager: the active persistent chat session.
+            hook_manager: the hook manager forwarded to the executor, so its
+                own ``ReadFileTool``/``ShellCommandTool`` instances dispatch
+                through the same shared manager as the rest of the agent
+                stack.
             startup_messages: messages to render once on mount (e.g. settings
                 validation warnings/errors produced while loading
                 ``settings.yml``). Defaults to none.
@@ -94,6 +100,7 @@ class App(TextualApp):
             application=self,
             settings_manager=settings_manager,
             session_manager=session_manager,
+            hook_manager=hook_manager,
         )
         self._model_id = model_id
         self._effort = settings_manager.settings.thinking_effort

@@ -125,7 +125,7 @@ class ScriptedController(Controller):
 
 
 class FakeApp:
-    """The three touchpoints :class:`UIController` uses on a Textual app.
+    """The four touchpoints :class:`UIController` uses on a Textual app.
 
     ``call_from_thread`` runs the callable inline. That is what makes the
     controller testable without a running app: ``_ask`` sets its

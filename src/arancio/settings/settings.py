@@ -11,9 +11,9 @@ from arancio.core.constants.agent import (
 from arancio.core.constants.litellm import (
     LITELLM_DEFAULT_THINKING_EFFORT,
     LITELLM_DEFAULT_THINKING_SUMMARY,
+    LITELLM_PROVIDER_NAMES,
 )
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
-from arancio.settings.utils.validations import is_known_provider
 
 
 class Settings:
@@ -161,7 +161,7 @@ class Settings:
         if value is None:
             self._provider = None
             return
-        if not is_known_provider(value):
+        if value.lower() not in LITELLM_PROVIDER_NAMES:
             raise ValueError(f"Unknown provider: {value!r}.")
         self._provider = value.lower()
 

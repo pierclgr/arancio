@@ -18,6 +18,7 @@ class ResumeCommand(BaseCommand):
 
     name = "resume"
     description = "Resume a previous session by ID or name."
+    joins_arguments = True
 
     @classmethod
     def execute(
@@ -41,8 +42,8 @@ class ResumeCommand(BaseCommand):
         than something a caller has to special-case.
 
         Args:
-            query: a session ID or a fragment of its name, bound to the
-                prompt's first word.
+            query: a session ID or a fragment of its name, bound to every
+                prompt word, joined with a space.
             application: the running app whose working directory, log and
                 toolbar are updated to match the resumed session.
             agent: the agent whose conversation history is replaced.

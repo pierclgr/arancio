@@ -132,6 +132,7 @@ def test_saved_settings_round_trip_through_yaml() -> None:
         "read": "ask",
         "write": "ask",
         "web": "ask",
+        "plugin": "ask",
         "execute": "ask",
     }
 

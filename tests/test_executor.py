@@ -16,6 +16,7 @@ from fakes import RecordingApp, ScriptedClient
 
 import arancio.storage.manager as storage_module
 from arancio.core.agents import Agent
+from arancio.core.hooks.manager import HookManager
 from arancio.core.messages import (
     AssistantMessage,
     ErrorMessage,
@@ -55,6 +56,7 @@ def executor(
     app: RecordingApp,
     settings_manager: SettingsManager,
     session_manager: SessionManager,
+    hook_manager: HookManager,
     tmp_path: Path,
 ) -> ActionExecutor:
     """Return an executor over a real, configured, open session.
@@ -64,6 +66,8 @@ def executor(
         app: the fake app commands act on.
         settings_manager: the manager holding a usable provider and model.
         session_manager: the manager owning the open chat.
+        hook_manager: the hook manager the executor's own tools dispatch
+            through.
         tmp_path: pytest's per-test temporary directory.
 
     Returns:
@@ -82,6 +86,7 @@ def executor(
         application=app,
         settings_manager=settings_manager,
         session_manager=session_manager,
+        hook_manager=hook_manager,
     )
 
 
@@ -317,6 +322,7 @@ def test_a_prompt_without_a_model_is_an_error_not_a_crash(
     app: RecordingApp,
     settings_manager: SettingsManager,
     session_manager: SessionManager,
+    hook_manager: HookManager,
     tmp_path: Path,
 ) -> None:
     """A first run has no provider yet, and typing must still be safe."""
@@ -329,6 +335,7 @@ def test_a_prompt_without_a_model_is_an_error_not_a_crash(
         application=app,
         settings_manager=settings_manager,
         session_manager=session_manager,
+        hook_manager=hook_manager,
     )
 
     produced = list(executor.execute(PromptAction(prompt="hi", raw_input="hi")))
@@ -459,6 +466,35 @@ def test_extra_prompt_words_are_dropped(executor: ActionExecutor) -> None:
     )
 
     assert produced[0].content == "Hello World, Ada\nHello World, Ada"
+
+
+def test_a_joining_command_receives_every_word_as_one_argument(
+    executor: ActionExecutor, session_manager: SessionManager
+) -> None:
+    """``/rename`` joins its words, so a spaced name is not cut to its first word."""
+    produced = list(
+        executor.execute(
+            CommandAction(
+                name="rename",
+                args=["my", "new", "name"],
+                raw_input="/rename my new name",
+            )
+        )
+    )
+
+    assert produced[0].content == "Session renamed to 'my new name'"
+    assert session_manager.current.name == "my new name"
+
+
+def test_a_joining_command_without_words_still_reports_the_missing_argument(
+    executor: ActionExecutor,
+) -> None:
+    """Joining nothing must not bind an empty name in place of the error."""
+    produced = list(
+        executor.execute(CommandAction(name="rename", args=[], raw_input="/rename"))
+    )
+
+    assert isinstance(produced[0], ErrorMessage)
 
 
 def test_an_unknown_action_type_is_refused(executor: ActionExecutor) -> None:

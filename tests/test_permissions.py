@@ -10,6 +10,8 @@ from fakes import ScriptedController
 
 from arancio.core.controllers.requests import PermissionRequest
 from arancio.core.controllers.responses import Decision
+from arancio.core.hooks.manager import HookManager
+from arancio.core.hooks.types import Hook
 from arancio.core.messages import ToolCallMessage
 from arancio.core.permissions.manager import PermissionManager
 from arancio.core.permissions.types import (
@@ -18,6 +20,7 @@ from arancio.core.permissions.types import (
     PermissionOutcome,
 )
 from arancio.core.tools.manager import ToolManager
+from arancio.settings.settings import Settings
 
 
 def _call(name: str = "ReadFileTool") -> ToolCallMessage:
@@ -35,6 +38,7 @@ def _call(name: str = "ReadFileTool") -> ToolCallMessage:
 def _manager(
     tool_manager: ToolManager,
     controller: ScriptedController,
+    hook_manager: HookManager | None = None,
     **levels: PermissionLevel,
 ) -> PermissionManager:
     """Build a permission manager with named categories overridden.
@@ -42,6 +46,7 @@ def _manager(
     Args:
         tool_manager: the manager that builds granted tools.
         controller: the controller resolving ``ASK`` calls.
+        hook_manager: the hook manager ``validate`` dispatches through.
         **levels: category name (lowercase) to level, overriding ``ASK``.
 
     Returns:
@@ -50,8 +55,13 @@ def _manager(
     grants = {category: PermissionLevel.ASK for category in PermissionCategory}
     for name, level in levels.items():
         grants[PermissionCategory[name.upper()]] = level
+    if hook_manager is None:
+        hook_manager = HookManager()
     return PermissionManager(
-        tool_manager=tool_manager, controller=controller, permissions=grants
+        tool_manager=tool_manager,
+        controller=controller,
+        permissions=grants,
+        hook_manager=hook_manager,
     )
 
 
@@ -59,7 +69,7 @@ def test_a_manager_without_grants_asks_for_everything(
     permission_manager: PermissionManager,
 ) -> None:
     """Omitting the grants means every category is at ``ASK``, never absent."""
-    assert permission_manager.validate(_call()).outcome is PermissionOutcome.ALLOWED
+    assert permission_manager.validate(_call())[0].outcome is PermissionOutcome.ALLOWED
 
 
 def test_an_auto_category_never_reaches_the_user(
@@ -68,8 +78,9 @@ def test_an_auto_category_never_reaches_the_user(
     """An ``AUTO`` grant is the point where the controller is skipped entirely."""
     manager = _manager(tool_manager, controller, read=PermissionLevel.AUTO)
 
-    decision = manager.validate(_call())
+    decision, hook_messages = manager.validate(_call())
 
+    assert hook_messages == []
     assert decision.outcome is PermissionOutcome.ALLOWED
     assert controller.requests == []
 
@@ -93,8 +104,9 @@ def test_a_denial_carries_the_user_note(tool_manager: ToolManager) -> None:
     controller = ScriptedController([(Decision.DENY, "not that file")])
     manager = _manager(tool_manager, controller)
 
-    decision = manager.validate(_call())
+    decision, hook_messages = manager.validate(_call())
 
+    assert hook_messages == []
     assert decision.outcome is PermissionOutcome.DENIED
     assert decision.note == "not that file"
 
@@ -104,7 +116,7 @@ def test_an_empty_note_is_normalized_away(tool_manager: ToolManager) -> None:
     controller = ScriptedController([(Decision.ALLOW, "")])
     manager = _manager(tool_manager, controller)
 
-    assert manager.validate(_call()).note is None
+    assert manager.validate(_call())[0].note is None
 
 
 def test_a_tool_in_a_revoked_category_is_unavailable(
@@ -113,8 +125,9 @@ def test_a_tool_in_a_revoked_category_is_unavailable(
     """``NONE`` reads as "no such tool", which is what the model is told."""
     manager = _manager(tool_manager, controller, read=PermissionLevel.NONE)
 
-    decision = manager.validate(_call())
+    decision, hook_messages = manager.validate(_call())
 
+    assert hook_messages == []
     assert decision.outcome is PermissionOutcome.UNAVAILABLE
     assert controller.requests == []
 
@@ -123,8 +136,9 @@ def test_an_unknown_tool_name_is_unavailable(
     permission_manager: PermissionManager, controller: ScriptedController
 ) -> None:
     """A tool that does not exist resolves without asking anyone."""
-    decision = permission_manager.validate(_call("NoSuchTool"))
+    decision, hook_messages = permission_manager.validate(_call("NoSuchTool"))
 
+    assert hook_messages == []
     assert decision.outcome is PermissionOutcome.UNAVAILABLE
     assert controller.requests == []
 
@@ -186,3 +200,128 @@ def test_a_category_maps_to_tool_classes_not_names() -> None:
     """The mapping is by class, so renaming a tool cannot silently ungate it."""
     assert PermissionCategory.for_tool("WriteFileTool") is PermissionCategory.WRITE
     assert PermissionCategory.for_tool("NoSuchTool") is None
+
+
+def test_registering_a_category_name_twice_is_refused() -> None:
+    """Two categories sharing a name would defeat the registry's identity guarantee."""
+    PermissionCategory("PLUGIN:Foo")
+    with pytest.raises(ValueError):
+        PermissionCategory("plugin:foo")
+
+
+def test_get_or_create_is_idempotent() -> None:
+    """A second call returns the same instance instead of minting a duplicate."""
+    first = PermissionCategory.get_or_create("PLUGIN:Foo")
+    second = PermissionCategory.get_or_create("PLUGIN:Foo")
+    assert first is second
+    assert PermissionCategory.get("plugin:foo") is first
+
+
+def test_a_dynamic_category_round_trips_through_settings_despite_mixed_case() -> None:
+    """Mixed-case names only round-trip if lookup is case-insensitive."""
+    category = PermissionCategory.get_or_create("PLUGIN:TestPlugin")
+    settings = Settings.default()
+    settings.permissions[category] = PermissionLevel.AUTO
+
+    restored = Settings.from_dict(settings.to_dict())
+
+    assert restored.permissions[category] is PermissionLevel.AUTO
+
+
+def _record(manager: HookManager, *hooks: Hook) -> list:
+    """Register a handler on each hook that appends its dispatch to a list.
+
+    Args:
+        manager: the hook manager to register against.
+        *hooks: the hooks to record.
+
+    Returns:
+        The list handlers append ``(hook, context snapshot)`` to, in dispatch order.
+    """
+    events: list = []
+    for hook in hooks:
+        manager.register(
+            hook, lambda context, hook=hook: events.append((hook, dict(context)))
+        )
+    return events
+
+
+def test_validate_dispatches_before_and_after_around_an_auto_allow(
+    tool_manager: ToolManager, controller: ScriptedController
+) -> None:
+    """A clean auto-allow fires exactly the before/after pair, in order."""
+    hooks = HookManager()
+    events = _record(hooks, Hook.BEFORE_PERMISSION_CHECK, Hook.AFTER_PERMISSION_CHECK)
+    manager = _manager(tool_manager, controller, hooks, read=PermissionLevel.AUTO)
+    call = _call()
+
+    manager.validate(call)
+
+    assert [hook for hook, _ in events] == [
+        Hook.BEFORE_PERMISSION_CHECK,
+        Hook.AFTER_PERMISSION_CHECK,
+    ]
+    assert events[0][1]["call"] is call
+    assert events[1][1]["decision"].outcome is PermissionOutcome.ALLOWED
+
+
+def test_validate_dispatches_exactly_one_pair_for_an_unavailable_call(
+    tool_manager: ToolManager, controller: ScriptedController
+) -> None:
+    """Only ``_resolve``'s unavailable branch runs, not all three."""
+    hooks = HookManager()
+    events = _record(hooks, Hook.BEFORE_PERMISSION_CHECK, Hook.AFTER_PERMISSION_CHECK)
+    manager = _manager(tool_manager, controller, hooks)
+
+    manager.validate(_call("NoSuchTool"))
+
+    assert len(events) == 2
+
+
+def test_validate_dispatches_around_an_ask_denial_carrying_the_note(
+    tool_manager: ToolManager,
+) -> None:
+    """The denial note the user typed reaches the ``after`` dispatch too."""
+    hooks = HookManager()
+    events = _record(hooks, Hook.AFTER_PERMISSION_CHECK)
+    controller = ScriptedController([(Decision.DENY, "not that file")])
+    manager = _manager(tool_manager, controller, hooks)
+
+    manager.validate(_call())
+
+    assert events[0][1]["decision"].note == "not that file"
+
+
+@pytest.mark.parametrize(
+    "level, answer, outcome",
+    [
+        (PermissionLevel.AUTO, Decision.ALLOW, PermissionOutcome.ALLOWED),
+        (PermissionLevel.ASK, Decision.ALLOW, PermissionOutcome.ALLOWED),
+        (PermissionLevel.ASK, Decision.DENY, PermissionOutcome.DENIED),
+        (PermissionLevel.NONE, Decision.ALLOW, PermissionOutcome.UNAVAILABLE),
+    ],
+)
+def test_permission_hook_messages_preserve_decision(
+    tool_manager: ToolManager,
+    level: PermissionLevel,
+    answer: Decision,
+    outcome: PermissionOutcome,
+) -> None:
+    """Before and after messages do not replace any permission outcome or note."""
+    from arancio.core.messages import ErrorMessage
+
+    hooks = HookManager()
+    before = ErrorMessage(content="before")
+    after = ErrorMessage(content="after")
+    hooks.register(Hook.BEFORE_PERMISSION_CHECK, lambda context: before)
+    hooks.register(Hook.AFTER_PERMISSION_CHECK, lambda context: after)
+    manager = _manager(
+        tool_manager,
+        ScriptedController([(answer, "note")]),
+        hook_manager=hooks,
+        read=level,
+    )
+    decision, messages = manager.validate(_call())
+    assert decision.outcome is outcome
+    assert decision.note == ("note" if level is PermissionLevel.ASK else None)
+    assert messages == [before, after]

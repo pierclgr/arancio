@@ -8,8 +8,9 @@ singleton that outlives any one test. This module repoints the first, isolates t
 second and resets the third.
 
 The harness repointing happens at import, because pytest imports this module before any
-test module, and importing :mod:`arancio.prompt.actions.executor` instantiates two tools
-as class attributes.
+test module: :meth:`~arancio.core.tools.base.BaseTool.__init__` reads the path when a
+tool is built and raises when the directory is missing, so the constants have to be
+redirected before the first tool exists.
 """
 
 from pathlib import Path
@@ -20,7 +21,10 @@ from fakes import ScriptedClient, ScriptedController
 
 from arancio.core.agents import Agent
 from arancio.core.builders import system_prompt as system_prompt_builder
+from arancio.core.hooks.manager import HookManager
 from arancio.core.permissions.manager import PermissionManager
+from arancio.core.permissions.types import PermissionCategory
+from arancio.core.plugins import manager as plugin_manager_module
 from arancio.core.tools import base as tools_base
 from arancio.core.tools.manager import ToolManager
 from arancio.core.tools.session import shared_session
@@ -39,16 +43,18 @@ system_prompt_builder.SYSTEM_PROMPT_HARNESS_PATH = _REPO_HARNESS / "SYSTEM_PROMP
 
 @pytest.fixture(autouse=True)
 def _isolate_arancio_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Redirect the two absolute paths a storage manager's root does not cover.
+    """Redirect the three absolute paths a storage manager's root does not cover.
 
-    ``save_settings``/``load_settings`` and ``bind_litellm_login_dir`` read these module
-    globals at call time, so without this a test writes the real
-    ``~/.arancio/settings.yml`` or moves the real ChatGPT login directory.
+    ``save_settings``/``load_settings``, ``bind_litellm_login_dir`` and
+    ``PluginManager`` read these module globals at call time, so without this a test
+    writes the real ``~/.arancio/settings.yml``, moves the real ChatGPT login directory
+    or loads the user's real plugins.
     """
     monkeypatch.setattr(
         storage_module, "ARANCIO_SETTINGS_FILE", tmp_path / "settings.yml"
     )
     monkeypatch.setattr(storage_module, "ARANCIO_LITELLM_DIR", tmp_path / "litellm")
+    monkeypatch.setattr(plugin_manager_module, "PLUGINS_PATH", tmp_path / "plugins")
 
 
 @pytest.fixture(autouse=True)
@@ -61,6 +67,29 @@ def _reset_tool_session() -> Iterator[None]:
     shared_session.clear()
     yield
     shared_session.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_permission_categories() -> Iterator[None]:
+    """Restore PermissionCategory's registry and tool sets after every test.
+
+    ``PermissionCategory._registry`` and each category's ``tools`` set are
+    process-wide mutable state, exactly like ``shared_session`` — a test that
+    registers a plugin category or adds a tool to an existing one must not
+    leak it into the next test.
+
+    Yields:
+        Control to the test, with the registry known to match production's
+        built-in categories.
+    """
+    registry_snapshot = dict(PermissionCategory._registry)
+    tools_snapshot = {category: set(category.tools) for category in PermissionCategory}
+    yield
+    PermissionCategory._registry.clear()
+    PermissionCategory._registry.update(registry_snapshot)
+    for category, tools in tools_snapshot.items():
+        category.tools.clear()
+        category.tools.update(tools)
 
 
 @pytest.fixture
@@ -97,46 +126,69 @@ def storage_manager(tmp_path: Path) -> StorageManager:
 
 
 @pytest.fixture
-def tool_manager(client: ScriptedClient) -> ToolManager:
+def hook_manager() -> HookManager:
+    """Return a fresh hook manager with no handlers registered.
+
+    Returns:
+        An empty hook manager for a test to register handlers on.
+    """
+    return HookManager()
+
+
+@pytest.fixture
+def tool_manager(client: ScriptedClient, hook_manager: HookManager) -> ToolManager:
     """Return a tool manager whose web summary client is scripted.
 
     Args:
         client: the scripted client handed to ``FetchWebTool``.
+        hook_manager: the hook manager injected into every tool built.
 
     Returns:
         A tool manager building real tools from the repo harness.
     """
-    return ToolManager(web_summary_client=client)
+    return ToolManager(web_summary_client=client, hook_manager=hook_manager)
 
 
 @pytest.fixture
 def permission_manager(
-    tool_manager: ToolManager, controller: ScriptedController
+    tool_manager: ToolManager,
+    controller: ScriptedController,
+    hook_manager: HookManager,
 ) -> PermissionManager:
     """Return a permission manager with every category at ``ASK``.
 
     Args:
         tool_manager: the manager that builds the granted tools.
         controller: the controller asked to resolve each ``ASK`` call.
+        hook_manager: the hook manager the manager dispatches through.
 
     Returns:
         A permission manager over real tools.
     """
-    return PermissionManager(tool_manager=tool_manager, controller=controller)
+    return PermissionManager(
+        tool_manager=tool_manager, controller=controller, hook_manager=hook_manager
+    )
 
 
 @pytest.fixture
-def agent(client: ScriptedClient, permission_manager: PermissionManager) -> Agent:
+def agent(
+    client: ScriptedClient,
+    permission_manager: PermissionManager,
+    hook_manager: HookManager,
+) -> Agent:
     """Return a real agent driven by the scripted client.
 
     Args:
         client: the scripted client standing in for the model.
         permission_manager: the manager gating the agent's tool calls.
+        hook_manager: the hook manager the agent dispatches through.
 
     Returns:
         An agent with an empty history.
     """
-    return Agent(client=client, permission_manager=permission_manager)
+    return Agent(
+        client=client, permission_manager=permission_manager, hook_manager=hook_manager
+    )
 
 
 @pytest.fixture
