@@ -50,24 +50,39 @@ class BaseTool(ABC):
     _session: ToolSession = shared_session
 
     def __init__(self, hook_manager: HookManager) -> None:
-        """Initialize the tool by loading description and input schema from disk.
+        """Initialize the tool with its hook manager, description and input schema.
 
-        Reads ``description.md`` and ``input_schema.yml`` from
-        ``harness/tools/<snake_name>/`` and stores them as instance
-        attributes. The description is parsed as dynamic markdown:
-        ``<include>``/``@path``, ``<field>`` and ``<script>`` tags are
-        expanded with the tool instance as the field source; relative
-        include and script targets resolve against ``description.md``'s
-        own directory.
+        The description and raw input schema come from :meth:`_load_prompt`;
+        the schema is then wrapped as a closed JSON object.
 
         Args:
             hook_manager: the hook manager :meth:`call` dispatches through.
+        """
+        self._hook_manager = hook_manager
+        self.description, raw_input_schema = self._load_prompt()
+        self.input_schema = {
+            "type": "object",
+            "additionalProperties": False,
+            **raw_input_schema,
+        }
+
+    def _load_prompt(self) -> tuple[str, dict[str, Any]]:
+        """Load the tool's description and raw input schema from disk.
+
+        Reads ``description.md`` and ``input_schema.yml`` from
+        ``harness/tools/<snake_name>/``. The description is parsed as dynamic
+        markdown: ``<include>``/``@path``, ``<field>`` and ``<script>`` tags
+        are expanded with the tool instance as the field source; relative
+        include and script targets resolve against ``description.md``'s own
+        directory.
+
+        Returns:
+            The description and the raw input schema.
 
         Raises:
             FileNotFoundError: when the harness directory for this
                 tool does not exist.
         """
-        self._hook_manager = hook_manager
         self._harness_dir = TOOLS_HARNESS_PATH / camel_to_snake(self.name)
 
         if not self._harness_dir.is_dir():
@@ -78,16 +93,10 @@ class BaseTool(ABC):
         self._description_file = DynamicMarkdownFile(
             self._harness_dir / TOOL_DESCRIPTION_FILENAME, tool=self
         )
-        self.description = self._description_file.content
-
         raw_input_schema = yaml.safe_load(
             (self._harness_dir / TOOL_INPUT_SCHEMA_FILENAME).read_text()
         )
-        self.input_schema = {
-            "type": "object",
-            "additionalProperties": False,
-            **raw_input_schema,
-        }
+        return self._description_file.content, raw_input_schema
 
     def __repr__(self) -> str:
         """Return a developer-friendly representation of the tool.
@@ -111,7 +120,10 @@ class BaseTool(ABC):
 
         Dispatches ``before_tool_call`` before running, ``error`` (with
         ``source="tool"``) when :meth:`_call` raises, and ``after_tool_call``
-        once the result is built, successful or not. Only a :meth:`_call`
+        once the result is built, successful or not. The result returned is
+        read back from the hook context after ``after_tool_call``, so a
+        handler that replaces ``context["result"]`` changes what the caller
+        gets. Only a :meth:`_call`
         failure is caught here — a hook handler's own exception during any
         of these three dispatches propagates out of this method instead of
         becoming a :class:`~arancio.core.messages.ToolErrorMessage`.
@@ -157,7 +169,8 @@ class BaseTool(ABC):
                 result=result,
             )
         )
-        return result, messages
+        # a handler may have replaced the result in the shared context
+        return self._hook_manager.context["result"], messages
 
     @abstractmethod
     def _call(self, **kwargs) -> Any:

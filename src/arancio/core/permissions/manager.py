@@ -47,7 +47,8 @@ class PermissionManager:
             controller: the controller through which the manager asks the user
                 to approve or deny ``ask`` grants.
             hook_manager: the hook manager :meth:`validate` dispatches
-                through.
+                through; this manager adds itself to its context as
+                ``permission_manager``.
             permissions: initial category-to-level grants, covering every
                 category. When omitted (``None``) every category is granted at
                 :attr:`PermissionLevel.ASK`.
@@ -60,6 +61,7 @@ class PermissionManager:
         self._tool_manager: ToolManager = tool_manager
         self._controller: Controller = controller
         self._hook_manager: HookManager = hook_manager
+        self._hook_manager.context["permission_manager"] = self
 
     def __repr__(self) -> str:
         """Return a developer-friendly representation of the permission grants.

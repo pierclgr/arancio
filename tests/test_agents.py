@@ -393,12 +393,12 @@ def _record(manager: HookManager, *hooks: Hook) -> List[Any]:
         *hooks: the hooks to record.
 
     Returns:
-        The list handlers append ``(hook, kwargs)`` to, in dispatch order.
+        The list handlers append ``(hook, context snapshot)`` to, in dispatch order.
     """
     events: List[Any] = []
     for hook in hooks:
         manager.register(
-            hook, lambda hook=hook, **kwargs: events.append((hook, kwargs))
+            hook, lambda context, hook=hook: events.append((hook, dict(context)))
         )
     return events
 
@@ -411,7 +411,9 @@ def test_agent_start_dispatches_before_the_opening_message_is_recorded(
     snapshots: List[Any] = []
     hooks.register(
         Hook.AGENT_START,
-        lambda message: snapshots.append((message, list(agent._message_history))),
+        lambda context: snapshots.append(
+            (context["message"], list(agent._message_history))
+        ),
     )
     agent, _ = _agent(
         permission_manager, [[AssistantMessage(content="hi")]], hook_manager=hooks
@@ -487,6 +489,42 @@ def test_system_prompt_build_fires_with_the_rendered_prompt(
     assert len(events) == 1
     assert events[0][1]["system_prompt"] == client.requests[0].system_prompt
     assert events[0][1]["system_prompt"] != ""
+
+
+def test_core_components_register_themselves_in_the_hook_context(
+    agent: Agent,
+    client: ScriptedClient,
+    permission_manager: PermissionManager,
+    hook_manager: HookManager,
+) -> None:
+    """Building the core objects fills the context, with no outside wiring."""
+    assert hook_manager.context == {
+        "hook_manager": hook_manager,
+        "summary_client": client,
+        "permission_manager": permission_manager,
+        "agent": agent,
+        "client": client,
+    }
+
+
+def test_a_system_prompt_replaced_in_the_context_reaches_the_same_turns_request(
+    permission_manager: PermissionManager,
+) -> None:
+    """The agent reads the prompt back from the context after the hook."""
+    hooks = HookManager()
+    hooks.register(
+        Hook.SYSTEM_PROMPT_BUILD,
+        lambda context: context.update(
+            system_prompt=context["system_prompt"] + "\nAnswer in Italian."
+        ),
+    )
+    agent, client = _agent(
+        permission_manager, [[AssistantMessage(content="ciao")]], hook_manager=hooks
+    )
+
+    list(agent(UserMessage(content="hi")))
+
+    assert client.requests[0].system_prompt.endswith("\nAnswer in Italian.")
 
 
 def test_before_model_request_and_after_model_response_carry_the_same_request(
@@ -669,7 +707,7 @@ def test_a_hook_handler_exception_during_a_tool_call_surfaces_as_source_model(
     hooks = HookManager()
     events = _record(hooks, Hook.ERROR)
     hooks.register(
-        Hook.BEFORE_TOOL_CALL, lambda **_: (_ for _ in ()).throw(RuntimeError)
+        Hook.BEFORE_TOOL_CALL, lambda context: (_ for _ in ()).throw(RuntimeError)
     )
     tool_manager = ToolManager(web_summary_client=ScriptedClient(), hook_manager=hooks)
     permission_manager = PermissionManager(

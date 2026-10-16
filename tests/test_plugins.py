@@ -40,15 +40,15 @@ calls = []
 
 class Logger(Plugin):
     @hook(Hook.AGENT_START)
-    def on_agent_start(self, **kwargs) -> None:
-        calls.append(kwargs)
+    def on_agent_start(self, context) -> None:
+        calls.append(context["message"])
 """
 
 _SECOND_CLASS = """
 
 class Second(Plugin):
     @hook(Hook.AGENT_END)
-    def on_agent_end(self, **kwargs) -> None:
+    def on_agent_end(self, context) -> None:
         pass
 """
 
@@ -303,7 +303,7 @@ def test_a_plugin_with_no_hooks_and_no_tools_is_an_error(
 
 
         class Idle(Plugin):
-            def not_a_hook(self, **kwargs) -> None:
+            def not_a_hook(self, context) -> None:
                 pass
         """,
     )
@@ -370,7 +370,7 @@ def test_a_plugin_can_import_a_sibling_module_from_its_own_folder(
 
         class Greeter(Plugin):
             @hook(Hook.AGENT_START)
-            def greet(self, **kwargs) -> None:
+            def greet(self, context) -> None:
                 (self.directory / "out.txt").write_text(GREETING)
         """,
         extra_files={"helpers.py": "GREETING = 'hello'\n"},
@@ -383,10 +383,10 @@ def test_a_plugin_can_import_a_sibling_module_from_its_own_folder(
     assert (plugins_root / "with_helpers" / "out.txt").read_text() == "hello"
 
 
-def test_a_registered_plugin_runs_on_dispatch_with_the_hook_kwargs(
+def test_a_registered_plugin_runs_on_dispatch_with_the_hook_context(
     plugins_root: Path, plugin_manager: PluginManager, hook_manager: HookManager
 ) -> None:
-    """The hook method receives that hook's own kwargs."""
+    """The hook method receives the shared context holding the hook's data."""
     directory = _write_plugin(plugins_root, "records_calls")
 
     assert plugin_manager.load() == []
@@ -396,7 +396,7 @@ def test_a_registered_plugin_runs_on_dispatch_with_the_hook_kwargs(
     message = UserMessage(content="hi")
     hook_manager.run(Hook.AGENT_START, message=message)
 
-    assert _loaded_module("records_calls").calls == [{"message": message}]
+    assert _loaded_module("records_calls").calls == [message]
 
 
 def test_two_hook_methods_each_run_only_on_their_own_hook(
@@ -416,12 +416,12 @@ def test_two_hook_methods_each_run_only_on_their_own_hook(
 
         class Split(Plugin):
             @hook(Hook.TURN_START)
-            def on_start(self, turn) -> None:
-                seen.append(("start", turn))
+            def on_start(self, context) -> None:
+                seen.append(("start", context["turn"]))
 
             @hook(Hook.TURN_END)
-            def on_end(self, turn) -> None:
-                seen.append(("end", turn))
+            def on_end(self, context) -> None:
+                seen.append(("end", context["turn"]))
         """,
     )
 
@@ -451,8 +451,8 @@ def test_a_method_with_stacked_hooks_runs_on_each_of_them(
         class Both(Plugin):
             @hook(Hook.TURN_START)
             @hook(Hook.TURN_END)
-            def on_turn(self, turn) -> None:
-                seen.append(turn)
+            def on_turn(self, context) -> None:
+                seen.append(context["turn"])
         """,
     )
 
@@ -482,7 +482,7 @@ def test_a_failing_plugin_does_not_stop_the_plugins_behind_it(
 
         class Broken(Plugin):
             @hook(Hook.AGENT_START)
-            def on_agent_start(self, **kwargs) -> None:
+            def on_agent_start(self, context) -> None:
                 raise RuntimeError("boom")
         """,
     )
@@ -514,7 +514,7 @@ def test_a_failing_plugin_is_disabled_and_reported_once(
 
         class Broken(Plugin):
             @hook(Hook.AGENT_START)
-            def explode(self, **kwargs) -> None:
+            def explode(self, context) -> None:
                 runs.append(1)
                 raise RuntimeError("boom")
         """,
@@ -554,13 +554,13 @@ def test_a_failing_method_stops_on_all_its_hooks_but_siblings_keep_running(
         class Mixed(Plugin):
             @hook(Hook.TURN_START)
             @hook(Hook.TURN_END)
-            def broken(self, turn) -> None:
-                broken_runs.append(turn)
+            def broken(self, context) -> None:
+                broken_runs.append(context["turn"])
                 raise RuntimeError("boom")
 
             @hook(Hook.TURN_END)
-            def healthy(self, turn) -> None:
-                healthy_runs.append(turn)
+            def healthy(self, context) -> None:
+                healthy_runs.append(context["turn"])
         """,
     )
 
@@ -594,7 +594,7 @@ def test_a_failing_plugin_does_not_break_an_agent_run(
 
         class Broken(Plugin):
             @hook(Hook.TURN_START)
-            def on_turn_start(self, **kwargs) -> None:
+            def on_turn_start(self, context) -> None:
                 raise RuntimeError("boom")
         """,
     )
@@ -625,7 +625,7 @@ from arancio.core.plugins.base import Plugin
 from arancio.core.plugins.hook import hook
 class Broken(Plugin):
     @hook(Hook.{hook.name})
-    def explode(self, **kwargs):
+    def explode(self, context):
         raise RuntimeError("plugin boom")
 """,
     )
@@ -666,7 +666,7 @@ from arancio.core.plugins.hook import hook
 runs = []
 class Broken(Plugin):
     @hook(Hook.TURN_END)
-    def explode(self, **kwargs):
+    def explode(self, context):
         runs.append(1)
         raise RuntimeError("close boom")
 """,
@@ -703,7 +703,7 @@ from arancio.core.plugins.base import Plugin
 from arancio.core.plugins.hook import hook
 class Broken(Plugin):
     @hook(Hook.{hook})
-    def explode(self, **kwargs):
+    def explode(self, context):
         raise RuntimeError("persist boom")
 """,
     )
@@ -773,7 +773,7 @@ from arancio.core.plugins.base import Plugin
 from arancio.core.plugins.hook import hook
 class Broken(Plugin):
     @hook(Hook.{hook})
-    def explode(self, **kwargs):
+    def explode(self, context):
         raise RuntimeError("stop boom")
 """,
         )

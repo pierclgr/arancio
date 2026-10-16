@@ -282,12 +282,12 @@ def _record(manager: HookManager, *hooks: Hook) -> List[Any]:
         *hooks: the hooks to record.
 
     Returns:
-        The list handlers append ``(hook, kwargs)`` to, in dispatch order.
+        The list handlers append ``(hook, context snapshot)`` to, in dispatch order.
     """
     events: List[Any] = []
     for hook in hooks:
         manager.register(
-            hook, lambda hook=hook, **kwargs: events.append((hook, kwargs))
+            hook, lambda context, hook=hook: events.append((hook, dict(context)))
         )
     return events
 
@@ -306,6 +306,21 @@ def test_call_dispatches_before_and_after_tool_call_around_a_successful_run(
     assert before["name"] == after["name"] == "ReadFileTool"
     assert before["call_id"] == after["call_id"] == "c1"
     assert isinstance(after["result"], ToolResultMessage)
+
+
+def test_a_result_replaced_in_the_context_is_what_call_returns(sample: Path) -> None:
+    """``call`` reads the result back from the context after ``after_tool_call``."""
+    hooks = HookManager()
+    replacement = ToolErrorMessage(content="blocked by plugin", id="c1")
+    hooks.register(
+        Hook.AFTER_TOOL_CALL, lambda context: context.update(result=replacement)
+    )
+
+    result, _ = ReadFileTool(hook_manager=hooks).call(
+        call_id="c1", file_path=str(sample)
+    )
+
+    assert result is replacement
 
 
 def test_call_dispatches_error_then_after_tool_call_when_the_call_raises() -> None:
@@ -329,7 +344,7 @@ def test_a_hook_handler_exception_escapes_call_unlike_a_tool_exception() -> None
     """Unlike a ``_call`` failure, a handler's own exception is not caught."""
     hooks = HookManager()
     hooks.register(
-        Hook.BEFORE_TOOL_CALL, lambda **_: (_ for _ in ()).throw(RuntimeError)
+        Hook.BEFORE_TOOL_CALL, lambda context: (_ for _ in ()).throw(RuntimeError)
     )
 
     with pytest.raises(RuntimeError):
@@ -524,9 +539,9 @@ def test_tool_hook_messages_preserve_result(sample: Path, fails: bool) -> None:
     before = ErrorMessage(content="before")
     error = ErrorMessage(content="error")
     after = ErrorMessage(content="after")
-    hooks.register(Hook.BEFORE_TOOL_CALL, lambda **_: before)
-    hooks.register(Hook.ERROR, lambda **_: error)
-    hooks.register(Hook.AFTER_TOOL_CALL, lambda **_: after)
+    hooks.register(Hook.BEFORE_TOOL_CALL, lambda context: before)
+    hooks.register(Hook.ERROR, lambda context: error)
+    hooks.register(Hook.AFTER_TOOL_CALL, lambda context: after)
     result, messages = ReadFileTool(hook_manager=hooks).call(
         call_id="c1", file_path="relative.txt" if fails else str(sample)
     )

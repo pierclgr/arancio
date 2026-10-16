@@ -236,12 +236,12 @@ def _record(manager: HookManager, *hooks: Hook) -> list:
         *hooks: the hooks to record.
 
     Returns:
-        The list handlers append ``(hook, kwargs)`` to, in dispatch order.
+        The list handlers append ``(hook, context snapshot)`` to, in dispatch order.
     """
     events: list = []
     for hook in hooks:
         manager.register(
-            hook, lambda hook=hook, **kwargs: events.append((hook, kwargs))
+            hook, lambda context, hook=hook: events.append((hook, dict(context)))
         )
     return events
 
@@ -313,8 +313,8 @@ def test_permission_hook_messages_preserve_decision(
     hooks = HookManager()
     before = ErrorMessage(content="before")
     after = ErrorMessage(content="after")
-    hooks.register(Hook.BEFORE_PERMISSION_CHECK, lambda **_: before)
-    hooks.register(Hook.AFTER_PERMISSION_CHECK, lambda **_: after)
+    hooks.register(Hook.BEFORE_PERMISSION_CHECK, lambda context: before)
+    hooks.register(Hook.AFTER_PERMISSION_CHECK, lambda context: after)
     manager = _manager(
         tool_manager,
         ScriptedController([(answer, "note")]),

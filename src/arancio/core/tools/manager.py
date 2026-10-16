@@ -32,10 +32,12 @@ class ToolManager:
                 held by reference so its settings can be changed in place at
                 runtime and seen by the tool.
             hook_manager: the hook manager injected into every tool this
-                manager builds.
+                manager builds; ``web_summary_client`` is added to its
+                context as ``summary_client``.
         """
         self._web_summary_client = web_summary_client
         self._hook_manager = hook_manager
+        self._hook_manager.context["summary_client"] = web_summary_client
 
     @staticmethod
     def available_tools(

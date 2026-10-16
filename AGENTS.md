@@ -233,10 +233,24 @@ every dispatch point: `agent_start`/`agent_end`, `turn_start`/`turn_end`,
 `before_permission_check`/`after_permission_check`, and a single `error`. `HookManager`
 (`core/hooks/manager.py`) owns its own registrations — there is no global singleton, so
 two managers never share handlers. `register(hook, handler)` appends a handler for a hook;
-registering the same callable twice adds two invocations. `run(hook, **kwargs)` calls every
+registering the same callable twice adds two invocations. Every handler takes **one**
+argument: the manager's public `context` dict. `run(hook, **event)` first writes the
+event's own data into `context` under those keys (object identity kept), then calls every
 handler registered for that hook synchronously, on the caller's thread, in registration
-order, forwarding the keyword arguments unchanged (including object identity) to each one.
-Returned `Message` objects are collected into a list in dispatch order; other return
+order, passing the **same** `context` object to each — never a copy. So a handler changes
+a value by assigning a key (`context["system_prompt"] = ...`), and the next handler and
+the caller both see it. Event keys are **not** erased after dispatch: they stay until a
+later `run` overwrites them, so a handler should read only the keys its own hook sets
+(a `turn_start` handler still finds the last tool call's `result`). Besides the event
+keys, core fills the permanent keys **by itself**, with no outside wiring: each core
+component adds itself to the context of the hook manager it is built with —
+`HookManager.__init__` starts it as `{"hook_manager": self}`, `ToolManager` adds
+`summary_client` (its `web_summary_client`), `PermissionManager` adds
+`permission_manager`, and `Agent` adds `agent` and `client`. The clients never receive
+a hook manager, so the object holding each one registers it. So any code that builds the
+core objects with one shared hook manager gets a full context, whatever frontend (if
+any) drives them. If two objects of the same kind share one hook manager, the last one
+built owns the key. Returned `Message` objects are collected into a list in dispatch order; other return
 values are ignored. An exception raised by an ordinary handler propagates immediately,
 so handlers after it do not run. Dispatch iterates a snapshot of the handler list taken when `run` starts, so
 a handler that registers another handler mid-dispatch only affects the next call to `run`.
@@ -295,12 +309,17 @@ Dispatch sites, by hook:
   after it. Returned messages are yielded except during `GeneratorExit`, when cleanup
   runs without yielding.
 - `Agent.__call__`: `system_prompt_build` (`system_prompt`), immediately after building
-  the prompt and before `build_request`, inside the same per-turn `try`.
+  the prompt and before `build_request`, inside the same per-turn `try`. The agent then
+  reads `context["system_prompt"]` back and builds the request from that, so a handler
+  that replaces it changes the prompt of the **same** turn. With `result` (see
+  `BaseTool.call` below), it is one of the two event keys core reads back today.
 - `BaseTool.call`: `before_tool_call` (`name`, `call_id`, `arguments`) before running;
   `error` with `source="tool"` (`name`, `call_id`, `arguments`, `error`) when `_call`
   raises; `after_tool_call` (`name`, `call_id`, `arguments`, `result`) once the result
   message is built, unconditionally — both the `source="tool"` `error` and
-  `after_tool_call` fire on a failed call. Only `_call`'s own exceptions are caught by
+  `after_tool_call` fire on a failed call. `call` then returns `context["result"]`, read
+  back after `after_tool_call`, so a handler that replaces it (even with a
+  `ToolErrorMessage`) changes the result the agent and executor receive. Only `_call`'s own exceptions are caught by
   `call`'s try/except; a handler exception raised during any of these three dispatches
   propagates out of `call` itself, unlike a tool's own failure. When that happens inside
   `Agent.__call__`'s tool-calling loop, it is caught by the *same* `except Exception as
@@ -317,9 +336,10 @@ Dispatch sites, by hook:
   three early returns.
 
 The three error sources (`tool`/`model`/`agent`) are unified under the single `error` hook
-rather than three separately named ones, distinguished by a `source` kwarg — a handler that
+rather than three separately named ones, distinguished by a `source` key — a handler that
 wants every failure registers once for `error` and reads `source`; one that only cares about
-tool failures filters on `kwargs["source"] == "tool"`.
+tool failures filters on `context["source"] == "tool"`. The names in parentheses in the
+list above are the event keys each dispatch writes into `context`.
 
 **Plugins** (`core/plugins/`) — a plugin is a folder under `~/.arancio/plugins/` holding a
 `manifest.yml` and a `module.py`, plus whatever else its own code needs. It lives **in
@@ -349,7 +369,8 @@ plugin extends `Plugin` (`core/plugins/base.py`), which supplies `manifest` and
 exist. A plugin participates two independent ways: it binds instance methods to hooks
 with `@hook(Hook.X)` (`core/plugins/hook.py`), and/or it defines tools by decorating
 instance methods with `@tool(...)` (below). Each `@hook` method runs on its own hook and
-receives only that hook's keyword arguments; stacking several `@hook`s binds one method
+is called as `method(self, context)` with the hook manager's shared `context` dict (see
+**Hooks** above); stacking several `@hook`s binds one method
 to several hooks. `find_hook_methods(plugin_cls)` finds them with the same "defined
 directly on the class" rule as `find_tool_specs`. Hooks live in code rather than in the
 manifest — there is deliberately no `kind:` field, since a manifest field can contradict
@@ -358,8 +379,9 @@ reported and skipped since it could never run.
 
 `@tool(...)` (`core/plugins/tool.py`) marks a `Plugin` instance method as a real tool:
 `description`/`input_schema` are given directly as decorator keyword arguments — a plugin
-cannot ship harness files, so this bypasses `BaseTool`'s on-disk
-`~/.arancio/harness/tools/<name>/` requirement entirely, unlike a built-in tool — and
+cannot ship harness files, so `PluginTool` overrides `BaseTool._load_prompt` (which a
+built-in tool uses to read `~/.arancio/harness/tools/<name>/`) to return them instead,
+while still running `BaseTool.__init__` like any built-in tool — and
 `category` picks the `PermissionCategory` (see **Permissions** above) it falls under: an
 existing one (`READ`/`WRITE`/`WEB`/`EXECUTE`), the fixed `PLUGIN` category (the default
 when omitted), or the keyword `CUSTOM`, which resolves to a category dedicated to the

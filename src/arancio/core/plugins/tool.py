@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
-from arancio.core.hooks.manager import HookManager
 from arancio.core.tools.base import BaseTool
 
 if TYPE_CHECKING:
@@ -93,10 +92,10 @@ def find_tool_specs(
 class PluginTool(BaseTool):
     """A tool synthesized from one @tool-decorated plugin method.
 
-    Bypasses :class:`~arancio.core.tools.base.BaseTool`'s on-disk harness
-    requirement — description and input schema come from the decorator
-    instead of ``~/.arancio/harness/tools/<name>/``, since a plugin cannot
-    ship files there. A concrete subclass is built per decorated method by
+    Overrides :meth:`~arancio.core.tools.base.BaseTool._load_prompt` so the
+    description and input schema come from the decorator instead of
+    ``~/.arancio/harness/tools/<name>/``, since a plugin cannot ship files
+    there. A concrete subclass is built per decorated method by
     :func:`build_plugin_tool_class`, with the owning plugin instance, the
     underlying function and the spec bound as class attributes, so it stays
     constructible as ``tool_cls(hook_manager=...)`` like any built-in tool.
@@ -112,19 +111,13 @@ class PluginTool(BaseTool):
     _method: ClassVar[Callable]
     _spec: ClassVar[PluginToolSpec]
 
-    def __init__(self, hook_manager: HookManager) -> None:
-        """Initialize the tool from its bound spec instead of reading disk.
+    def _load_prompt(self) -> tuple[str, dict[str, Any]]:
+        """Return the description and raw input schema from the bound spec.
 
-        Args:
-            hook_manager: the hook manager :meth:`call` dispatches through.
+        Returns:
+            The spec's description and raw input schema.
         """
-        self._hook_manager = hook_manager
-        self.description = self._spec.description
-        self.input_schema = {
-            "type": "object",
-            "additionalProperties": False,
-            **self._spec.input_schema,
-        }
+        return self._spec.description, self._spec.input_schema
 
     def _call(self, **kwargs: Any) -> Any:
         """Run the underlying plugin method with the tool's arguments.

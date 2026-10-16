@@ -58,7 +58,9 @@ class Agent:
             permission_manager: the permission manager that creates the agent's
                 tools and gates each tool call.
             hook_manager: the hook manager the loop and system-prompt build
-                dispatch through (see AGENTS.md's Hooks section).
+                dispatch through (see AGENTS.md's Hooks section); the agent
+                adds itself and ``client`` to its context as ``agent`` and
+                ``client``.
             message_history: the model context the agent starts from, copied so
                 the caller keeps no handle on it. Defaults to none, an empty
                 history; a restored session passes its saved messages here.
@@ -81,6 +83,7 @@ class Agent:
         self._system_prompt_builder: SystemPromptBuilder = SystemPromptBuilder()
         self._permission_manager: PermissionManager = permission_manager
         self._hook_manager: HookManager = hook_manager
+        self._hook_manager.context.update(agent=self, client=client)
 
         self._tools: Dict[str, BaseTool] = {}
         self._refresh_tools()
@@ -422,6 +425,8 @@ class Agent:
                 yield from self._hook_manager.run(
                     Hook.SYSTEM_PROMPT_BUILD, system_prompt=system_prompt
                 )
+                # a handler may have replaced the prompt in the shared context
+                system_prompt = self._hook_manager.context["system_prompt"]
                 request = self._client.build_request(
                     messages=self._message_history,
                     system_prompt=system_prompt,
