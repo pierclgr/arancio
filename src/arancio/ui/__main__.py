@@ -78,9 +78,9 @@ def main() -> None:
         startup_messages=startup_messages,
     )
     controller.app = app
-    # leaves the terminal's own mouse-tracking off, so the terminal emulator's native
-    # text selection works instead of Textual capturing clicks/drags
-    app.run(mouse=False)
+    # textual captures clicks/drags, so the terminal emulator's native text selection
+    # needs its modifier key (e.g. Option in iTerm2, Fn in Terminal.app)
+    app.run(mouse=True)
 
 
 if __name__ == "__main__":
