@@ -24,7 +24,7 @@ class PluginLoader:
     """Turn one plugin folder into a plugin instance, or into an error.
 
     :meth:`load` never raises: every way a folder can be a broken plugin — unreadable or
-    malformed ``manifest.yml``, a ``module.py`` that is missing or raises on import, a
+    malformed ``manifest.yml``, a ``plugin.py`` that is missing or raises on import, a
     module holding no plugin class or several, a
     :class:`~arancio.core.plugins.base.Plugin` declaring neither hooks nor tools — comes
     back as one :class:`~arancio.core.messages.ErrorMessage` with no plugin, so a single
@@ -37,7 +37,7 @@ class PluginLoader:
 
         Args:
             directory: the plugin's folder, holding ``manifest.yml`` and
-                ``module.py``.
+                ``plugin.py``.
 
         Returns:
             A ``(plugin, messages)`` pair. The plugin is ``None`` when the
@@ -108,11 +108,11 @@ class PluginLoader:
 
     @classmethod
     def _import_module(cls, directory: Path) -> tuple[ModuleType | None, list[Message]]:
-        """Import the folder's ``module.py`` under its own synthetic package.
+        """Import the folder's ``plugin.py`` under its own synthetic package.
 
-        The module is imported as ``arancio_plugins.<folder>.module``, with the
+        The module is imported as ``arancio_plugins.<folder>.plugin``, with the
         parent package's search path pointing at the plugin folder, so
-        ``from .helpers import X`` works inside ``module.py`` and two plugins
+        ``from .helpers import X`` works inside ``plugin.py`` and two plugins
         each shipping a ``helpers.py`` never collide. ``sys.path`` is left
         untouched.
 
@@ -135,7 +135,7 @@ class PluginLoader:
             ]
 
         package = cls._register_package(directory)
-        name = f"{package}.module"
+        name = f"{package}.{path.stem}"
         spec = importlib.util.spec_from_file_location(name, path)
         if spec is None or spec.loader is None:
             return None, [
@@ -193,11 +193,11 @@ class PluginLoader:
         """Find the one plugin class the module defines.
 
         Only classes **defined in this module** count, so the base a plugin
-        imports at the top of its ``module.py`` is not mistaken for the plugin
+        imports at the top of its ``plugin.py`` is not mistaken for the plugin
         itself.
 
         Args:
-            module: the imported ``module.py``.
+            module: the imported ``plugin.py``.
             directory: the plugin's folder, named in any error message.
 
         Returns:

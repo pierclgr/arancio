@@ -13,6 +13,7 @@ from textual.widgets.markdown import MarkdownStream
 
 from arancio.core.agents import Agent
 from arancio.core.hooks.manager import HookManager
+from arancio.core.hooks.types import Hook
 from arancio.core.messages import (
     AssistantChunkMessage,
     AssistantMessage,
@@ -83,7 +84,8 @@ class App(TextualApp):
             settings_manager: the manager used to apply and persist settings
                 changes made through commands (e.g. ``/model``, ``/effort``).
             session_manager: the active persistent chat session.
-            hook_manager: the hook manager forwarded to the executor, so its
+            hook_manager: the shared manager for application startup and
+                shutdown hooks, also forwarded to the executor so its
                 own ``ReadFileTool``/``ShellCommandTool`` instances dispatch
                 through the same shared manager as the rest of the agent
                 stack.
@@ -93,6 +95,7 @@ class App(TextualApp):
         """
         super().__init__()
         self._agent = agent
+        self._hook_manager = hook_manager
         self._session_manager = session_manager
         self._working_directory: Path = Path.cwd()
         self._action_executor = ActionExecutor(
@@ -123,14 +126,22 @@ class App(TextualApp):
         yield Static(self._toolbar_text(), id="toolbar")
 
     def on_mount(self) -> None:
-        """Focus the prompt input, anchor the log, and show startup messages."""
+        """Prepare the log, dispatch startup hooks and show startup messages."""
         self.query_one("#prompt", Input).focus()
         # keep the log pinned to the bottom as streamed content grows, until
         # the user scrolls up
         self.query_one("#log", VerticalScroll).anchor()
         self.populate_log()
-        for message in self._startup_messages:
+        messages = self._startup_messages + self._hook_manager.run(Hook.STARTUP)
+        for message in messages:
             self._mount(self._render(message))
+
+    def on_unmount(self) -> None:
+        """Dispatch cleanup hooks before the application finishes closing.
+
+        Widgets are already unmounted, so returned messages are not displayed.
+        """
+        self._hook_manager.run(Hook.SHUTDOWN)
 
     def populate_log(self) -> None:
         """Render the active session's visible messages into the log."""

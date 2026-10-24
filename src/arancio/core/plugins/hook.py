@@ -13,7 +13,8 @@ def hook(event: Hook) -> Callable[[Callable], Callable]:
 
     Stack the decorator to bind the same method to several hooks. The method
     is called with the hook manager's shared context dict as its only
-    argument.
+    argument. A returned message is forwarded through the normal message
+    stream; other return values are ignored.
 
     Args:
         event: the hook the method runs on.

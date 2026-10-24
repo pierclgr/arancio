@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
+from arancio.core.parsers.tool_result.plugin import PluginToolResultParser
 from arancio.core.tools.base import BaseTool
 
 if TYPE_CHECKING:
@@ -16,8 +17,8 @@ class PluginToolSpec:
     """Metadata a @tool-decorated method carries for the loader to read.
 
     Attributes:
-        name: the tool's exposed name (``BaseTool.name``); defaults to the
-            method's own name.
+        name: the tool portion of the exposed name; defaults to the method's
+            own name. Registration prefixes it with the plugin's name and a hyphen.
         description: the tool's natural-language description, used verbatim
             — unlike a harness ``description.md``, no dynamic-markdown
             (``<field>``/``<include>``/``<script>``) expansion is applied.
@@ -50,7 +51,8 @@ def tool(
             ``PLUGIN:<PluginClassName>`` category dedicated to the owning
             plugin, shared by every ``CUSTOM`` tool it defines, defaulting to
             :attr:`~arancio.core.permissions.types.PermissionLevel.ASK`.
-        name: the tool's exposed name; defaults to the method's own name.
+        name: the tool portion of the exposed name; defaults to the method's
+            own name. The final name is ``<plugin_name>-<name>``.
 
     Returns:
         A decorator storing a :class:`PluginToolSpec` on the wrapped method.
@@ -99,6 +101,10 @@ class PluginTool(BaseTool):
     :func:`build_plugin_tool_class`, with the owning plugin instance, the
     underlying function and the spec bound as class attributes, so it stays
     constructible as ``tool_cls(hook_manager=...)`` like any built-in tool.
+    Its exposed name is ``<plugin_name>-<tool_name>``, using the manifest's
+    name (defaulting to the folder name) and the method name or decorator override.
+    Dictionary results keep their raw content and are displayed as JSON by
+    :class:`~arancio.core.parsers.tool_result.plugin.PluginToolResultParser`.
 
     Attributes:
         _plugin: the plugin instance the underlying method is bound to.
@@ -107,6 +113,7 @@ class PluginTool(BaseTool):
         _spec: the tool's metadata from the ``@tool`` decorator.
     """
 
+    _result_parser = PluginToolResultParser
     _plugin: ClassVar["Plugin"]
     _method: ClassVar[Callable]
     _spec: ClassVar[PluginToolSpec]
@@ -142,10 +149,10 @@ def build_plugin_tool_class(
         spec: the tool's metadata from the @tool decorator.
 
     Returns:
-        A fresh :class:`PluginTool` subclass, named after ``spec.name``.
+        A fresh :class:`PluginTool` subclass named ``<plugin.name>-<spec.name>``.
     """
     return type(
-        spec.name,
+        f"{plugin.name}-{spec.name}",
         (PluginTool,),
         {
             "_plugin": plugin,

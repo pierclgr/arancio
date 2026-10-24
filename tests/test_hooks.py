@@ -1,10 +1,10 @@
 """Tests for the hook enum and the synchronous registration/dispatch primitive.
 
 These tests exercise ``HookManager`` in isolation, independent of the call sites that
-dispatch it in ``Agent``, ``BaseTool`` and ``PermissionManager`` (see the dispatch tests
-in ``test_agents.py``, ``test_tools.py`` and ``test_permissions.py``): registration
-order, per-hook isolation, per-manager isolation, exception propagation and the snapshot
-semantics of ``run``.
+dispatch it in ``Agent``, ``BaseTool``, ``PermissionManager`` and the app (see the
+dispatch tests in ``test_agents.py``, ``test_tools.py``, ``test_permissions.py`` and
+``test_plugins.py``): registration order, per-hook isolation, per-manager isolation,
+exception propagation and the snapshot semantics of ``run``.
 """
 
 from typing import Any
@@ -18,6 +18,8 @@ from arancio.core.hooks.types import Hook
 def test_the_enum_contains_exactly_the_agreed_names() -> None:
     """No hook is missing, renamed or extra relative to the agreed set."""
     assert {member.value for member in Hook} == {
+        "startup",
+        "shutdown",
         "agent_start",
         "agent_end",
         "turn_start",

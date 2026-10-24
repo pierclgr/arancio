@@ -21,7 +21,8 @@ class HookManager:
     exception raised by a handler propagates immediately, so any handlers
     after it do not run.
 
-    Dispatched from :meth:`~arancio.core.agents.Agent.__call__`,
+    Dispatched from :class:`~arancio.ui.app.App` for application lifecycle hooks,
+    :meth:`~arancio.core.agents.Agent.__call__`,
     :meth:`~arancio.core.tools.base.BaseTool.call` and
     :meth:`~arancio.core.permissions.manager.PermissionManager.validate`; see
     AGENTS.md's Hooks section for the full call-site and keyword-argument

@@ -51,7 +51,7 @@ in `storage/constants.py`):
   append-only chat session per file. The readable creation-CWD directory has a hash suffix
   to avoid collisions; session IDs are UUID4 hex strings. There is no persisted registry:
   `SessionRegistry` is rebuilt by scanning these files at launch.
-- `~/.arancio/plugins/<plugin_name>/{manifest.yml,module.py}` — one plugin per folder,
+- `~/.arancio/plugins/<plugin_name>/{manifest.yml,plugin.py}` — one plugin per folder,
   scanned at launch by `PluginManager` (see **Plugins** below). Like the harness, the
   user places these here by hand: nothing creates the directory, and a missing one just
   means no plugins. A folder without a `manifest.yml` is not a plugin.
@@ -227,7 +227,7 @@ authorized is **not** recorded — the session keeps only what a resumed run nee
 `ToolResultMessage`/`ToolErrorMessage` already say whether the tool ran.
 
 **Hooks** (`core/hooks/`) — `Hook` (`core/hooks/types.py`) is a string-valued enum naming
-every dispatch point: `agent_start`/`agent_end`, `turn_start`/`turn_end`,
+every dispatch point: `startup`/`shutdown`, `agent_start`/`agent_end`, `turn_start`/`turn_end`,
 `system_prompt_build`, `before_model_request`/`after_model_response`,
 `message_received`, `before_tool_call`/`after_tool_call`,
 `before_permission_check`/`after_permission_check`, and a single `error`. `HookManager`
@@ -269,7 +269,8 @@ it for any of them, so requiring it catches a caller that forgot to thread the s
 instance through, rather than silently falling back to a private no-op manager.
 `ui/__main__.py:main` builds **one** `HookManager()` alongside `controller` and passes the
 same instance into `ToolManager`, `PermissionManager`, `Agent` and `App` (which forwards it
-to the `ActionExecutor` it builds); `ToolManager.create_tools` re-threads it into every tool
+to the `ActionExecutor` it builds and keeps it for application lifecycle hooks);
+`ToolManager.create_tools` re-threads it into every tool
 it builds, so one handler registered anywhere in that graph sees every dispatch from every
 component — including the `!`/`!!` shell path and `@mention` reads, which run through
 `ActionExecutor`'s own `ReadFileTool`/`ShellCommandTool` instances (built once in its
@@ -286,6 +287,14 @@ invisible to those hooks too — only the `before_tool_call`/`after_tool_call`/`
 wrapped around the whole `FetchWebTool.call` see it.
 
 Dispatch sites, by hook:
+- `App.on_mount`: `startup` (no event keys), once the app's log is mounted and
+  before any user prompt. The shared context already contains the core objects.
+  Returned messages join the settings and plugin-load startup messages in the UI;
+  they are not added to agent history or saved to a session.
+- `App.on_unmount`: `shutdown` (no event keys), once during final application
+  teardown before exit. It runs for `/exit`, `/quit`, Ctrl+C and direct app exit.
+  This hook is for cleanup; the widgets have been unmounted, so returned messages
+  are not displayed or saved. Application hooks do not create a session log.
 - `Agent.__call__`: `agent_start` (`message`) — first statement, before the message is
   even recorded to history, and before the turn loop's own error handling exists: a
   handler exception here is not caught, retried or turned into an `ErrorMessage`, unlike
@@ -342,7 +351,7 @@ tool failures filters on `context["source"] == "tool"`. The names in parentheses
 list above are the event keys each dispatch writes into `context`.
 
 **Plugins** (`core/plugins/`) — a plugin is a folder under `~/.arancio/plugins/` holding a
-`manifest.yml` and a `module.py`, plus whatever else its own code needs. It lives **in
+`manifest.yml` and a `plugin.py`, plus whatever else its own code needs. It lives **in
 core**, and `core` imports nothing outside `core` — `grep -rn "from arancio\." src/arancio/core | grep -v arancio.core`
 should stay empty. One thing follows from that and is load-bearing: the plugins
 directory is a module constant rather than a `StorageManager` call (below). Only
@@ -359,11 +368,11 @@ valid and **no manifest field can ever produce an error**. `PluginManifestValida
 missing field is silently defaulted, an invalid one falls back with a `WarningMessage`, an
 unknown key is dropped with one — differing only in taking the file's path as an argument,
 since the message has to read `plugins/<folder>/manifest.yml:` rather than `settings.yml:`.
-The **folder name is the plugin's identity** (it names the import package and every
-message); the manifest's `name` is only a display name defaulting to it, so the two cannot
-desync.
+The **folder name is the plugin's identity** for imports and paths in load-time messages.
+The manifest's `name` supplies the display name and the prefix of its tool names,
+defaulting to the folder name. Changing it also changes the plugin's tool identifiers.
 
-`module.py` defines **exactly one** plugin class; zero or several is an error. Every
+`plugin.py` defines **exactly one** plugin class; zero or several is an error. Every
 plugin extends `Plugin` (`core/plugins/base.py`), which supplies `manifest` and
 `directory` so a plugin reaches the extra files it ships without the loader knowing they
 exist. A plugin participates two independent ways: it binds instance methods to hooks
@@ -378,6 +387,10 @@ the code while the code cannot — and a plugin declaring **neither hooks nor to
 reported and skipped since it could never run.
 
 `@tool(...)` (`core/plugins/tool.py`) marks a `Plugin` instance method as a real tool:
+its exposed name is `<plugin_name>-<tool_name>`, where `plugin_name` is the manifest's
+name (defaulting to the folder name) and `tool_name` is the method name or the decorator's
+`name=` override. The generated tool class carries this full name, so permission checks,
+hook events, the agent catalog and provider payloads all use the same identifier.
 `description`/`input_schema` are given directly as decorator keyword arguments — a plugin
 cannot ship harness files, so `PluginTool` overrides `BaseTool._load_prompt` (which a
 built-in tool uses to read `~/.arancio/harness/tools/<name>/`) to return them instead,
@@ -402,12 +415,17 @@ first argument. Binding it this way keeps `PluginTool` constructible as
 `tool_cls(hook_manager=...)` like any built-in tool, so `ToolManager.create_tools` needs
 no plugin-specific branch.
 
+`PluginTool` uses `PluginToolResultParser` (`core/parsers/tool_result/plugin.py`): a
+JSON-compatible dictionary stays in the result's `content`, while `display_text` is
+JSON with non-ASCII characters kept readable. Non-dictionary results and exception
+messages use the base parser's unchanged pass-through behavior.
+
 `PluginLoader.load(directory)` (`core/plugins/loader.py`) returns
 `(Plugin | None, list[Message])` and **never raises**: a manifest that cannot be read,
-is not YAML or is not a mapping; a missing `module.py` or one that raises on import; a
+is not YAML or is not a mapping; a missing `plugin.py` or one that raises on import; a
 module with no plugin class or several; a plugin declaring neither hooks nor tools — each
-is one `ErrorMessage` that skips only that folder. `module.py` is imported as
-`arancio_plugins.<folder>.module`, under a synthetic parent package whose `__path__` is
+is one `ErrorMessage` that skips only that folder. `plugin.py` is imported as
+`arancio_plugins.<folder>.plugin`, under a synthetic parent package whose `__path__` is
 the plugin folder, so `from .helpers import X` works inside it and two plugins each
 shipping a `helpers.py` never collide — `sys.path` is left alone. Class discovery only
 accepts a concrete `Plugin` subclass whose `__module__` is that module, so the base
@@ -428,7 +446,10 @@ plugins. **That makes it a fourth root-unaware absolute path**: a test must repo
 autouse `_isolate_arancio_home` does this, so no test can forget.
 
 Each `@hook` method is registered once per hook as a `functools.partial` binding the
-plugin, the method and the hook to `PluginManager._run_hook`. The wrapper catches the
+plugin, the method and the hook to `PluginManager._run_hook`. The wrapper forwards
+the method's return value to `HookManager`: a returned `Message` enters the normal
+message stream, and other values are ignored. UI notices should set `in_history=False`
+so a restored session also keeps them out of model context. The wrapper catches the
 method's exceptions, disables **that method** across all its hooks for the rest of the
 process, and returns one `ErrorMessage`. The plugin's other hook methods, its tools and
 later plugins still run; ordinary handler exceptions retain the hook manager's
@@ -816,7 +837,7 @@ Only `pytest` is available — no `pytest-mock`, `pytest-asyncio` or coverage pl
   how it drifted far enough from the source to shape it.
 - **Plugins are written to disk, not faked.** `tests/test_plugins.py` builds real plugin
   folders under `tmp_path` and loads them through the real `PluginLoader`. A loaded
-  plugin's module stays in `sys.modules` under `arancio_plugins.<folder>.module` for the
+  plugin's module stays in `sys.modules` under `arancio_plugins.<folder>.plugin` for the
   rest of the session, so each test uses a **distinct folder name** — reusing one would
   hand the second test the first one's cached submodules.
 - **Never let a test reach the real home directory.** See the table under *Runtime

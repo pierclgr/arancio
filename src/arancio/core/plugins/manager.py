@@ -158,7 +158,7 @@ class PluginManager:
 
     def _run_hook(
         self, plugin: Plugin, func: Callable, hook: Hook, context: dict[str, Any]
-    ) -> ErrorMessage | None:
+    ) -> Message | None:
         """Run one hook method for one dispatch, disabling it if it raises.
 
         ``plugin``, ``func`` and ``hook`` are bound through
@@ -173,12 +173,12 @@ class PluginManager:
             context: the hook manager's shared context dict.
 
         Returns:
-            One error when the method fails, otherwise None.
+            The method's return value, or one error when it fails.
         """
         if func in self._disabled:
             return
         try:
-            func(plugin, context)
+            return func(plugin, context)
         except Exception as exc:
             self._disabled.add(func)
             return ErrorMessage(

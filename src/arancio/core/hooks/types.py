@@ -1,12 +1,13 @@
-"""Names of the points the agent, tools and permission manager can dispatch against."""
+"""Names of application, agent, tool and permission lifecycle hooks."""
 
 from enum import Enum
 
 
 class Hook(Enum):
-    """A named point in the agent's execution a handler can register against.
+    """A named point in application or agent execution for registered handlers.
 
-    Dispatched from :meth:`~arancio.core.agents.Agent.__call__` (most
+    Dispatched from :class:`~arancio.ui.app.App` (``STARTUP``/``SHUTDOWN``),
+    :meth:`~arancio.core.agents.Agent.__call__` (most
     members, plus ``ERROR`` with ``source="model"``/``"agent"``),
     :meth:`~arancio.core.tools.base.BaseTool.call`
     (the ``TOOL_CALL`` members, plus ``ERROR`` with ``source="tool"``) and
@@ -15,6 +16,8 @@ class Hook(Enum):
     full call-site and keyword-argument contract.
 
     Attributes:
+        STARTUP: the application has mounted and is ready for input.
+        SHUTDOWN: the application is finishing teardown before exiting.
         AGENT_START: the agent loop begins.
         AGENT_END: the agent loop ends normally.
         TURN_START: a turn begins.
@@ -34,6 +37,8 @@ class Hook(Enum):
             Hooks section for the rest of each source's kwargs.
     """
 
+    STARTUP = "startup"
+    SHUTDOWN = "shutdown"
     AGENT_START = "agent_start"
     AGENT_END = "agent_end"
     TURN_START = "turn_start"

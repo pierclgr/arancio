@@ -1,5 +1,7 @@
 """Tests for plugin discovery, loading, hook attachment and failure isolation."""
 
+import asyncio
+import json
 import sys
 import textwrap
 from pathlib import Path
@@ -7,8 +9,10 @@ from typing import Any
 
 import pytest
 from fakes import RecordingApp, ScriptedClient, ScriptedController
+from textual.widgets import Input, Markdown
 
 from arancio.core.agents import Agent
+from arancio.core.builders.payload.litellm import LiteLLMPayloadBuilder
 from arancio.core.hooks.manager import HookManager
 from arancio.core.hooks.types import Hook
 from arancio.core.messages import (
@@ -20,7 +24,7 @@ from arancio.core.messages import (
     WarningMessage,
 )
 from arancio.core.permissions.manager import PermissionManager
-from arancio.core.permissions.types import PermissionCategory
+from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 from arancio.core.plugins.manager import PluginManager
 from arancio.core.plugins.manifest import PluginManifestValidator
 from arancio.core.tools.manager import ToolManager
@@ -29,6 +33,7 @@ from arancio.prompt.actions.types import PromptAction, ShellCommandAction
 from arancio.sessions.manager import SessionManager
 from arancio.settings.manager import SettingsManager
 from arancio.storage.manager import StorageManager
+from arancio.ui.app import App
 
 _LOGGER_MODULE = """
 from arancio.core.hooks.types import Hook
@@ -66,7 +71,7 @@ def _write_plugin(
         root: the plugins root the folder is created under.
         name: the plugin's folder name.
         manifest: the ``manifest.yml`` body, or ``None`` to leave it out.
-        module: the ``module.py`` body, or ``None`` to leave it out.
+        module: the ``plugin.py`` body, or ``None`` to leave it out.
         extra_files: further files to drop in the folder, keyed by filename.
 
     Returns:
@@ -77,7 +82,7 @@ def _write_plugin(
     if manifest is not None:
         (directory / "manifest.yml").write_text(manifest)
     if module is not None:
-        (directory / "module.py").write_text(textwrap.dedent(module))
+        (directory / "plugin.py").write_text(textwrap.dedent(module))
     for filename, content in (extra_files or {}).items():
         (directory / filename).write_text(textwrap.dedent(content))
     return directory
@@ -92,7 +97,7 @@ def _loaded_module(name: str) -> Any:
     Returns:
         The module object the loader put in ``sys.modules``.
     """
-    return sys.modules[f"arancio_plugins.{name}.module"]
+    return sys.modules[f"arancio_plugins.{name}.plugin"]
 
 
 @pytest.fixture
@@ -224,18 +229,36 @@ def test_a_missing_plugins_root_reports_nothing(
     assert plugin_manager.plugins == []
 
 
+@pytest.mark.parametrize(
+    "legacy_module", [False, True], ids=["missing", "old-filename"]
+)
 def test_a_missing_plugin_module_is_an_error(
-    plugins_root: Path, plugin_manager: PluginManager
+    plugins_root: Path, plugin_manager: PluginManager, legacy_module: bool
 ) -> None:
-    """A manifest with no ``module.py`` beside it is a broken plugin."""
-    _write_plugin(plugins_root, "no_module", module=None)
+    """A manifest requires ``plugin.py``, even when the old entry file exists."""
+    directory = _write_plugin(plugins_root, "no_plugin_entry", module=None)
+    if legacy_module:
+        (directory / "module.py").write_text(_LOGGER_MODULE)
 
     messages = plugin_manager.load()
 
     assert plugin_manager.plugins == []
     assert len(messages) == 1
     assert isinstance(messages[0], ErrorMessage)
-    assert "module.py not found" in messages[0].content
+    assert "plugin.py not found" in messages[0].content
+
+
+def test_plugin_py_is_loaded_under_its_matching_module_name(
+    plugins_root: Path, plugin_manager: PluginManager
+) -> None:
+    """The required entry file loads as the plugin package's ``plugin`` module."""
+    directory = _write_plugin(plugins_root, "named_entry")
+
+    assert plugin_manager.load() == []
+
+    plugin = plugin_manager.plugins[0]
+    assert type(plugin).__module__ == "arancio_plugins.named_entry.plugin"
+    assert Path(_loaded_module("named_entry").__file__) == directory / "plugin.py"
 
 
 def test_a_module_that_fails_to_import_is_reported_and_others_still_load(
@@ -605,7 +628,222 @@ def test_a_failing_plugin_does_not_break_an_agent_run(
     assert [type(message) for message in produced] == [ErrorMessage, AssistantMessage]
 
 
-@pytest.mark.parametrize("hook", list(Hook))
+def test_a_plugin_hook_message_is_displayed_and_restored_outside_model_history(
+    plugins_root: Path,
+    plugin_manager: PluginManager,
+    agent: Agent,
+    client: ScriptedClient,
+    hook_manager: HookManager,
+    settings_manager: SettingsManager,
+    session_manager: SessionManager,
+    storage_manager: StorageManager,
+) -> None:
+    """A hook greeting reaches the chat log and session without reaching the model."""
+    _write_plugin(
+        plugins_root,
+        "ui_greeter",
+        module="""
+        from arancio.core.hooks.types import Hook
+        from arancio.core.messages import AssistantMessage
+        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.hook import hook
+
+
+        class Greeter(Plugin):
+            @hook(Hook.AGENT_START)
+            def greet(self, context):
+                return AssistantMessage(content="Hello World", in_history=False)
+        """,
+    )
+    assert plugin_manager.load() == []
+    settings_manager.settings.provider = "openai"
+    settings_manager.settings.model_name = "gpt-4o"
+    app = App(
+        agent=agent,
+        model_id=client.model_id,
+        settings_manager=settings_manager,
+        session_manager=session_manager,
+        hook_manager=hook_manager,
+    )
+
+    async def submit_prompt() -> None:
+        """Submit a prompt and check the greeting in the real Textual chat log."""
+
+        async with app.run_test() as pilot:
+            app.query_one("#prompt", Input).value = "hi"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            rendered = [
+                widget.source for widget in app.query_one("#log").query(Markdown)
+            ]
+            assert rendered == ["Hello World", "done"]
+
+    asyncio.run(submit_prompt())
+
+    assert len(client.histories) == 1
+    assert [message.content for message in client.histories[0]] == ["hi"]
+    assert [message.content for message in agent._message_history] == ["hi", "done"]
+    reopened = SessionManager(
+        storage_manager,
+        session_manager.current.configuration,
+        root=storage_manager.root,
+    )
+    reopened.load(session_manager.current.id)
+    assert [message.content for message in reopened.visible_messages()] == [
+        "hi",
+        "Hello World",
+        "done",
+    ]
+    assert [message.content for message in reopened.model_history()] == ["hi", "done"]
+
+
+@pytest.mark.parametrize("exit_path", ["exit", "quit", "ctrl_c", "direct"])
+def test_application_hooks_run_once_without_a_user_prompt(
+    plugins_root: Path,
+    plugin_manager: PluginManager,
+    agent: Agent,
+    client: ScriptedClient,
+    hook_manager: HookManager,
+    settings_manager: SettingsManager,
+    session_manager: SessionManager,
+    exit_path: str,
+) -> None:
+    """Application hooks share context, run once and leave an empty chat unsaved."""
+    name = f"lifecycle_{exit_path}"
+    _write_plugin(
+        plugins_root,
+        name,
+        module="""
+        from arancio.core.hooks.types import Hook
+        from arancio.core.messages import AssistantMessage
+        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.hook import hook
+
+        events = []
+
+
+        class Lifecycle(Plugin):
+            @hook(Hook.STARTUP)
+            def start(self, context):
+                events.append(("startup", context))
+                return AssistantMessage(content="Hello World", in_history=False)
+
+            @hook(Hook.SHUTDOWN)
+            def stop(self, context):
+                events.append(("shutdown", context))
+        """,
+    )
+    assert plugin_manager.load() == []
+    module = _loaded_module(name)
+    app = App(
+        agent=agent,
+        model_id=client.model_id,
+        settings_manager=settings_manager,
+        session_manager=session_manager,
+        hook_manager=hook_manager,
+    )
+
+    async def open_and_exit() -> None:
+        """Check the launch greeting before closing through the selected route."""
+
+        async with app.run_test() as pilot:
+            assert module.events == [("startup", hook_manager.context)]
+            assert module.events[0][1] is hook_manager.context
+            assert hook_manager.context["agent"] is agent
+            assert hook_manager.context["client"] is client
+            assert (
+                hook_manager.context["permission_manager"] is agent._permission_manager
+            )
+            assert hook_manager.context["summary_client"] is client
+            rendered = [
+                widget.source for widget in app.query_one("#log").query(Markdown)
+            ]
+            assert rendered == ["Hello World"]
+            assert not session_manager.current.path.exists()
+            if exit_path in {"exit", "quit"}:
+                app.query_one("#prompt", Input).value = f"/{exit_path}"
+                await pilot.press("enter")
+            elif exit_path == "ctrl_c":
+                await pilot.press("ctrl+c")
+            else:
+                app.exit()
+
+    asyncio.run(open_and_exit())
+
+    assert module.events == [
+        ("startup", hook_manager.context),
+        ("shutdown", hook_manager.context),
+    ]
+    assert module.events[1][1] is hook_manager.context
+    assert client.requests == []
+    assert agent._message_history == []
+    assert not session_manager.current.path.exists()
+
+
+@pytest.mark.parametrize("failing_hook", ["STARTUP", "SHUTDOWN"])
+def test_application_hook_failures_do_not_block_start_or_exit(
+    plugins_root: Path,
+    plugin_manager: PluginManager,
+    agent: Agent,
+    client: ScriptedClient,
+    hook_manager: HookManager,
+    settings_manager: SettingsManager,
+    session_manager: SessionManager,
+    failing_hook: str,
+) -> None:
+    """A failing lifecycle method does not stop the application from closing."""
+    name = f"broken_{failing_hook.lower()}"
+    _write_plugin(
+        plugins_root,
+        name,
+        module=f"""
+        from arancio.core.hooks.types import Hook
+        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.hook import hook
+
+        events = []
+
+
+        class BrokenLifecycle(Plugin):
+            @hook(Hook.STARTUP)
+            def start(self, context):
+                events.append("startup")
+                if "{failing_hook}" == "STARTUP":
+                    raise RuntimeError("startup boom")
+
+            @hook(Hook.SHUTDOWN)
+            def stop(self, context):
+                events.append("shutdown")
+                if "{failing_hook}" == "SHUTDOWN":
+                    raise RuntimeError("shutdown boom")
+        """,
+    )
+    assert plugin_manager.load() == []
+    app = App(
+        agent=agent,
+        model_id=client.model_id,
+        settings_manager=settings_manager,
+        session_manager=session_manager,
+        hook_manager=hook_manager,
+    )
+
+    async def open_and_exit() -> None:
+        """A startup error is visible while shutdown errors still permit exit."""
+
+        async with app.run_test():
+            assert len(app.query("#log .error")) == (failing_hook == "STARTUP")
+            app.exit()
+
+    asyncio.run(open_and_exit())
+
+    assert _loaded_module(name).events == ["startup", "shutdown"]
+    assert not session_manager.current.path.exists()
+
+
+@pytest.mark.parametrize(
+    "hook", [hook for hook in Hook if hook not in {Hook.STARTUP, Hook.SHUTDOWN}]
+)
 def test_plugin_failures_reach_agent_without_retry(
     plugins_root: Path,
     plugin_manager: PluginManager,
@@ -794,6 +1032,139 @@ class Broken(Plugin):
     assert len(client.requests) == 1
 
 
+@pytest.mark.parametrize(
+    ("folder", "manifest", "tool_name", "expected_name"),
+    [
+        ("default_tool_name", "", None, "default_tool_name-get_value"),
+        (
+            "manifest_tool_name",
+            "name: NamedPlugin\n",
+            None,
+            "NamedPlugin-get_value",
+        ),
+        (
+            "overridden_tool_name",
+            "name: NamedPlugin\n",
+            "fetch",
+            "NamedPlugin-fetch",
+        ),
+    ],
+    ids=["folder-default", "manifest-name", "tool-override"],
+)
+def test_plugin_tool_names_reach_permissions_hooks_and_provider_payloads(
+    plugins_root: Path,
+    plugin_manager: PluginManager,
+    agent: Agent,
+    client: ScriptedClient,
+    hook_manager: HookManager,
+    folder: str,
+    manifest: str,
+    tool_name: str | None,
+    expected_name: str,
+) -> None:
+    """The complete tool name is used throughout the model and execution pipeline."""
+    _write_plugin(
+        plugins_root,
+        folder,
+        manifest=manifest,
+        module=f"""
+        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.tool import tool
+
+
+        class NamedTools(Plugin):
+            @tool(
+                name={tool_name!r},
+                description="Return the plugin name.",
+                input_schema={{"properties": {{}}}},
+            )
+            def get_value(self) -> str:
+                return self.name
+        """,
+    )
+    assert plugin_manager.load() == []
+    agent.set_permission_level(PermissionCategory.PLUGIN, PermissionLevel.AUTO)
+    called_names = []
+    hook_manager.register(
+        Hook.BEFORE_TOOL_CALL, lambda context: called_names.append(context["name"])
+    )
+    call = ToolCallMessage(
+        content="get value", id="c1", name=expected_name, arguments={}
+    )
+    client.turns = [[call], [AssistantMessage(content="done")]]
+
+    produced = list(agent(UserMessage(content="get the plugin name")))
+
+    assert [type(message) for message in produced] == [
+        ToolCallMessage,
+        ToolResultMessage,
+        AssistantMessage,
+    ]
+    assert produced[1].id == call.id
+    assert produced[1].content == plugin_manager.plugins[0].name
+    assert called_names == [expected_name]
+    assert PermissionCategory.for_tool(expected_name) is PermissionCategory.PLUGIN
+    payload = LiteLLMPayloadBuilder.build(client.requests[1])
+    tool_names = {tool["name"] for tool in payload["tools"]}
+    assert expected_name in tool_names
+    assert "get_value" not in tool_names
+    assert [
+        item["name"] for item in payload["input"] if item.get("type") == "function_call"
+    ] == [expected_name]
+
+
+def test_two_plugins_can_expose_the_same_method_name(
+    plugins_root: Path,
+    plugin_manager: PluginManager,
+    agent: Agent,
+    client: ScriptedClient,
+) -> None:
+    """Different plugin prefixes keep both tools callable in the agent catalog."""
+    for plugin_name in ("Alpha", "Beta"):
+        _write_plugin(
+            plugins_root,
+            f"shared_method_{plugin_name.lower()}",
+            manifest=f"name: {plugin_name}\n",
+            module="""
+            from arancio.core.plugins.base import Plugin
+            from arancio.core.plugins.tool import tool
+
+
+            class SharedTools(Plugin):
+                @tool(
+                    description="Return the plugin name.",
+                    input_schema={"properties": {}},
+                )
+                def echo(self) -> str:
+                    return self.name
+            """,
+        )
+    assert plugin_manager.load() == []
+    agent.set_permission_level(PermissionCategory.PLUGIN, PermissionLevel.AUTO)
+    client.turns = [
+        [
+            ToolCallMessage(content="first", id="c1", name="Alpha-echo", arguments={}),
+            ToolCallMessage(content="second", id="c2", name="Beta-echo", arguments={}),
+        ],
+        [AssistantMessage(content="done")],
+    ]
+
+    produced = list(agent(UserMessage(content="call both plugins")))
+
+    results = [
+        message for message in produced if isinstance(message, ToolResultMessage)
+    ]
+    assert [type(result) for result in results] == [
+        ToolResultMessage,
+        ToolResultMessage,
+    ]
+    assert [(result.id, result.content) for result in results] == [
+        ("c1", "Alpha"),
+        ("c2", "Beta"),
+    ]
+    assert produced[-1] == AssistantMessage(content="done")
+
+
 def test_a_tool_with_no_category_lands_in_the_plugin_category(
     plugins_root: Path, plugin_manager: PluginManager
 ) -> None:
@@ -815,7 +1186,8 @@ def test_a_tool_with_no_category_lands_in_the_plugin_category(
 
     assert plugin_manager.load() == []
 
-    assert "noop" in {tool_cls.__name__ for tool_cls in PermissionCategory.PLUGIN.tools}
+    names = {tool_cls.__name__ for tool_cls in PermissionCategory.PLUGIN.tools}
+    assert "defaulter-noop" in names
 
 
 def test_a_tool_can_join_an_existing_built_in_category(
@@ -845,7 +1217,7 @@ def test_a_tool_can_join_an_existing_built_in_category(
 
     names = {tool_cls.__name__ for tool_cls in PermissionCategory.READ.tools}
     assert "ReadFileTool" in names
-    assert "read_extra" in names
+    assert "extra_reader-read_extra" in names
 
 
 def test_custom_tools_on_one_plugin_share_one_dynamic_category(
@@ -883,7 +1255,10 @@ def test_custom_tools_on_one_plugin_share_one_dynamic_category(
 
     category = PermissionCategory.get("PLUGIN:TestPlugin")
     assert category is not None
-    assert {tool_cls.__name__ for tool_cls in category.tools} == {"first", "second"}
+    assert {tool_cls.__name__ for tool_cls in category.tools} == {
+        "custom_plugin-first",
+        "custom_plugin-second",
+    }
 
 
 def test_an_unknown_category_is_an_error_and_skips_only_that_tool(
@@ -921,13 +1296,14 @@ def test_an_unknown_category_is_an_error_and_skips_only_that_tool(
     assert "unknown permission category" in messages[0].content
     loaded_names = [type(plugin).__name__ for plugin in plugin_manager.plugins]
     assert loaded_names == ["HalfBroken"]
-    assert "fine" in {tool_cls.__name__ for tool_cls in PermissionCategory.PLUGIN.tools}
+    names = {tool_cls.__name__ for tool_cls in PermissionCategory.PLUGIN.tools}
+    assert "half_broken-fine" in names
     all_tool_names = {
         tool_cls.__name__
         for category in PermissionCategory
         for tool_cls in category.tools
     }
-    assert "broken" not in all_tool_names
+    assert "half_broken-broken" not in all_tool_names
 
 
 def test_a_plugin_tool_is_callable_end_to_end(
@@ -968,8 +1344,86 @@ def test_a_plugin_tool_is_callable_end_to_end(
     )
     tools = {tool.name: tool for tool in permission_manager.allowed_tools}
 
-    result, hook_messages = tools["double"].call(call_id="c1", x=21)
+    result, hook_messages = tools["doubler-double"].call(call_id="c1", x=21)
 
     assert hook_messages == []
     assert isinstance(result, ToolResultMessage)
     assert result.content == 42
+
+
+@pytest.mark.parametrize(
+    ("name", "output"),
+    [
+        ("empty_result", {}),
+        (
+            "nested_result",
+            {
+                "ok": True,
+                "items": [{"name": "caffè", "count": 2}],
+                "note": None,
+            },
+        ),
+    ],
+    ids=["empty", "nested"],
+)
+def test_a_plugin_dictionary_result_reaches_hooks_and_the_next_turn(
+    plugins_root: Path,
+    plugin_manager: PluginManager,
+    agent: Agent,
+    client: ScriptedClient,
+    name: str,
+    output: dict,
+) -> None:
+    """Dictionary results stay structured and do not stop the agent run."""
+    _write_plugin(
+        plugins_root,
+        name,
+        module="""
+        from arancio.core.hooks.types import Hook
+        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.hook import hook
+        from arancio.core.plugins.tool import tool
+
+        seen = []
+
+
+        class Reporter(Plugin):
+            @tool(
+                description="Returns the supplied data.",
+                input_schema={
+                    "properties": {"payload": {"type": "object"}},
+                    "required": ["payload"],
+                },
+            )
+            def report(self, payload: dict) -> dict:
+                return payload
+
+            @hook(Hook.AFTER_TOOL_CALL)
+            def record_result(self, context) -> None:
+                seen.append(context["result"])
+        """,
+    )
+    assert plugin_manager.load() == []
+    agent.set_permission_level(PermissionCategory.PLUGIN, PermissionLevel.AUTO)
+    call = ToolCallMessage(
+        content="report", id="c1", name=f"{name}-report", arguments={"payload": output}
+    )
+    reply = AssistantMessage(content="done")
+    client.turns = [[call], [reply]]
+
+    produced = list(agent(UserMessage(content="report the data")))
+
+    assert [type(message) for message in produced] == [
+        ToolCallMessage,
+        ToolResultMessage,
+        AssistantMessage,
+    ]
+    result = produced[1]
+    assert result.id == call.id
+    assert result.content is output
+    assert json.loads(result.display_text) == output
+    assert result.in_history
+    assert _loaded_module(name).seen == [result]
+    assert len(client.histories) == 2
+    assert client.histories[1][-1] is result
+    assert produced[-1] is reply
