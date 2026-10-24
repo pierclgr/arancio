@@ -1,4 +1,4 @@
-"""Decorator and machinery turning a Plugin method into a real tool."""
+"""Decorator and machinery turning a BasePlugin method into a real tool."""
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, ClassVar
@@ -7,7 +7,7 @@ from arancio.core.parsers.tool_result.plugin import PluginToolResultParser
 from arancio.core.tools.base import BaseTool
 
 if TYPE_CHECKING:
-    from arancio.core.plugins.base import Plugin
+    from arancio.core.plugins.base import BasePlugin
 
 CUSTOM = "CUSTOM"
 
@@ -41,7 +41,7 @@ def tool(
     category: str = "PLUGIN",
     name: str | None = None,
 ) -> Callable[[Callable], Callable]:
-    """Mark a Plugin instance method as a tool the model can call.
+    """Mark a BasePlugin instance method as a tool the model can call.
 
     Args:
         description: the tool's natural-language description.
@@ -71,7 +71,7 @@ def tool(
 
 
 def find_tool_specs(
-    plugin_cls: type["Plugin"],
+    plugin_cls: type["BasePlugin"],
 ) -> list[tuple[Callable, PluginToolSpec]]:
     """Find every @tool-decorated method a plugin class defines directly.
 
@@ -114,7 +114,7 @@ class PluginTool(BaseTool):
     """
 
     _result_parser = PluginToolResultParser
-    _plugin: ClassVar["Plugin"]
+    _plugin: ClassVar["BasePlugin"]
     _method: ClassVar[Callable]
     _spec: ClassVar[PluginToolSpec]
 
@@ -139,7 +139,7 @@ class PluginTool(BaseTool):
 
 
 def build_plugin_tool_class(
-    plugin: "Plugin", method: Callable, spec: PluginToolSpec
+    plugin: "BasePlugin", method: Callable, spec: PluginToolSpec
 ) -> type[PluginTool]:
     """Synthesize a PluginTool subclass for one @tool-decorated method.
 

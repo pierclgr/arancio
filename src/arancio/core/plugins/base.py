@@ -6,7 +6,7 @@ from pathlib import Path
 from arancio.core.plugins.manifest import PluginManifest
 
 
-class Plugin(ABC):
+class BasePlugin(ABC):
     """Base class every plugin extends.
 
     A plugin runs on hooks via ``@hook``-decorated methods (see

@@ -9,7 +9,7 @@ from arancio.core.hooks.manager import HookManager
 from arancio.core.hooks.types import Hook
 from arancio.core.messages import ErrorMessage, Message
 from arancio.core.permissions.types import PermissionCategory
-from arancio.core.plugins.base import Plugin
+from arancio.core.plugins.base import BasePlugin
 from arancio.core.plugins.hook import find_hook_methods
 from arancio.core.plugins.loader import PluginLoader
 from arancio.core.plugins.tool import CUSTOM, build_plugin_tool_class, find_tool_specs
@@ -44,12 +44,12 @@ class PluginManager:
 
         Args:
             hook_manager: the shared hook manager
-                :class:`~arancio.core.plugins.base.Plugin` instances are
+                :class:`~arancio.core.plugins.base.BasePlugin` instances are
                 registered on.
         """
         self._root: Path = PLUGINS_PATH
         self._hook_manager: HookManager = hook_manager
-        self._plugins: list[Plugin] = []
+        self._plugins: list[BasePlugin] = []
         self._disabled: set[Callable] = set()
 
     def __repr__(self) -> str:
@@ -61,7 +61,7 @@ class PluginManager:
         return f"{type(self).__name__}({self._root})"
 
     @property
-    def plugins(self) -> list[Plugin]:
+    def plugins(self) -> list[BasePlugin]:
         """Return the plugins that loaded and are enabled.
 
         Returns:
@@ -118,7 +118,7 @@ class PluginManager:
             key=lambda directory: directory.name,
         )
 
-    def _register(self, plugin: Plugin) -> list[Message]:
+    def _register(self, plugin: BasePlugin) -> list[Message]:
         """Register a loaded plugin's hooks and tools.
 
         Args:
@@ -157,7 +157,7 @@ class PluginManager:
         return messages
 
     def _run_hook(
-        self, plugin: Plugin, func: Callable, hook: Hook, context: dict[str, Any]
+        self, plugin: BasePlugin, func: Callable, hook: Hook, context: dict[str, Any]
     ) -> Message | None:
         """Run one hook method for one dispatch, disabling it if it raises.
 

@@ -11,7 +11,7 @@ the implemented behavior and the later changes, verified with 445 tests.
   fire them.
 - **Plugins**: a folder in `~/.arancio/plugins/<name>/` with `manifest.yml`
   and `plugin.py`. `PluginLoader`, `PluginManager` and
-  `PluginManifestValidator` find, load and register them. One `Plugin` base
+  `PluginManifestValidator` find, load and register them. One `BasePlugin` base
   class.
 - **`@hook`**: binds a plugin method to a hook. Stack it for many hooks. If a
   method raises, only that method is disabled.

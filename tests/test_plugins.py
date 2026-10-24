@@ -37,13 +37,13 @@ from arancio.ui.app import App
 
 _LOGGER_MODULE = """
 from arancio.core.hooks.types import Hook
-from arancio.core.plugins.base import Plugin
+from arancio.core.plugins.base import BasePlugin
 from arancio.core.plugins.hook import hook
 
 calls = []
 
 
-class Logger(Plugin):
+class Logger(BasePlugin):
     @hook(Hook.AGENT_START)
     def on_agent_start(self, context) -> None:
         calls.append(context["message"])
@@ -51,7 +51,7 @@ class Logger(Plugin):
 
 _SECOND_CLASS = """
 
-class Second(Plugin):
+class Second(BasePlugin):
     @hook(Hook.AGENT_END)
     def on_agent_end(self, context) -> None:
         pass
@@ -288,7 +288,7 @@ def test_a_module_with_no_plugin_class_is_an_error(
     _write_plugin(
         plugins_root,
         "empty_module",
-        module="from arancio.core.plugins.base import Plugin\n",
+        module="from arancio.core.plugins.base import BasePlugin\n",
     )
 
     messages = plugin_manager.load()
@@ -322,10 +322,10 @@ def test_a_plugin_with_no_hooks_and_no_tools_is_an_error(
         plugins_root,
         "no_hooks",
         module="""
-        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.base import BasePlugin
 
 
-        class Idle(Plugin):
+        class Idle(BasePlugin):
             def not_a_hook(self, context) -> None:
                 pass
         """,
@@ -347,11 +347,11 @@ def test_a_tools_only_plugin_with_no_hooks_loads_successfully(
         plugins_root,
         "tools_only",
         module="""
-        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.base import BasePlugin
         from arancio.core.plugins.tool import tool
 
 
-        class Idle(Plugin):
+        class Idle(BasePlugin):
             @tool(description="Does nothing.", input_schema={"properties": {}})
             def noop(self) -> None:
                 pass
@@ -385,13 +385,13 @@ def test_a_plugin_can_import_a_sibling_module_from_its_own_folder(
         "with_helpers",
         module="""
         from arancio.core.hooks.types import Hook
-        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.base import BasePlugin
         from arancio.core.plugins.hook import hook
 
         from .helpers import GREETING
 
 
-        class Greeter(Plugin):
+        class Greeter(BasePlugin):
             @hook(Hook.AGENT_START)
             def greet(self, context) -> None:
                 (self.directory / "out.txt").write_text(GREETING)
@@ -431,13 +431,13 @@ def test_two_hook_methods_each_run_only_on_their_own_hook(
         "two_methods",
         module="""
         from arancio.core.hooks.types import Hook
-        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.base import BasePlugin
         from arancio.core.plugins.hook import hook
 
         seen = []
 
 
-        class Split(Plugin):
+        class Split(BasePlugin):
             @hook(Hook.TURN_START)
             def on_start(self, context) -> None:
                 seen.append(("start", context["turn"]))
@@ -465,13 +465,13 @@ def test_a_method_with_stacked_hooks_runs_on_each_of_them(
         "stacked_hooks",
         module="""
         from arancio.core.hooks.types import Hook
-        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.base import BasePlugin
         from arancio.core.plugins.hook import hook
 
         seen = []
 
 
-        class Both(Plugin):
+        class Both(BasePlugin):
             @hook(Hook.TURN_START)
             @hook(Hook.TURN_END)
             def on_turn(self, context) -> None:
@@ -499,11 +499,11 @@ def test_a_failing_plugin_does_not_stop_the_plugins_behind_it(
         "aaa_raises",
         module="""
         from arancio.core.hooks.types import Hook
-        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.base import BasePlugin
         from arancio.core.plugins.hook import hook
 
 
-        class Broken(Plugin):
+        class Broken(BasePlugin):
             @hook(Hook.AGENT_START)
             def on_agent_start(self, context) -> None:
                 raise RuntimeError("boom")
@@ -529,13 +529,13 @@ def test_a_failing_plugin_is_disabled_and_reported_once(
         "always_raises",
         module="""
         from arancio.core.hooks.types import Hook
-        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.base import BasePlugin
         from arancio.core.plugins.hook import hook
 
         runs = []
 
 
-        class Broken(Plugin):
+        class Broken(BasePlugin):
             @hook(Hook.AGENT_START)
             def explode(self, context) -> None:
                 runs.append(1)
@@ -567,14 +567,14 @@ def test_a_failing_method_stops_on_all_its_hooks_but_siblings_keep_running(
         "fails_then_quiet",
         module="""
         from arancio.core.hooks.types import Hook
-        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.base import BasePlugin
         from arancio.core.plugins.hook import hook
 
         broken_runs = []
         healthy_runs = []
 
 
-        class Mixed(Plugin):
+        class Mixed(BasePlugin):
             @hook(Hook.TURN_START)
             @hook(Hook.TURN_END)
             def broken(self, context) -> None:
@@ -611,11 +611,11 @@ def test_a_failing_plugin_does_not_break_an_agent_run(
         "breaks_turns",
         module="""
         from arancio.core.hooks.types import Hook
-        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.base import BasePlugin
         from arancio.core.plugins.hook import hook
 
 
-        class Broken(Plugin):
+        class Broken(BasePlugin):
             @hook(Hook.TURN_START)
             def on_turn_start(self, context) -> None:
                 raise RuntimeError("boom")
@@ -645,11 +645,11 @@ def test_a_plugin_hook_message_is_displayed_and_restored_outside_model_history(
         module="""
         from arancio.core.hooks.types import Hook
         from arancio.core.messages import AssistantMessage
-        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.base import BasePlugin
         from arancio.core.plugins.hook import hook
 
 
-        class Greeter(Plugin):
+        class Greeter(BasePlugin):
             @hook(Hook.AGENT_START)
             def greet(self, context):
                 return AssistantMessage(content="Hello World", in_history=False)
@@ -717,13 +717,13 @@ def test_application_hooks_run_once_without_a_user_prompt(
         module="""
         from arancio.core.hooks.types import Hook
         from arancio.core.messages import AssistantMessage
-        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.base import BasePlugin
         from arancio.core.plugins.hook import hook
 
         events = []
 
 
-        class Lifecycle(Plugin):
+        class Lifecycle(BasePlugin):
             @hook(Hook.STARTUP)
             def start(self, context):
                 events.append(("startup", context))
@@ -799,13 +799,13 @@ def test_application_hook_failures_do_not_block_start_or_exit(
         name,
         module=f"""
         from arancio.core.hooks.types import Hook
-        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.base import BasePlugin
         from arancio.core.plugins.hook import hook
 
         events = []
 
 
-        class BrokenLifecycle(Plugin):
+        class BrokenLifecycle(BasePlugin):
             @hook(Hook.STARTUP)
             def start(self, context):
                 events.append("startup")
@@ -859,9 +859,9 @@ def test_plugin_failures_reach_agent_without_retry(
         name,
         module=f"""
 from arancio.core.hooks.types import Hook
-from arancio.core.plugins.base import Plugin
+from arancio.core.plugins.base import BasePlugin
 from arancio.core.plugins.hook import hook
-class Broken(Plugin):
+class Broken(BasePlugin):
     @hook(Hook.{hook.name})
     def explode(self, context):
         raise RuntimeError("plugin boom")
@@ -899,10 +899,10 @@ def test_closing_agent_runs_final_hook_without_yielding(
         "close_turn",
         module="""
 from arancio.core.hooks.types import Hook
-from arancio.core.plugins.base import Plugin
+from arancio.core.plugins.base import BasePlugin
 from arancio.core.plugins.hook import hook
 runs = []
-class Broken(Plugin):
+class Broken(BasePlugin):
     @hook(Hook.TURN_END)
     def explode(self, context):
         runs.append(1)
@@ -937,9 +937,9 @@ def test_plugin_errors_are_saved_once_and_restored_outside_model_history(
         f"persist_{action_kind}",
         module=f"""
 from arancio.core.hooks.types import Hook
-from arancio.core.plugins.base import Plugin
+from arancio.core.plugins.base import BasePlugin
 from arancio.core.plugins.hook import hook
-class Broken(Plugin):
+class Broken(BasePlugin):
     @hook(Hook.{hook})
     def explode(self, context):
         raise RuntimeError("persist boom")
@@ -1007,9 +1007,9 @@ def test_final_hook_errors_survive_abnormal_agent_stops(
             f"stop_{stop}_{name}",
             module=f"""
 from arancio.core.hooks.types import Hook
-from arancio.core.plugins.base import Plugin
+from arancio.core.plugins.base import BasePlugin
 from arancio.core.plugins.hook import hook
-class Broken(Plugin):
+class Broken(BasePlugin):
     @hook(Hook.{hook})
     def explode(self, context):
         raise RuntimeError("stop boom")
@@ -1068,11 +1068,11 @@ def test_plugin_tool_names_reach_permissions_hooks_and_provider_payloads(
         folder,
         manifest=manifest,
         module=f"""
-        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.base import BasePlugin
         from arancio.core.plugins.tool import tool
 
 
-        class NamedTools(Plugin):
+        class NamedTools(BasePlugin):
             @tool(
                 name={tool_name!r},
                 description="Return the plugin name.",
@@ -1126,11 +1126,11 @@ def test_two_plugins_can_expose_the_same_method_name(
             f"shared_method_{plugin_name.lower()}",
             manifest=f"name: {plugin_name}\n",
             module="""
-            from arancio.core.plugins.base import Plugin
+            from arancio.core.plugins.base import BasePlugin
             from arancio.core.plugins.tool import tool
 
 
-            class SharedTools(Plugin):
+            class SharedTools(BasePlugin):
                 @tool(
                     description="Return the plugin name.",
                     input_schema={"properties": {}},
@@ -1173,11 +1173,11 @@ def test_a_tool_with_no_category_lands_in_the_plugin_category(
         plugins_root,
         "defaulter",
         module="""
-        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.base import BasePlugin
         from arancio.core.plugins.tool import tool
 
 
-        class Defaulter(Plugin):
+        class Defaulter(BasePlugin):
             @tool(description="Does nothing.", input_schema={"properties": {}})
             def noop(self) -> None:
                 pass
@@ -1198,11 +1198,11 @@ def test_a_tool_can_join_an_existing_built_in_category(
         plugins_root,
         "extra_reader",
         module="""
-        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.base import BasePlugin
         from arancio.core.plugins.tool import tool
 
 
-        class ExtraReader(Plugin):
+        class ExtraReader(BasePlugin):
             @tool(
                 description="Reads something else.",
                 input_schema={"properties": {}},
@@ -1228,11 +1228,11 @@ def test_custom_tools_on_one_plugin_share_one_dynamic_category(
         plugins_root,
         "custom_plugin",
         module="""
-        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.base import BasePlugin
         from arancio.core.plugins.tool import tool
 
 
-        class TestPlugin(Plugin):
+        class TestPlugin(BasePlugin):
             @tool(
                 description="First.",
                 input_schema={"properties": {}},
@@ -1269,11 +1269,11 @@ def test_an_unknown_category_is_an_error_and_skips_only_that_tool(
         plugins_root,
         "half_broken",
         module="""
-        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.base import BasePlugin
         from arancio.core.plugins.tool import tool
 
 
-        class HalfBroken(Plugin):
+        class HalfBroken(BasePlugin):
             @tool(description="Fine.", input_schema={"properties": {}})
             def fine(self) -> None:
                 pass
@@ -1318,11 +1318,11 @@ def test_a_plugin_tool_is_callable_end_to_end(
         plugins_root,
         "doubler",
         module="""
-        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.base import BasePlugin
         from arancio.core.plugins.tool import tool
 
 
-        class Doubler(Plugin):
+        class Doubler(BasePlugin):
             @tool(
                 description="Doubles a number.",
                 input_schema={
@@ -1380,14 +1380,14 @@ def test_a_plugin_dictionary_result_reaches_hooks_and_the_next_turn(
         name,
         module="""
         from arancio.core.hooks.types import Hook
-        from arancio.core.plugins.base import Plugin
+        from arancio.core.plugins.base import BasePlugin
         from arancio.core.plugins.hook import hook
         from arancio.core.plugins.tool import tool
 
         seen = []
 
 
-        class Reporter(Plugin):
+        class Reporter(BasePlugin):
             @tool(
                 description="Returns the supplied data.",
                 input_schema={

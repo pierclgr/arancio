@@ -1,15 +1,15 @@
-"""Decorator binding a Plugin method to one or more hooks."""
+"""Decorator binding a BasePlugin method to one or more hooks."""
 
 from typing import TYPE_CHECKING, Callable
 
 from arancio.core.hooks.types import Hook
 
 if TYPE_CHECKING:
-    from arancio.core.plugins.base import Plugin
+    from arancio.core.plugins.base import BasePlugin
 
 
 def hook(event: Hook) -> Callable[[Callable], Callable]:
-    """Bind a Plugin instance method to one hook.
+    """Bind a BasePlugin instance method to one hook.
 
     Stack the decorator to bind the same method to several hooks. The method
     is called with the hook manager's shared context dict as its only
@@ -31,7 +31,7 @@ def hook(event: Hook) -> Callable[[Callable], Callable]:
 
 
 def find_hook_methods(
-    plugin_cls: type["Plugin"],
+    plugin_cls: type["BasePlugin"],
 ) -> list[tuple[Callable, tuple[Hook, ...]]]:
     """Find every @hook-decorated method a plugin class defines directly.
 

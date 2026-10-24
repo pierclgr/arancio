@@ -13,7 +13,7 @@ from arancio.core.constants.path import (
     PLUGIN_MODULE_FILENAME,
 )
 from arancio.core.messages import ErrorMessage, Message
-from arancio.core.plugins.base import Plugin
+from arancio.core.plugins.base import BasePlugin
 from arancio.core.plugins.constants import PLUGIN_PACKAGE_ROOT
 from arancio.core.plugins.hook import find_hook_methods
 from arancio.core.plugins.manifest import PluginManifest, PluginManifestValidator
@@ -26,13 +26,13 @@ class PluginLoader:
     :meth:`load` never raises: every way a folder can be a broken plugin — unreadable or
     malformed ``manifest.yml``, a ``plugin.py`` that is missing or raises on import, a
     module holding no plugin class or several, a
-    :class:`~arancio.core.plugins.base.Plugin` declaring neither hooks nor tools — comes
-    back as one :class:`~arancio.core.messages.ErrorMessage` with no plugin, so a single
-    bad folder never stops the others from loading.
+    :class:`~arancio.core.plugins.base.BasePlugin` declaring neither hooks nor tools —
+    comes back as one :class:`~arancio.core.messages.ErrorMessage` with no plugin, so a
+    single bad folder never stops the others from loading.
     """
 
     @classmethod
-    def load(cls, directory: Path) -> tuple[Plugin | None, list[Message]]:
+    def load(cls, directory: Path) -> tuple[BasePlugin | None, list[Message]]:
         """Load one plugin folder.
 
         Args:
@@ -189,7 +189,7 @@ class PluginLoader:
     @staticmethod
     def _find_plugin_class(
         module: ModuleType, directory: Path
-    ) -> tuple[type[Plugin] | None, list[Message]]:
+    ) -> tuple[type[BasePlugin] | None, list[Message]]:
         """Find the one plugin class the module defines.
 
         Only classes **defined in this module** count, so the base a plugin
@@ -208,7 +208,7 @@ class PluginLoader:
             obj
             for obj in vars(module).values()
             if isinstance(obj, type)
-            and issubclass(obj, Plugin)
+            and issubclass(obj, BasePlugin)
             and obj.__module__ == module.__name__
             and not inspect.isabstract(obj)
         ]

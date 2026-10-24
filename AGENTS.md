@@ -373,7 +373,7 @@ The manifest's `name` supplies the display name and the prefix of its tool names
 defaulting to the folder name. Changing it also changes the plugin's tool identifiers.
 
 `plugin.py` defines **exactly one** plugin class; zero or several is an error. Every
-plugin extends `Plugin` (`core/plugins/base.py`), which supplies `manifest` and
+plugin extends `BasePlugin` (`core/plugins/base.py`), which supplies `manifest` and
 `directory` so a plugin reaches the extra files it ships without the loader knowing they
 exist. A plugin participates two independent ways: it binds instance methods to hooks
 with `@hook(Hook.X)` (`core/plugins/hook.py`), and/or it defines tools by decorating
@@ -386,7 +386,7 @@ manifest — there is deliberately no `kind:` field, since a manifest field can 
 the code while the code cannot — and a plugin declaring **neither hooks nor tools** is
 reported and skipped since it could never run.
 
-`@tool(...)` (`core/plugins/tool.py`) marks a `Plugin` instance method as a real tool:
+`@tool(...)` (`core/plugins/tool.py`) marks a `BasePlugin` instance method as a real tool:
 its exposed name is `<plugin_name>-<tool_name>`, where `plugin_name` is the manifest's
 name (defaulting to the folder name) and `tool_name` is the method name or the decorator's
 `name=` override. The generated tool class carries this full name, so permission checks,
@@ -421,14 +421,14 @@ JSON with non-ASCII characters kept readable. Non-dictionary results and excepti
 messages use the base parser's unchanged pass-through behavior.
 
 `PluginLoader.load(directory)` (`core/plugins/loader.py`) returns
-`(Plugin | None, list[Message])` and **never raises**: a manifest that cannot be read,
+`(BasePlugin | None, list[Message])` and **never raises**: a manifest that cannot be read,
 is not YAML or is not a mapping; a missing `plugin.py` or one that raises on import; a
 module with no plugin class or several; a plugin declaring neither hooks nor tools — each
 is one `ErrorMessage` that skips only that folder. `plugin.py` is imported as
 `arancio_plugins.<folder>.plugin`, under a synthetic parent package whose `__path__` is
 the plugin folder, so `from .helpers import X` works inside it and two plugins each
 shipping a `helpers.py` never collide — `sys.path` is left alone. Class discovery only
-accepts a concrete `Plugin` subclass whose `__module__` is that module, so the base
+accepts a concrete `BasePlugin` subclass whose `__module__` is that module, so the base
 the plugin imports at the top of its own file is not mistaken for the plugin.
 
 `PluginManager` (`core/plugins/manager.py`) discovers, loads and registers in one
@@ -816,7 +816,7 @@ path/mtime state so a resumed session restores its read-first guard only for unc
   `commands/state_change.py:StateChangeCommand` instead when it changes the session's saved
   configuration, working directory or name. A command that ends or switches the active
   session also goes into `commands/registry.py:SESSION_DISCARDING_COMMANDS`.
-- **New plugin**: subclass `core/plugins/base.py:Plugin`, bind instance methods to hooks
+- **New plugin**: subclass `core/plugins/base.py:BasePlugin`, bind instance methods to hooks
   with `core/plugins/hook.py:hook(...)`, define tools by decorating instance methods
   with `core/plugins/tool.py:tool(...)`, or both — never add a `kind:` field to
   `manifest.yml`.
