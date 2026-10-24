@@ -668,8 +668,8 @@ def test_a_plugin_hook_message_is_displayed_and_restored_outside_model_history(
 
     async def submit_prompt() -> None:
         """Submit a prompt and check the greeting in the real Textual chat log."""
-
-        async with app.run_test() as pilot:
+        test_context = app.run_test()
+        async with test_context as pilot:
             app.query_one("#prompt", Input).value = "hi"
             await pilot.press("enter")
             await app.workers.wait_for_complete()
@@ -746,8 +746,8 @@ def test_application_hooks_run_once_without_a_user_prompt(
 
     async def open_and_exit() -> None:
         """Check the launch greeting before closing through the selected route."""
-
-        async with app.run_test() as pilot:
+        test_context = app.run_test()
+        async with test_context as pilot:
             assert module.events == [("startup", hook_manager.context)]
             assert module.events[0][1] is hook_manager.context
             assert hook_manager.context["agent"] is agent
@@ -830,8 +830,8 @@ def test_application_hook_failures_do_not_block_start_or_exit(
 
     async def open_and_exit() -> None:
         """A startup error is visible while shutdown errors still permit exit."""
-
-        async with app.run_test():
+        test_context = app.run_test()
+        async with test_context:
             assert len(app.query("#log .error")) == (failing_hook == "STARTUP")
             app.exit()
 
