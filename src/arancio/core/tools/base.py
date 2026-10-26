@@ -11,8 +11,8 @@ from arancio.core.constants.path import (
     TOOL_INPUT_SCHEMA_FILENAME,
     TOOLS_HARNESS_PATH,
 )
+from arancio.core.hooks.base import Hook
 from arancio.core.hooks.manager import HookManager
-from arancio.core.hooks.types import Hook
 from arancio.core.messages import Message, ToolResultMessage
 from arancio.core.parsers.tool_result.base import BaseToolResultParser
 from arancio.core.tools.schema import ToolSchema

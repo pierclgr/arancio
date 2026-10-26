@@ -11,8 +11,8 @@ from typing import Any
 
 import pytest
 
+from arancio.core.hooks.base import Hook
 from arancio.core.hooks.manager import HookManager
-from arancio.core.hooks.types import Hook
 
 
 def test_the_enum_contains_exactly_the_agreed_names() -> None:

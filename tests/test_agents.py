@@ -14,8 +14,8 @@ from fakes import ScriptedClient, ScriptedController
 import arancio.core.agents as agents_module
 from arancio.core.agents import Agent
 from arancio.core.controllers.responses import Decision
+from arancio.core.hooks.base import Hook
 from arancio.core.hooks.manager import HookManager
-from arancio.core.hooks.types import Hook
 from arancio.core.messages import (
     AssistantChunkMessage,
     AssistantMessage,

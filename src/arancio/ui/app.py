@@ -12,8 +12,8 @@ from textual.widgets import Input, Markdown, Static
 from textual.widgets.markdown import MarkdownStream
 
 from arancio.core.agents import Agent
+from arancio.core.hooks.base import Hook
 from arancio.core.hooks.manager import HookManager
-from arancio.core.hooks.types import Hook
 from arancio.core.messages import (
     AssistantChunkMessage,
     AssistantMessage,

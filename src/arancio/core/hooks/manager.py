@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from typing import Any
 
-from arancio.core.hooks.types import Hook
+from arancio.core.hooks.base import Hook
 from arancio.core.messages import Message
 
 

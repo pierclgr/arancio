@@ -1,94 +1,11 @@
-"""Decorator and machinery turning a BasePlugin method into a real tool."""
+"""Plugin tool metadata and execution."""
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, ClassVar
+from typing import Any, Callable, ClassVar
 
 from arancio.core.parsers.tool_result.plugin import PluginToolResultParser
 from arancio.core.tools.base import BaseTool
 
-if TYPE_CHECKING:
-    from arancio.core.plugins.base import BasePlugin
-
 CUSTOM = "CUSTOM"
-
-
-@dataclass(frozen=True)
-class PluginToolSpec:
-    """Metadata a @tool-decorated method carries for the loader to read.
-
-    Attributes:
-        name: the tool portion of the exposed name; defaults to the method's
-            own name. Registration prefixes it with the plugin's name and a hyphen.
-        description: the tool's natural-language description, used verbatim
-            — unlike a harness ``description.md``, no dynamic-markdown
-            (``<field>``/``<include>``/``<script>``) expansion is applied.
-        input_schema: JSON Schema (``properties``/``required``), same shape
-            as a harness ``input_schema.yml``.
-        category: the permission category name, upper-cased: one of
-            ``READ``/``WRITE``/``WEB``/``EXECUTE``/``PLUGIN``/``CUSTOM``.
-    """
-
-    name: str
-    description: str
-    input_schema: dict[str, Any]
-    category: str
-
-
-def tool(
-    *,
-    description: str,
-    input_schema: dict[str, Any],
-    category: str = "PLUGIN",
-    name: str | None = None,
-) -> Callable[[Callable], Callable]:
-    """Mark a BasePlugin instance method as a tool the model can call.
-
-    Args:
-        description: the tool's natural-language description.
-        input_schema: JSON Schema for the tool's arguments.
-        category: ``"READ"``/``"WRITE"``/``"WEB"``/``"EXECUTE"``/``"PLUGIN"``
-            (the default) or ``"CUSTOM"`` — which creates a
-            ``PLUGIN:<PluginClassName>`` category dedicated to the owning
-            plugin, shared by every ``CUSTOM`` tool it defines, defaulting to
-            :attr:`~arancio.core.permissions.types.PermissionLevel.ASK`.
-        name: the tool portion of the exposed name; defaults to the method's
-            own name. The final name is ``<plugin_name>-<name>``.
-
-    Returns:
-        A decorator storing a :class:`PluginToolSpec` on the wrapped method.
-    """
-
-    def decorator(func: Callable) -> Callable:
-        func.__arancio_tool__ = PluginToolSpec(
-            name=name or func.__name__,
-            description=description,
-            input_schema=input_schema,
-            category=category.upper(),
-        )
-        return func
-
-    return decorator
-
-
-def find_tool_specs(
-    plugin_cls: type["BasePlugin"],
-) -> list[tuple[Callable, PluginToolSpec]]:
-    """Find every @tool-decorated method a plugin class defines directly.
-
-    Args:
-        plugin_cls: the plugin class to scan.
-
-    Returns:
-        ``(function, spec)`` pairs, in definition order. Only members
-        defined directly on ``plugin_cls`` count, mirroring
-        :meth:`~arancio.core.plugins.loader.PluginLoader._find_plugin_class`'s
-        own "defined in this module" rule.
-    """
-    return [
-        (func, func.__arancio_tool__)
-        for func in vars(plugin_cls).values()
-        if callable(func) and hasattr(func, "__arancio_tool__")
-    ]
 
 
 class PluginTool(BaseTool):
@@ -97,34 +14,73 @@ class PluginTool(BaseTool):
     Overrides :meth:`~arancio.core.tools.base.BaseTool._load_prompt` so the
     description and input schema come from the decorator instead of
     ``~/.arancio/harness/tools/<name>/``, since a plugin cannot ship files
-    there. A concrete subclass is built per decorated method by
-    :func:`build_plugin_tool_class`, with the owning plugin instance, the
-    underlying function and the spec bound as class attributes, so it stays
-    constructible as ``tool_cls(hook_manager=...)`` like any built-in tool.
-    Its exposed name is ``<plugin_name>-<tool_name>``, using the manifest's
-    name (defaulting to the folder name) and the method name or decorator override.
+    there. The plugin decorator builds a subclass per tool method with metadata
+    stored directly as class attributes. The manager binds the method to the
+    owning plugin instance before registering the tool's permission category.
+    It stays constructible as ``tool_cls(hook_manager=...)`` like any built-in tool.
+    Its exposed name is ``<plugin_name>-<tool_name>``, using the decorator's
+    name (defaulting to the class name) and the method name or tool override.
     Dictionary results keep their raw content and are displayed as JSON by
     :class:`~arancio.core.parsers.tool_result.plugin.PluginToolResultParser`.
 
     Attributes:
-        _plugin: the plugin instance the underlying method is bound to.
-        _method: the undecorated function, called as
-            ``method(plugin, **kwargs)``.
-        _spec: the tool's metadata from the ``@tool`` decorator.
+        tool_name: the tool portion of the full name, defaulting to the method name.
+        category: the uppercased permission category, defaulting to PLUGIN.
+        _method: the declaring function, bound to its plugin instance during loading.
+        _description: the description supplied by the decorator, without expansion.
+        _input_schema: the raw argument schema supplied by the decorator.
     """
 
     _result_parser = PluginToolResultParser
-    _plugin: ClassVar["BasePlugin"]
+    tool_name: ClassVar[str]
+    category: ClassVar[str] = "PLUGIN"
     _method: ClassVar[Callable]
-    _spec: ClassVar[PluginToolSpec]
+    _description: ClassVar[str]
+    _input_schema: ClassVar[dict[str, Any]]
 
-    def _load_prompt(self) -> tuple[str, dict[str, Any]]:
-        """Return the description and raw input schema from the bound spec.
+    @classmethod
+    def build(
+        cls,
+        plugin_name: str,
+        method: Callable,
+        *,
+        name: str,
+        description: str,
+        input_schema: dict[str, Any],
+        category: str,
+    ) -> type["PluginTool"]:
+        """Synthesize a tool subclass for one @tool-decorated method.
+
+        Args:
+            plugin_name: the owning plugin's name, used as the tool-name prefix.
+            method: the original function, bound by the manager after construction.
+            name: the tool portion of the exposed name.
+            description: the tool description, used verbatim.
+            input_schema: the raw JSON Schema for the tool's arguments.
+            category: the uppercased permission category.
 
         Returns:
-            The spec's description and raw input schema.
+            A fresh tool subclass named from ``plugin_name`` and ``name``.
         """
-        return self._spec.description, self._spec.input_schema
+        return type(
+            f"{plugin_name}-{name}",
+            (cls,),
+            {
+                "tool_name": name,
+                "category": category,
+                "_method": method,
+                "_description": description,
+                "_input_schema": input_schema,
+            },
+        )
+
+    def _load_prompt(self) -> tuple[str, dict[str, Any]]:
+        """Return the description and raw input schema stored on the tool class.
+
+        Returns:
+            The declared description and raw input schema.
+        """
+        return self._description, self._input_schema
 
     def _call(self, **kwargs: Any) -> Any:
         """Run the underlying plugin method with the tool's arguments.
@@ -135,31 +91,4 @@ class PluginTool(BaseTool):
         Returns:
             The plugin method's return value.
         """
-        return self._method(self._plugin, **kwargs)
-
-
-def build_plugin_tool_class(
-    plugin: "BasePlugin", method: Callable, spec: PluginToolSpec
-) -> type[PluginTool]:
-    """Synthesize a PluginTool subclass for one @tool-decorated method.
-
-    Args:
-        plugin: the plugin instance the method is bound to.
-        method: the undecorated function, called as ``method(plugin, **kwargs)``.
-        spec: the tool's metadata from the @tool decorator.
-
-    Returns:
-        A fresh :class:`PluginTool` subclass named ``<plugin.name>-<spec.name>``.
-    """
-    return type(
-        f"{plugin.name}-{spec.name}",
-        (PluginTool,),
-        {
-            "_plugin": plugin,
-            # wrapped in staticmethod so accessing it via `self._method` on a
-            # PluginTool instance returns the plain function unbound, instead
-            # of Python's descriptor protocol binding it to that instance
-            "_method": staticmethod(method),
-            "_spec": spec,
-        },
-    )
+        return self._method(**kwargs)

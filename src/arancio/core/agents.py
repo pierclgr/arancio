@@ -15,8 +15,8 @@ from arancio.core.constants.agent import (
     AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
     AGENT_UNLIMITED_MAX_TURNS,
 )
+from arancio.core.hooks.base import Hook
 from arancio.core.hooks.manager import HookManager
-from arancio.core.hooks.types import Hook
 from arancio.core.messages import (
     ChunkMessage,
     ErrorMessage,

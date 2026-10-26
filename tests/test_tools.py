@@ -17,8 +17,8 @@ from fakes import ScriptedClient
 
 import arancio.core.tools.web.fetch as fetch_module
 import arancio.core.tools.web.search as search_module
+from arancio.core.hooks.base import Hook
 from arancio.core.hooks.manager import HookManager
-from arancio.core.hooks.types import Hook
 from arancio.core.messages import (
     AssistantChunkMessage,
     AssistantMessage,

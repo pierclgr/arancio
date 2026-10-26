@@ -1,11 +1,9 @@
 """Pytest setup: keep every test off the user's real arancio directory.
 
-Three things in this project reach outside a test by default. Tools and the system
-prompt builder read their harness files from ``~/.arancio/harness``; settings and the
-LiteLLM login directory are written through module constants that ignore a
-:class:`StorageManager`'s ``root``; and the read-first tool guard is a process-wide
-singleton that outlives any one test. This module repoints the first, isolates the
-second and resets the third.
+Tools and the system prompt builder read harness files from ``~/.arancio/harness``.
+Settings, login storage and plugin imports use paths outside a StorageManager's root.
+This module redirects those paths and resets shared tool, plugin and permission state
+between tests.
 
 The harness repointing happens at import, because pytest imports this module before any
 test module: :meth:`~arancio.core.tools.base.BaseTool.__init__` reads the path when a
@@ -13,6 +11,7 @@ tool is built and raises when the directory is missing, so the constants have to
 redirected before the first tool exists.
 """
 
+import sys
 from pathlib import Path
 from typing import Iterator
 
@@ -21,10 +20,12 @@ from fakes import ScriptedClient, ScriptedController
 
 from arancio.core.agents import Agent
 from arancio.core.builders import system_prompt as system_prompt_builder
+from arancio.core.constants.plugins import PLUGIN_PACKAGE_ROOT
 from arancio.core.hooks.manager import HookManager
 from arancio.core.permissions.manager import PermissionManager
 from arancio.core.permissions.types import PermissionCategory
 from arancio.core.plugins import manager as plugin_manager_module
+from arancio.core.plugins import registry as plugin_registry_module
 from arancio.core.tools import base as tools_base
 from arancio.core.tools.manager import ToolManager
 from arancio.core.tools.session import shared_session
@@ -67,6 +68,29 @@ def _reset_tool_session() -> Iterator[None]:
     shared_session.clear()
     yield
     shared_session.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_plugin_state() -> Iterator[None]:
+    """Isolate decorator declarations, diagnostics and imported plugin modules.
+
+    Yields:
+        Control to a test with empty plugin registration state.
+    """
+    stores = (
+        plugin_registry_module.PLUGIN_REGISTRY,
+        plugin_registry_module.REGISTRATION_MESSAGES,
+        plugin_registry_module.PENDING_HOOKS,
+        plugin_registry_module.PENDING_TOOLS,
+    )
+    for store in stores:
+        store.clear()
+    yield
+    for store in stores:
+        store.clear()
+    for name in list(sys.modules):
+        if name == PLUGIN_PACKAGE_ROOT or name.startswith(f"{PLUGIN_PACKAGE_ROOT}."):
+            sys.modules.pop(name, None)
 
 
 @pytest.fixture(autouse=True)

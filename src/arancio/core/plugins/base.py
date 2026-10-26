@@ -1,49 +1,68 @@
-"""Base class every plugin extends."""
+"""Plugin declarations and their shared runtime instances."""
 
-from abc import ABC
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Callable
 
-from arancio.core.plugins.manifest import PluginManifest
+from arancio.core.hooks.base import Hook
+
+if TYPE_CHECKING:
+    from arancio.core.plugins.tool import PluginTool
 
 
-class BasePlugin(ABC):
-    """Base class every plugin extends.
-
-    A plugin runs on hooks via ``@hook``-decorated methods (see
-    :mod:`~arancio.core.plugins.hook`), defines tools via ``@tool``-decorated
-    methods (see :mod:`~arancio.core.plugins.tool`), or both. A plugin
-    reaches the extra files shipped in its own folder through
-    :attr:`directory`; the loader never reads them.
+@dataclass
+class Plugin:
+    """Keep a plugin's metadata and declarations outside its class.
 
     Attributes:
-        manifest: the metadata parsed from the plugin's ``manifest.yml``.
-        directory: the plugin's own folder.
+        plugin_cls: the original decorated class, constructed at startup.
+        source_path: the file declaring the class.
+        name: the plugin name, defaulted to the class name by the decorator.
+        version: the declared version.
+        description: the plugin's purpose.
+        author: the declared plugin author.
+        enabled: whether startup should construct and attach the plugin.
+        instance: the shared runtime instance, or None when inactive.
+        hooks: methods and their hook events, bound once during loading.
+        tools: tool classes holding metadata and methods bound during loading.
     """
 
-    def __init__(self, manifest: PluginManifest, directory: Path) -> None:
-        """Initialize the plugin with its metadata and its own folder.
+    plugin_cls: type
+    source_path: Path
+    name: str
+    version: str = "0.0.0"
+    description: str = ""
+    author: str = ""
+    enabled: bool = True
+    instance: object | None = field(default=None, init=False)
+    hooks: list[tuple[Callable, tuple[Hook, ...]]] = field(
+        default_factory=list, init=False
+    )
+    tools: list[type["PluginTool"]] = field(default_factory=list, init=False)
 
-        Args:
-            manifest: the metadata parsed from the plugin's ``manifest.yml``.
-            directory: the plugin's own folder, holding any extra files it
-                ships.
+    def __post_init__(self) -> None:
+        """Reject invalid metadata before registering a declaration.
+
+        Raises:
+            TypeError: if a metadata field has the wrong type.
+            ValueError: if the plugin name is empty.
         """
-        self.manifest: PluginManifest = manifest
-        self.directory: Path = directory
-
-    def __repr__(self) -> str:
-        """Return a developer-friendly representation of the plugin.
-
-        Returns:
-            The plugin's class name followed by its folder name.
-        """
-        return f"{type(self).__name__}({self.directory.name})"
+        for name in ("name", "version", "description", "author", "enabled"):
+            value = getattr(self, name)
+            expected = bool if name == "enabled" else str
+            if not isinstance(value, expected):
+                raise TypeError(f"{name} must be {expected.__name__}, got {value!r}.")
+        if not self.name:
+            raise ValueError(f"name must not be empty, got {self.name!r}.")
 
     @property
-    def name(self) -> str:
-        """Return the plugin's display name.
+    def location(self) -> str:
+        """Return the source location used in startup diagnostics.
 
         Returns:
-            The manifest's name, which defaults to the plugin's folder name.
+            The plugin's relative file path and class name.
         """
-        return self.manifest.name
+        return (
+            f"plugins/{self.source_path.parent.name}/{self.source_path.name}:"
+            f"{self.plugin_cls.__name__}"
+        )

@@ -3,8 +3,8 @@
 from arancio.core.controllers.base import Controller
 from arancio.core.controllers.requests import PermissionRequest
 from arancio.core.controllers.responses import Decision
+from arancio.core.hooks.base import Hook
 from arancio.core.hooks.manager import HookManager
-from arancio.core.hooks.types import Hook
 from arancio.core.messages import Message, ToolCallMessage
 from arancio.core.permissions.types import (
     PermissionCategory,
