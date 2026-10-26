@@ -61,6 +61,9 @@ the implemented behavior and the later changes, verified with 477 tests.
   `FetchWebTool` (needs the summary client, now in the context), the date
   and working directory in the system prompt (a `system_prompt_build`
   plugin can do it now).
+- Plugin permissions should change. Either define a new permission category
+  per plugin, or let a tool or plugin attach to an existing permission
+  category through its decorator (`@tool` / `@plugin`).
 
 ## Dictionary tool result fix
 
