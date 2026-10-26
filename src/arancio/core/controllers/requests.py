@@ -1,17 +1,17 @@
 """Requests core sends to a frontend through a controller.
 
-Each request kind is a :class:`BaseControllerRequest` subclass; the kind is the subclass
+Each request kind is a :class:`ControllerRequest` subclass; the kind is the subclass
 itself, dispatched with ``isinstance`` by the controller.
 """
 
 from arancio.core.messages import ToolCallMessage
 
 
-class BaseControllerRequest:
+class ControllerRequest:
     """Base class for requests core sends through a controller."""
 
 
-class PermissionRequest(BaseControllerRequest):
+class PermissionRequest(ControllerRequest):
     """Request asking the user to approve or deny a tool call.
 
     Attributes:
@@ -27,7 +27,7 @@ class PermissionRequest(BaseControllerRequest):
         self.call = call
 
 
-class ChatGPTLoginRequest(BaseControllerRequest):
+class ChatGPTLoginRequest(ControllerRequest):
     """Request displaying a ChatGPT device-code login in the frontend.
 
     Attributes:

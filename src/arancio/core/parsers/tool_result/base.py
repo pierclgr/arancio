@@ -7,7 +7,7 @@ from arancio.core.messages import ToolErrorMessage, ToolResultMessage
 from arancio.core.parsers.base import Parser
 
 
-class BaseToolResultParser(Parser):
+class ToolResultParser(Parser):
     """Base interface for converting raw tool output into a message.
 
     Concrete parsers implement :meth:`_render` to turn a structured (dict) tool output

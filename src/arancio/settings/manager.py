@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from arancio.core.agents import Agent
-from arancio.core.clients.base import BaseClient
+from arancio.core.clients.base import Client
 from arancio.core.messages import Message
 from arancio.core.permissions.types import PermissionCategory
 from arancio.settings.settings import Settings
@@ -38,8 +38,8 @@ class SettingsManager:
     def __init__(
         self,
         storage_manager: StorageManager,
-        client: BaseClient,
-        summary_client: BaseClient,
+        client: Client,
+        summary_client: Client,
         agent: Agent,
     ) -> None:
         """Initialize the manager with the storage layer and live objects.

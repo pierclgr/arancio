@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from arancio.commands.base import BaseCommand
+from arancio.commands.base import Command
 
 if TYPE_CHECKING:
     from arancio.core.agents import Agent
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from arancio.ui.app import App
 
 
-class ResumeCommand(BaseCommand):
+class ResumeCommand(Command):
     """Command that reopens a previous chat session."""
 
     name = "resume"

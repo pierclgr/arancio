@@ -767,7 +767,7 @@ def test_a_failing_plugin_does_not_break_an_agent_run(
 ) -> None:
     """Isolation is what keeps a broken plugin from ending the whole run.
 
-    Without it the exception would escape ``BaseTool.call`` into the agent's single
+    Without it the exception would escape ``Tool.call`` into the agent's single
     ``except``, be labelled ``source="model"`` and retry the turn.
     """
     _write_plugin(

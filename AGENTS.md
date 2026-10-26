@@ -36,7 +36,7 @@ working directory `~/.arancio/` (base paths in `core/constants/path.py`, LiteLLM
 in `storage/constants.py`):
 
 - `~/.arancio/harness/tools/<snake_tool_name>/{description.md,input_schema.yml}` — each
-  tool's description and JSON input schema, loaded from disk by `BaseTool.__init__`.
+  tool's description and JSON input schema, loaded from disk by `Tool.__init__`.
 - `~/.arancio/harness/SYSTEM_PROMPT.md` — the agent's system prompt.
   `SystemPromptBuilder` seeds it with a default when absent, parses it as dynamic
   markdown once, and caches the text; `build()` (called once per agent turn) returns
@@ -64,7 +64,7 @@ under `~/.arancio/harness/`. **Tests** must sidestep this by repointing
 `system_prompt_builder.SYSTEM_PROMPT_HARNESS_PATH` at the repo's `harness/` before any
 test imports, or they read the real home directory. `tests/conftest.py` does this at
 import time, so the constants are already redirected before any test builds a tool —
-`BaseTool.__init__` reads the path at construction and raises when the directory is
+`Tool.__init__` reads the path at construction and raises when the directory is
 missing.
 
 **A `StorageManager`'s `root` does not sandbox everything it writes.** Four absolute
@@ -87,7 +87,7 @@ never *writes*, which is why it is not a `StorageManager` concern at all — it 
 ## Architecture
 
 Layered and provider-agnostic. The recurring pattern is a `base.py` abstract class plus a
-provider file (e.g. `litellm.py`); adding a provider means a new `BaseClient` subclass
+provider file (e.g. `litellm.py`); adding a provider means a new `Client` subclass
 with its own builder/parser trio, not touching the core loop.
 
 **Wiring** (`ui/__main__.py:main`) — build order matters: `StorageManager` →
@@ -153,8 +153,8 @@ The initial `message` is appended to history but **never yielded**, because the 
 that built it already holds it.
 
 **Client + request pipeline** (`core/clients/`, `core/builders/`, `core/parsers/`) —
-`BaseClient` declares strategy class attrs `_request_builder` / `_payload_builder` /
-`_response_parser`. Flow: `build_request` → normalized frozen `BaseRequest` dataclass
+`Client` declares strategy class attrs `_request_builder` / `_payload_builder` /
+`_response_parser`. Flow: `build_request` → normalized frozen `Request` dataclass
 (model, thinking, system prompt, tools, messages) → `send_request` builds LiteLLM kwargs
 via the payload builder → `litellm.responses(**kwargs)` → response parser turns provider
 output back into normalized `Message`s (`parse` for a single response, `parse_stream` for
@@ -183,7 +183,7 @@ crashes at the same mapping line with `TypeError: unhashable type: 'dict'` (Lite
 the whole `reasoning` dict as `reasoning_effort` once `summary` is present), so
 `thinking_summary` should stay `None` for Ollama models until upstream fixes this.
 
-**Tools** (`core/tools/`) — `BaseTool` subclasses implement `_call`; the public `call`
+**Tools** (`core/tools/`) — `Tool` subclasses implement `_call`; the public `call`
 wraps success/exception into a `ToolResultMessage`/`ToolErrorMessage` through the tool's
 `_result_parser`. It returns `(result, hook_messages)`, keeping plugin errors separate
 from the tool outcome. The tool's **name is its class name**, and its description/input schema
@@ -191,7 +191,7 @@ are loaded from the harness dir (see runtime section); descriptions are dynamic-
 (`<field>`, `<include>`, `<script>` tags expand against the tool instance). The module-level
 `ToolSession` singleton `shared_session` records which files were read so write/edit tools
 can refuse blind overwrites of unread or externally-modified files. Every tool reaches it
-through the `BaseTool._session` **class** attribute, so the guard outlives the tool
+through the `Tool._session` **class** attribute, so the guard outlives the tool
 instances that `ToolManager.create_tools` rebuilds whenever permissions change; there is
 no per-instance override. Families: `files/` (read, write, edit),
 `commands/` (shell), `web/` (search, fetch — fetch takes an
@@ -261,10 +261,10 @@ sibling `core` package's `__init__.py` are empty; a caller imports `Hook` from
 other two-file `base.py`/`manager.py` package (`core/permissions/`, `core/controllers/`).
 
 Threading follows the same explicit-constructor-injection pattern as
-`controller`/`tool_manager` — never the class-attribute singleton `BaseTool._session`
+`controller`/`tool_manager` — never the class-attribute singleton `Tool._session`
 uses, since two callers must be able to hold independent hook managers — stored as
 `self._hook_manager`. Every constructor that takes `hook_manager` (`Agent`,
-`PermissionManager`, `ToolManager`, `BaseTool`/`FetchWebTool`, `ActionExecutor`) requires
+`PermissionManager`, `ToolManager`, `Tool`/`FetchWebTool`, `ActionExecutor`) requires
 it, with no `None` default: production code (`ui/__main__.py`) never has a reason to omit
 it for any of them, so requiring it catches a caller that forgot to thread the shared
 instance through, rather than silently falling back to a private no-op manager.
@@ -277,7 +277,7 @@ component — including the `!`/`!!` shell path and `@mention` reads, which run 
 `ActionExecutor`'s own `ReadFileTool`/`ShellCommandTool` instances (built once in its
 `__init__`, not as module-import-time class attributes, precisely so the shared instance can
 reach them).
-`BaseClient`/`LiteLLMClient` never receive one: `before_model_request` /
+`Client`/`LiteLLMClient` never receive one: `before_model_request` /
 `after_model_response` / the model-sourced `error` are dispatched by `Agent.__call__`
 around its calls to `self._client.build_request`/`send_request`, not by the client itself —
 placing them inside `LiteLLMClient` would never fire for `ScriptedClient`, which overrides
@@ -322,8 +322,8 @@ Dispatch sites, by hook:
   the prompt and before `build_request`, inside the same per-turn `try`. The agent then
   reads `context["system_prompt"]` back and builds the request from that, so a handler
   that replaces it changes the prompt of the **same** turn. With `result` (see
-  `BaseTool.call` below), it is one of the two event keys core reads back today.
-- `BaseTool.call`: `before_tool_call` (`name`, `call_id`, `arguments`) before running;
+  `Tool.call` below), it is one of the two event keys core reads back today.
+- `Tool.call`: `before_tool_call` (`name`, `call_id`, `arguments`) before running;
   `error` with `source="tool"` (`name`, `call_id`, `arguments`, `error`) when `_call`
   raises; `after_tool_call` (`name`, `call_id`, `arguments`, `result`) once the result
   message is built, unconditionally — both the `source="tool"` `error` and
@@ -441,8 +441,8 @@ JSON-compatible dictionaries as raw content and displays readable JSON; other re
 and exceptions retain base behavior.
 
 **Controller port** (`core/controllers/`) — the core↔UI seam (ports & adapters). Core
-sends a `BaseControllerRequest` (e.g. `PermissionRequest`) and gets a
-`BaseControllerResponse` (e.g. `PermissionResponse` carrying a `Decision`), dispatched by
+sends a `ControllerRequest` (e.g. `PermissionRequest`) and gets a
+`ControllerResponse` (e.g. `PermissionResponse` carrying a `Decision`), dispatched by
 `isinstance`. `ui/controller.py:UIController` is the Textual adapter: it blocks the
 **worker** thread on a `threading.Event` until the user answers a `QuestionScreen`, never
 the UI thread. Its `app` is genuinely `None` until wiring finishes — the app needs the
@@ -490,7 +490,7 @@ it twice; and the `!` attribution line is recorded with `visible=False`, the one
 asks to stay out of the replayed log while staying in model history.
 
 A command's plain-string result is wrapped into an `AssistantMessage` by
-the executor. A slash command subclasses `BaseCommand`, sets `name`/`description`,
+the executor. A slash command subclasses `Command`, sets `name`/`description`,
 implements a typed `execute(...)`; `run` receives the raw prompt words plus the
 injectable objects, binds the words in order to `execute`'s parameters and coerces them to
 their annotations — the executor never reads `execute`'s signature. Words beyond the
@@ -500,7 +500,7 @@ space, which is how `/rename my new name` gets the whole name and `/resume my ne
 searches for all of it. A command that changes the active session's *saved* state subclasses
 `StateChangeCommand` (`commands/state_change.py`) instead — an abstract layer between the
 two that carries the two helpers such a command needs (see **Sessions** below); the
-executor and the registry only ever type on `BaseCommand`, so nothing else changes.
+executor and the registry only ever type on `Command`, so nothing else changes.
 A parameter named after one of
 `prompt/actions/constants.py:INJECTABLE_COMMAND_PARAMETERS` (currently `application`,
 `settings_manager`, `agent`, `session_manager`) is supplied by the executor itself instead of being bound to a prompt
@@ -684,9 +684,9 @@ and the two mutating branches of `PermissionsCommand` reach the sibling helper
 `StateChangeCommand._apply_configuration`, which sets `session.configuration =
 SessionConfiguration.from_settings(settings_manager.settings)` after they applied and persisted
 the settings change; `RenameCommand` sets `session.name`. Those six are exactly the commands
-subclassing `StateChangeCommand` rather than `BaseCommand` directly — `/clear` and `/resume`
+subclassing `StateChangeCommand` rather than `Command` directly — `/clear` and `/resume`
 replace the whole session through `discard_and_create`/`restore_runtime` and never write a
-`state_changed` record, so they stay on `BaseCommand`. All three fields are re-sent together
+`state_changed` record, so they stay on `Command`. All three fields are re-sent together
 regardless of which one changed, so the log carries one atomic record of "the state at this
 point" rather than several independently-timed event types. Each of these commands is injected
 `session_manager` (`prompt/actions/constants.py`) for exactly this; the executor itself has no

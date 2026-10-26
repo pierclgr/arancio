@@ -6,8 +6,8 @@ This module redirects those paths and resets shared tool, plugin and permission 
 between tests.
 
 The harness repointing happens at import, because pytest imports this module before any
-test module: :meth:`~arancio.core.tools.base.BaseTool.__init__` reads the path when a
-tool is built and raises when the directory is missing, so the constants have to be
+test module: :meth:`~arancio.core.tools.base.Tool.__init__` reads the path when a tool
+is built and raises when the directory is missing, so the constants have to be
 redirected before the first tool exists.
 """
 

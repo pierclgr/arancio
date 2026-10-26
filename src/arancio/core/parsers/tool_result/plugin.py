@@ -2,10 +2,10 @@
 
 import json
 
-from arancio.core.parsers.tool_result.base import BaseToolResultParser
+from arancio.core.parsers.tool_result.base import ToolResultParser
 
 
-class PluginToolResultParser(BaseToolResultParser):
+class PluginToolResultParser(ToolResultParser):
     """Keep plugin result content and render dictionaries as JSON."""
 
     @classmethod

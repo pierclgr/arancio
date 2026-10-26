@@ -6,10 +6,10 @@ from ddgs import DDGS
 from ddgs.exceptions import TimeoutException
 
 from arancio.core.parsers.tool_result.web.search import SearchWebToolResultParser
-from arancio.core.tools.base import BaseTool
+from arancio.core.tools.base import Tool
 
 
-class SearchWebTool(BaseTool):
+class SearchWebTool(Tool):
     """Run a web search via DuckDuckGo (through the ``ddgs`` library).
 
     The tool dispatches the query to ``ddgs.DDGS().text(...)`` with a configurable
@@ -49,7 +49,7 @@ class SearchWebTool(BaseTool):
             aggregated before the deadline. Non-timeout ddgs failures
             (rate limits, network errors, …) propagate as
             ``DDGSException`` and are wrapped into a ToolErrorMessage
-            string by ``BaseTool.call``.
+            string by ``Tool.call``.
         """
         n = num_results if num_results is not None else self._default_num_results
         t = timeout if timeout is not None else self._default_timeout

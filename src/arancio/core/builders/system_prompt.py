@@ -26,7 +26,7 @@ class SystemPromptBuilder(Builder):
 
         Seeds ``SYSTEM_PROMPT.md`` with the default when missing, then parses it as
         dynamic markdown. This mirrors how tool descriptions are loaded once in
-        :class:`~arancio.core.tools.base.BaseTool`.
+        :class:`~arancio.core.tools.base.Tool`.
         """
         self._system_prompt = self._load_system_prompt()
 

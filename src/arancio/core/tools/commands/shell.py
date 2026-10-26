@@ -6,10 +6,10 @@ import subprocess
 from typing import Type
 
 from arancio.core.parsers.tool_result.commands.shell import ShellCommandToolResultParser
-from arancio.core.tools.base import BaseTool
+from arancio.core.tools.base import Tool
 
 
-class ShellCommandTool(BaseTool):
+class ShellCommandTool(Tool):
     """Run a shell command via the host platform's native shell.
 
     Dispatches to ``/bin/sh -c`` on macOS/Linux, or to PowerShell on Windows. Captures

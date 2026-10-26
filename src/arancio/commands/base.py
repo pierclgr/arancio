@@ -7,7 +7,7 @@ from typing import Any, ClassVar
 from arancio.prompt.actions.constants import INJECTABLE_COMMAND_PARAMETERS
 
 
-class BaseCommand(ABC):
+class Command(ABC):
     """Base class for slash commands parsed from the prompt.
 
     Subclasses set :attr:`name` and :attr:`description` and implement

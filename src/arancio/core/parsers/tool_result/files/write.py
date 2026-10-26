@@ -1,9 +1,9 @@
 """Write file tool result parser."""
 
-from arancio.core.parsers.tool_result.base import BaseToolResultParser
+from arancio.core.parsers.tool_result.base import ToolResultParser
 
 
-class WriteFileToolResultParser(BaseToolResultParser):
+class WriteFileToolResultParser(ToolResultParser):
     """Parse write file tool output into a tool result message."""
 
     @classmethod

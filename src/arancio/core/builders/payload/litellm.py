@@ -3,7 +3,7 @@
 import json
 from typing import Any
 
-from arancio.core.builders.payload.base import BasePayloadBuilder
+from arancio.core.builders.payload.base import PayloadBuilder
 from arancio.core.messages import (
     AssistantMessage,
     Message,
@@ -16,7 +16,7 @@ from arancio.core.requests import LiteLLMRequest
 from arancio.core.tools.schema import ToolSchema
 
 
-class LiteLLMPayloadBuilder(BasePayloadBuilder):
+class LiteLLMPayloadBuilder(PayloadBuilder):
     """Build kwargs payloads for ``litellm.responses`` from generic requests."""
 
     @classmethod

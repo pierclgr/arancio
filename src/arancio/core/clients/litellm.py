@@ -9,7 +9,7 @@ import litellm
 from arancio.core.builders.payload.litellm import LiteLLMPayloadBuilder
 from arancio.core.builders.request.litellm import LiteLLMRequestBuilder
 from arancio.core.clients import _litellm_patches
-from arancio.core.clients.base import BaseClient
+from arancio.core.clients.base import Client
 from arancio.core.constants.litellm import (
     LITELLM_DEFAULT_THINKING_EFFORT,
     LITELLM_DEFAULT_THINKING_SUMMARY,
@@ -34,7 +34,7 @@ warnings.filterwarnings(
 _litellm_patches.apply()
 
 
-class LiteLLMClient(BaseClient):
+class LiteLLMClient(Client):
     """Generic LLM client backed by the LiteLLM Responses API.
 
     Routes any LiteLLM-supported provider through a single class. The
@@ -93,8 +93,8 @@ class LiteLLMClient(BaseClient):
                 natively streamable so LiteLLM streams it instead of
                 taking its broken fake-stream path; see
                 :meth:`_register_native_streaming`.
-            *args: positional arguments forwarded to :class:`BaseClient`.
-            **kwargs: keyword arguments forwarded to :class:`BaseClient`.
+            *args: positional arguments forwarded to :class:`Client`.
+            **kwargs: keyword arguments forwarded to :class:`Client`.
         """
         super().__init__(*args, **kwargs)
         self._max_output_tokens = max_output_tokens

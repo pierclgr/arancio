@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from arancio.prompt.actions.types import (
-    BaseAction,
+    Action,
     CommandAction,
     PromptAction,
     ShellCommandAction,
@@ -14,12 +14,12 @@ from arancio.prompt.actions.types import (
 class ActionFactory:
     """Instantiates the concrete actions handled by the prompt manager.
 
-    Centralizes construction of the :class:`arancio.prompt.actions.types.BaseAction`
+    Centralizes construction of the :class:`arancio.prompt.actions.types.Action`
     subtypes so callers depend on the factory rather than on each action's constructor.
     """
 
     @classmethod
-    def create_action(cls, raw_input: str, **kwargs: Any) -> BaseAction:
+    def create_action(cls, raw_input: str, **kwargs: Any) -> Action:
         """Create the action described by the given keyword arguments.
 
         Args:

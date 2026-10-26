@@ -3,7 +3,7 @@
 from enum import Enum
 
 
-class BaseControllerResponse:
+class ControllerResponse:
     """Base class for responses returned for a controller request."""
 
 
@@ -14,7 +14,7 @@ class Decision(Enum):
     DENY = "deny"
 
 
-class PermissionResponse(BaseControllerResponse):
+class PermissionResponse(ControllerResponse):
     """Response carrying the user's decision on a tool call.
 
     Attributes:

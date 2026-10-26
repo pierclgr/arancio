@@ -1,9 +1,9 @@
 """Hello-world command."""
 
-from arancio.commands.base import BaseCommand
+from arancio.commands.base import Command
 
 
-class HelloWorldCommand(BaseCommand):
+class HelloWorldCommand(Command):
     """Command that greets the name passed as its argument."""
 
     name = "hello-world"

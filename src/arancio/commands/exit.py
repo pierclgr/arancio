@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from arancio.commands.base import BaseCommand
+from arancio.commands.base import Command
 
 if TYPE_CHECKING:
     from arancio.ui.app import App
 
 
-class ExitCommand(BaseCommand):
+class ExitCommand(Command):
     """Command that quits the application."""
 
     name = "exit"

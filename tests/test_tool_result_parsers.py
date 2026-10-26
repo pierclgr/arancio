@@ -9,7 +9,7 @@ non-zero returns normally, and only the parser turns it into a
 import pytest
 
 from arancio.core.messages import ToolErrorMessage, ToolResultMessage
-from arancio.core.parsers.tool_result.base import BaseToolResultParser
+from arancio.core.parsers.tool_result.base import ToolResultParser
 from arancio.core.parsers.tool_result.commands.shell import ShellCommandToolResultParser
 from arancio.core.parsers.tool_result.files.edit import EditFileToolResultParser
 from arancio.core.parsers.tool_result.files.read import ReadFileToolResultParser
@@ -194,7 +194,7 @@ def test_fetch_result_states_an_empty_answer() -> None:
 
 def test_non_dict_output_is_passed_through_unrendered() -> None:
     """An error string from a tool becomes the content and the display text."""
-    message = BaseToolResultParser.parse(
+    message = ToolResultParser.parse(
         call_id="c1", output="Error while executing X: boom", is_error=True
     )
 

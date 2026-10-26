@@ -3,15 +3,15 @@
 from typing import Any, Callable, ClassVar
 
 from arancio.core.parsers.tool_result.plugin import PluginToolResultParser
-from arancio.core.tools.base import BaseTool
+from arancio.core.tools.base import Tool
 
 CUSTOM = "CUSTOM"
 
 
-class PluginTool(BaseTool):
+class PluginTool(Tool):
     """A tool synthesized from one @tool-decorated plugin method.
 
-    Overrides :meth:`~arancio.core.tools.base.BaseTool._load_prompt` so the
+    Overrides :meth:`~arancio.core.tools.base.Tool._load_prompt` so the
     description and input schema come from the decorator instead of
     ``~/.arancio/harness/tools/<name>/``, since a plugin cannot ship files
     there. The plugin decorator builds a subclass per tool method with metadata

@@ -5,16 +5,16 @@ from typing import Any
 
 from arancio.core.builders.base import Builder
 from arancio.core.messages import Message, ToolResultMessage
-from arancio.core.requests import BaseRequest
+from arancio.core.requests import Request
 from arancio.core.tools.schema import ToolSchema
 
 
-class BasePayloadBuilder(Builder, ABC):
+class PayloadBuilder(Builder, ABC):
     """Build provider payloads from the generic client request model."""
 
     @classmethod
     @abstractmethod
-    def build(cls, request: BaseRequest) -> dict[str, Any]:
+    def build(cls, request: Request) -> dict[str, Any]:
         """Build a provider-specific payload from the generic request model.
 
         Args:

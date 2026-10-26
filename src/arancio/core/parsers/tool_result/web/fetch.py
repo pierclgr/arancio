@@ -1,9 +1,9 @@
 """Web fetch tool result parser."""
 
-from arancio.core.parsers.tool_result.base import BaseToolResultParser
+from arancio.core.parsers.tool_result.base import ToolResultParser
 
 
-class FetchWebToolResultParser(BaseToolResultParser):
+class FetchWebToolResultParser(ToolResultParser):
     """Parse web fetch tool output into a tool result message."""
 
     @classmethod

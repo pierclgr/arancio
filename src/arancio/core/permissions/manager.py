@@ -12,7 +12,7 @@ from arancio.core.permissions.types import (
     PermissionLevel,
     PermissionOutcome,
 )
-from arancio.core.tools.base import BaseTool
+from arancio.core.tools.base import Tool
 from arancio.core.tools.manager import ToolManager
 
 
@@ -130,7 +130,7 @@ class PermissionManager:
         self._permissions = permissions
 
     @property
-    def allowed_tools(self) -> list[BaseTool]:
+    def allowed_tools(self) -> list[Tool]:
         """Create the tools the agent may access from the current grants.
 
         Returns:

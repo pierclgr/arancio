@@ -1,9 +1,9 @@
 """Tool construction driven by a permission list."""
 
-from arancio.core.clients.base import BaseClient
+from arancio.core.clients.base import Client
 from arancio.core.hooks.manager import HookManager
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
-from arancio.core.tools.base import BaseTool
+from arancio.core.tools.base import Tool
 from arancio.core.tools.web.fetch import FetchWebTool
 
 
@@ -22,9 +22,7 @@ class ToolManager:
             manager builds.
     """
 
-    def __init__(
-        self, web_summary_client: BaseClient, hook_manager: HookManager
-    ) -> None:
+    def __init__(self, web_summary_client: Client, hook_manager: HookManager) -> None:
         """Initialize the manager with the summarization client and hooks to inject.
 
         Args:
@@ -42,7 +40,7 @@ class ToolManager:
     @staticmethod
     def available_tools(
         permissions: dict[PermissionCategory, PermissionLevel],
-    ) -> list[type[BaseTool]]:
+    ) -> list[type[Tool]]:
         """Return the granted categories' tool classes without instantiating them.
 
         Args:
@@ -68,7 +66,7 @@ class ToolManager:
         """Return whether a tool is among those available for the given grants.
 
         Args:
-            tool_name: the tool's class name (``BaseTool.name``).
+            tool_name: the tool's class name (``Tool.name``).
             permissions: mapping of category to level; categories at
                 :attr:`PermissionLevel.NONE` are skipped.
 
@@ -83,7 +81,7 @@ class ToolManager:
 
     def create_tools(
         self, permissions: dict[PermissionCategory, PermissionLevel]
-    ) -> list[BaseTool]:
+    ) -> list[Tool]:
         """Instantiate the tools for the granted categories.
 
         Args:

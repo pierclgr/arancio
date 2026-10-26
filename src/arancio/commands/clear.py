@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from arancio.commands.base import BaseCommand
+from arancio.commands.base import Command
 from arancio.sessions.session import SessionConfiguration
 
 if TYPE_CHECKING:
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from arancio.ui.app import App
 
 
-class ClearCommand(BaseCommand):
+class ClearCommand(Command):
     """Command that clears the chat history, starting a new conversation."""
 
     name = "clear"

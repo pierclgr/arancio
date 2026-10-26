@@ -7,7 +7,7 @@ from itertools import count
 from typing import Dict, List
 
 from arancio.core.builders.system_prompt import SystemPromptBuilder
-from arancio.core.clients.base import BaseClient
+from arancio.core.clients.base import Client
 from arancio.core.constants.agent import (
     AGENT_DEFAULT_MAX_RETRIES,
     AGENT_DEFAULT_MAX_TURNS,
@@ -33,7 +33,7 @@ from arancio.core.permissions.types import (
     PermissionLevel,
     PermissionOutcome,
 )
-from arancio.core.tools.base import BaseTool
+from arancio.core.tools.base import Tool
 from arancio.core.tools.schema import ToolSchema
 
 
@@ -42,7 +42,7 @@ class Agent:
 
     def __init__(
         self,
-        client: BaseClient,
+        client: Client,
         permission_manager: PermissionManager,
         hook_manager: HookManager,
         message_history: List[Message] | None = None,
@@ -74,7 +74,7 @@ class Agent:
             retry_delay_multiplier: factor the retry wait grows by on each
                 consecutive failed-turn retry (exponential backoff).
         """
-        self._client: BaseClient = client
+        self._client: Client = client
         self._max_turns: int | str = max_turns
         self._max_retries: int = max_retries
         self._retry_delay: float = retry_delay
@@ -85,7 +85,7 @@ class Agent:
         self._hook_manager: HookManager = hook_manager
         self._hook_manager.context.update(agent=self, client=client)
 
-        self._tools: Dict[str, BaseTool] = {}
+        self._tools: Dict[str, Tool] = {}
         self._refresh_tools()
 
     def __repr__(self) -> str:
@@ -203,7 +203,7 @@ class Agent:
         """
         self._retry_delay_multiplier = value
 
-    def add_tool(self, tool: BaseTool):
+    def add_tool(self, tool: Tool):
         """Append a tool to the agent's tool catalog.
 
         Args:

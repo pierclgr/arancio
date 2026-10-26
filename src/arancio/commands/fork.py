@@ -6,7 +6,7 @@ import re
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from arancio.commands.base import BaseCommand
+from arancio.commands.base import Command
 from arancio.core.messages import AssistantMessage
 from arancio.sessions.session import SessionConfiguration
 
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 _LINEAGE_SUFFIX = re.compile(r":(main|fork_\d{14})$")
 
 
-class ForkCommand(BaseCommand):
+class ForkCommand(Command):
     """Command that duplicates the active session into a new active session."""
 
     name = "fork"

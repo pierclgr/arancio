@@ -696,7 +696,7 @@ def test_error_fires_with_source_model_then_agent_after_delivered_messages(
 def test_a_hook_handler_exception_during_a_tool_call_surfaces_as_source_model(
     controller: ScriptedController, tmp_path: Any
 ) -> None:
-    """A broken ``before_tool_call`` handler is not caught by ``BaseTool.call``.
+    """A broken ``before_tool_call`` handler is not caught by ``Tool.call``.
 
     It propagates to the loop's own ``except``, the same one that catches a genuine
     model-call failure, and is dispatched the same way: ``error`` with

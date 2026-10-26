@@ -1,8 +1,8 @@
 """Tests for the hook enum and the synchronous registration/dispatch primitive.
 
 These tests exercise ``HookManager`` in isolation, independent of the call sites that
-dispatch it in ``Agent``, ``BaseTool``, ``PermissionManager`` and the app (see the
-dispatch tests in ``test_agents.py``, ``test_tools.py``, ``test_permissions.py`` and
+dispatch it in ``Agent``, ``Tool``, ``PermissionManager`` and the app (see the dispatch
+tests in ``test_agents.py``, ``test_tools.py``, ``test_permissions.py`` and
 ``test_plugins.py``): registration order, per-hook isolation, per-manager isolation,
 exception propagation and the snapshot semantics of ``run``.
 """

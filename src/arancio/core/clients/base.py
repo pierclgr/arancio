@@ -4,15 +4,15 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from typing import List, Type
 
-from arancio.core.builders.payload.base import BasePayloadBuilder
-from arancio.core.builders.request.base import BaseRequestBuilder
+from arancio.core.builders.payload.base import PayloadBuilder
+from arancio.core.builders.request.base import RequestBuilder
 from arancio.core.messages import Message
-from arancio.core.parsers.response.base import BaseResponseParser
-from arancio.core.requests import BaseRequest
+from arancio.core.parsers.response.base import ResponseParser
+from arancio.core.requests import Request
 from arancio.core.tools.schema import ToolSchema
 
 
-class BaseClient(ABC):
+class Client(ABC):
     """Provider-agnostic base for LLM clients.
 
     Subclasses pick a transport (library call, HTTP, …) by overriding
@@ -26,9 +26,9 @@ class BaseClient(ABC):
     LiteLLM does not yet support).
     """
 
-    _payload_builder: Type[BasePayloadBuilder] = BasePayloadBuilder
-    _request_builder: Type[BaseRequestBuilder] = BaseRequestBuilder
-    _response_parser: Type[BaseResponseParser] = BaseResponseParser
+    _payload_builder: Type[PayloadBuilder] = PayloadBuilder
+    _request_builder: Type[RequestBuilder] = RequestBuilder
+    _response_parser: Type[ResponseParser] = ResponseParser
 
     _model_options: List[str] | None = None
     _thinking_options: List[str] | None = []
@@ -176,10 +176,10 @@ class BaseClient(ABC):
         messages: List[Message],
         system_prompt: str = "",
         tools: List[ToolSchema] | None = None,
-    ) -> BaseRequest:
+    ) -> Request:
         """Build a normalized request bound to the client's current state.
 
-        Delegates to the client's :class:`BaseRequestBuilder` subclass so
+        Delegates to the client's :class:`RequestBuilder` subclass so
         provider-specific fields are populated without callers needing to
         know which fields the underlying request type carries.
 
@@ -190,7 +190,7 @@ class BaseClient(ABC):
                 an empty list is used.
 
         Returns:
-            A normalized :class:`BaseRequest` ready for ``send_request``.
+            A normalized :class:`Request` ready for ``send_request``.
         """
         return self._request_builder.build(
             client=self,
@@ -200,7 +200,7 @@ class BaseClient(ABC):
         )
 
     @abstractmethod
-    def send_request(self, request: BaseRequest) -> Iterator[Message]:
+    def send_request(self, request: Request) -> Iterator[Message]:
         """Send a request through the underlying transport.
 
         Subclasses implement the actual network or library call and

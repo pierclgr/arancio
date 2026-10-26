@@ -23,7 +23,7 @@ class HookManager:
 
     Dispatched from :class:`~arancio.ui.app.App` for application lifecycle hooks,
     :meth:`~arancio.core.agents.Agent.__call__`,
-    :meth:`~arancio.core.tools.base.BaseTool.call` and
+    :meth:`~arancio.core.tools.base.Tool.call` and
     :meth:`~arancio.core.permissions.manager.PermissionManager.validate`; see
     AGENTS.md's Hooks section for the full call-site and keyword-argument
     contract.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from arancio.commands.base import BaseCommand
+from arancio.commands.base import Command
 from arancio.sessions.session import SessionConfiguration
 
 if TYPE_CHECKING:
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from arancio.settings.manager import SettingsManager
 
 
-class StateChangeCommand(BaseCommand):
+class StateChangeCommand(Command):
     """Base class for commands that change the active session's saved state.
 
     A ``state_changed`` record snapshots the session's ``configuration``,

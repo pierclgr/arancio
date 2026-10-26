@@ -6,26 +6,26 @@ from typing import TYPE_CHECKING, Any, Dict, List, Type
 
 from arancio.core.builders.base import Builder
 from arancio.core.messages import Message
-from arancio.core.requests import BaseRequest
+from arancio.core.requests import Request
 from arancio.core.tools.schema import ToolSchema
 
 if TYPE_CHECKING:
-    from arancio.core.clients.base import BaseClient
+    from arancio.core.clients.base import Client
 
 
-class BaseRequestBuilder(Builder):
+class RequestBuilder(Builder):
     """Build a normalized client request from client state and caller args."""
 
-    request_class: Type[BaseRequest] = BaseRequest
+    request_class: Type[Request] = Request
 
     @classmethod
     def build(
         cls,
-        client: BaseClient,
+        client: Client,
         messages: List[Message],
         system_prompt: str = "",
         tools: List[ToolSchema] | None = None,
-    ) -> BaseRequest:
+    ) -> Request:
         """Build a normalized request bound to the client's current state.
 
         Reads the model id, thinking effort and thinking summary from
@@ -55,7 +55,7 @@ class BaseRequestBuilder(Builder):
         return cls.request_class(**kwargs)
 
     @classmethod
-    def _extra_kwargs(cls, client: BaseClient) -> Dict[str, Any]:
+    def _extra_kwargs(cls, client: Client) -> Dict[str, Any]:
         """Return provider-specific extra kwargs for the request constructor.
 
         Override in subclasses to contribute fields beyond the base set.

@@ -8,7 +8,7 @@ from arancio.core.tools.schema import ToolSchema
 
 
 @dataclass(frozen=True)
-class BaseRequest:
+class Request:
     """Canonical request passed to every client implementation."""
 
     model_id: str
@@ -19,4 +19,4 @@ class BaseRequest:
     message_list: List[Message] = field(default_factory=list)
 
 
-LiteLLMRequest = BaseRequest
+LiteLLMRequest = Request

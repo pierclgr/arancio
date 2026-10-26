@@ -1,7 +1,7 @@
 """Hand-written doubles for the boundaries a test cannot cross for real.
 
 Only three things in this repository are genuinely external: the model behind
-:class:`~arancio.core.clients.base.BaseClient`, the user behind
+:class:`~arancio.core.clients.base.Client`, the user behind
 :class:`~arancio.core.controllers.base.Controller`, and the Textual app behind
 :class:`~arancio.ui.controller.UIController`. Everything else is exercised as
 the real object against ``tmp_path``, so every double lives in this one module
@@ -13,19 +13,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Iterator, List, Tuple
 
-from arancio.core.clients.base import BaseClient
+from arancio.core.clients.base import Client
 from arancio.core.controllers.base import Controller
-from arancio.core.controllers.requests import BaseControllerRequest, PermissionRequest
+from arancio.core.controllers.requests import ControllerRequest, PermissionRequest
 from arancio.core.controllers.responses import (
-    BaseControllerResponse,
+    ControllerResponse,
     Decision,
     PermissionResponse,
 )
 from arancio.core.messages import AssistantMessage, Message
-from arancio.core.requests import BaseRequest
+from arancio.core.requests import Request
 
 
-class ScriptedClient(BaseClient):
+class ScriptedClient(Client):
     """Client replaying canned messages instead of calling a provider.
 
     Each entry of ``turns`` is one agent turn: the messages to yield, in order.
@@ -52,10 +52,10 @@ class ScriptedClient(BaseClient):
         """
         super().__init__()
         self.turns: List[List[Any]] = [list(turn) for turn in (turns or [])]
-        self.requests: List[BaseRequest] = []
+        self.requests: List[Request] = []
         self.histories: List[List[Message]] = []
 
-    def send_request(self, request: BaseRequest) -> Iterator[Message]:
+    def send_request(self, request: Request) -> Iterator[Message]:
         """Record the request and replay the next scripted turn.
 
         Args:
@@ -105,9 +105,9 @@ class ScriptedController(Controller):
                 Defaults to none, which allows every call.
         """
         self.answers: List[Tuple[Decision, str | None]] = list(answers or [])
-        self.requests: List[BaseControllerRequest] = []
+        self.requests: List[ControllerRequest] = []
 
-    def request(self, request: BaseControllerRequest) -> BaseControllerResponse:
+    def request(self, request: ControllerRequest) -> ControllerResponse:
         """Record the request and answer it from the script.
 
         Args:
@@ -119,7 +119,7 @@ class ScriptedController(Controller):
         """
         self.requests.append(request)
         if not isinstance(request, PermissionRequest):
-            return BaseControllerResponse()
+            return ControllerResponse()
         decision, note = self.answers.pop(0) if self.answers else (Decision.ALLOW, None)
         return PermissionResponse(decision=decision, message=note)
 

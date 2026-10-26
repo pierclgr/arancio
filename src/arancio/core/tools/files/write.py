@@ -4,10 +4,10 @@ from pathlib import Path
 from typing import Type
 
 from arancio.core.parsers.tool_result.files.write import WriteFileToolResultParser
-from arancio.core.tools.base import BaseTool
+from arancio.core.tools.base import Tool
 
 
-class WriteFileTool(BaseTool):
+class WriteFileTool(Tool):
     """Create a new file or overwrite an existing one on disk.
 
     Existing files are protected by a read-first guard: the tool refuses to

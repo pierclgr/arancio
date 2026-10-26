@@ -2,7 +2,7 @@
 
 from typing import Dict, FrozenSet, Type
 
-from arancio.commands.base import BaseCommand
+from arancio.commands.base import Command
 from arancio.commands.cd import CdCommand
 from arancio.commands.clear import ClearCommand
 from arancio.commands.effort import EffortCommand
@@ -17,7 +17,7 @@ from arancio.commands.resume import ResumeCommand
 
 # register a command by adding an entry keyed by its name; aliases point at the
 # same class under an extra key
-COMMAND_REGISTRY: Dict[str, Type[BaseCommand]] = {
+COMMAND_REGISTRY: Dict[str, Type[Command]] = {
     HelloWorldCommand.name: HelloWorldCommand,
     ExitCommand.name: ExitCommand,
     "quit": ExitCommand,
@@ -38,6 +38,6 @@ COMMAND_REGISTRY: Dict[str, Type[BaseCommand]] = {
 # (before it runs, since the chat it belongs to is about to be replaced) and
 # whether anything is written at all (nothing is, while that chat has no log yet).
 # keyed by class, so the "quit" and "new" aliases are covered too
-SESSION_DISCARDING_COMMANDS: FrozenSet[Type[BaseCommand]] = frozenset(
+SESSION_DISCARDING_COMMANDS: FrozenSet[Type[Command]] = frozenset(
     {ExitCommand, ClearCommand, ForkCommand, ResumeCommand}
 )

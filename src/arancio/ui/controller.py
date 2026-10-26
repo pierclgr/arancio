@@ -9,12 +9,12 @@ import threading
 
 from arancio.core.controllers.base import Controller
 from arancio.core.controllers.requests import (
-    BaseControllerRequest,
     ChatGPTLoginRequest,
+    ControllerRequest,
     PermissionRequest,
 )
 from arancio.core.controllers.responses import (
-    BaseControllerResponse,
+    ControllerResponse,
     Decision,
     PermissionResponse,
 )
@@ -54,7 +54,7 @@ class UIController(Controller):
             raise ValueError("No app attached to the controller.")
         return self.app
 
-    def request(self, request: BaseControllerRequest) -> BaseControllerResponse:
+    def request(self, request: ControllerRequest) -> ControllerResponse:
         """Dispatch a request to the app and block until the user answers.
 
         Args:
@@ -79,7 +79,7 @@ class UIController(Controller):
                 request.verification_url,
                 request.user_code,
             )
-            return BaseControllerResponse()
+            return ControllerResponse()
         raise TypeError(f"Unsupported request type: {type(request).__name__}")
 
     def _ask(self, question: str, answers: list[str]) -> str:

@@ -14,13 +14,13 @@ from arancio.core.constants.path import (
 from arancio.core.hooks.base import Hook
 from arancio.core.hooks.manager import HookManager
 from arancio.core.messages import Message, ToolResultMessage
-from arancio.core.parsers.tool_result.base import BaseToolResultParser
+from arancio.core.parsers.tool_result.base import ToolResultParser
 from arancio.core.tools.schema import ToolSchema
 from arancio.core.tools.session import ToolSession, shared_session
 from arancio.core.utils.naming import camel_to_snake
 
 
-class BaseTool(ABC):
+class Tool(ABC):
     """Base class for runnable tools exposed to LLM clients.
 
     Subclasses implement :meth:`_call` to execute the tool and return
@@ -46,7 +46,7 @@ class BaseTool(ABC):
             :meth:`~arancio.core.tools.manager.ToolManager.create_tools`).
     """
 
-    _result_parser: Type[BaseToolResultParser] = BaseToolResultParser
+    _result_parser: Type[ToolResultParser] = ToolResultParser
     _session: ToolSession = shared_session
 
     def __init__(self, hook_manager: HookManager) -> None:

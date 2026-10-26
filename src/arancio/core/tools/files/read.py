@@ -6,10 +6,10 @@ from typing import Type
 from dynamic_markdown.types.files.base import DynamicMarkdownFile
 
 from arancio.core.parsers.tool_result.files.read import ReadFileToolResultParser
-from arancio.core.tools.base import BaseTool
+from arancio.core.tools.base import Tool
 
 
-class ReadFileTool(BaseTool):
+class ReadFileTool(Tool):
     """Read a text file from disk with ``cat -n``-style line numbering.
 
     The tool reads a UTF-8 file, optionally slicing it with ``offset`` and ``limit``,

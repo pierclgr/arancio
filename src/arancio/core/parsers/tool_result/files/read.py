@@ -1,9 +1,9 @@
 """Read file tool result parser."""
 
-from arancio.core.parsers.tool_result.base import BaseToolResultParser
+from arancio.core.parsers.tool_result.base import ToolResultParser
 
 
-class ReadFileToolResultParser(BaseToolResultParser):
+class ReadFileToolResultParser(ToolResultParser):
     """Parse read file tool output into a tool result message."""
 
     @classmethod

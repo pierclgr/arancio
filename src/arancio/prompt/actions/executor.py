@@ -10,7 +10,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Type
 
-from arancio.commands.base import BaseCommand
+from arancio.commands.base import Command
 from arancio.commands.registry import (
     COMMAND_REGISTRY,
     SESSION_DISCARDING_COMMANDS,
@@ -28,7 +28,7 @@ from arancio.core.tools.commands.shell import ShellCommandTool
 from arancio.core.tools.files.read import ReadFileTool
 from arancio.prompt.actions.constants import INJECTABLE_COMMAND_PARAMETERS
 from arancio.prompt.actions.types import (
-    BaseAction,
+    Action,
     CommandAction,
     PromptAction,
     ShellCommandAction,
@@ -89,7 +89,7 @@ class ActionExecutor:
             hook_manager=hook_manager
         )
 
-    def _writes_nothing(self, command: Type[BaseCommand] | None) -> bool:
+    def _writes_nothing(self, command: Type[Command] | None) -> bool:
         """Report whether this command must leave the log untouched.
 
         A command that ends or switches the chat adds nothing to the one it was
@@ -111,7 +111,7 @@ class ActionExecutor:
             and not self._session_manager.current.created_on_disk
         )
 
-    def execute(self, action: BaseAction) -> Iterator[Message]:
+    def execute(self, action: Action) -> Iterator[Message]:
         """Execute the action, producing its output messages.
 
         Args:
@@ -205,7 +205,7 @@ class ActionExecutor:
                 yield notice
 
     def _yield_error(
-        self, content: str, command: Type[BaseCommand] | None = None
+        self, content: str, command: Type[Command] | None = None
     ) -> Iterator[Message]:
         """Record an error the executor itself reports, then yield it.
 
@@ -228,7 +228,7 @@ class ActionExecutor:
         yield from self._yield_notices(save_error)
 
     def _record_command(
-        self, action: CommandAction, command: Type[BaseCommand]
+        self, action: CommandAction, command: Type[Command]
     ) -> ErrorMessage | None:
         """Record the typed command line, unless the command writes nothing.
 

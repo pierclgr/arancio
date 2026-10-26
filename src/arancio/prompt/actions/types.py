@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-class BaseAction(ABC):
+class Action(ABC):
     """Base class for a resolved decision about how to handle a prompt.
 
     :class:`arancio.prompt.manager.PromptManager` turns a raw prompt into a
@@ -16,7 +16,7 @@ class BaseAction(ABC):
 
 
 @dataclass
-class CommandAction(BaseAction):
+class CommandAction(Action):
     """Run the named slash command with its parsed arguments.
 
     Attributes:
@@ -31,7 +31,7 @@ class CommandAction(BaseAction):
 
 
 @dataclass
-class ShellCommandAction(BaseAction):
+class ShellCommandAction(Action):
     """Run user-provided text as a shell command.
 
     Attributes:
@@ -47,7 +47,7 @@ class ShellCommandAction(BaseAction):
 
 
 @dataclass
-class PromptAction(BaseAction):
+class PromptAction(Action):
     """Send the raw prompt text to the model.
 
     Attributes:

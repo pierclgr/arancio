@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import ClassVar, Iterable, Iterator
 
-from arancio.core.tools.base import BaseTool
+from arancio.core.tools.base import Tool
 from arancio.core.tools.commands.shell import ShellCommandTool
 from arancio.core.tools.files.edit import EditFileTool
 from arancio.core.tools.files.read import ReadFileTool
@@ -97,7 +97,7 @@ class PermissionCategory(metaclass=_PermissionCategoryMeta):
     EXECUTE: ClassVar["PermissionCategory"]
     PLUGIN: ClassVar["PermissionCategory"]
 
-    def __init__(self, name: str, tools: Iterable[type[BaseTool]] = ()) -> None:
+    def __init__(self, name: str, tools: Iterable[type[Tool]] = ()) -> None:
         """Create and register a new category.
 
         Args:
@@ -112,7 +112,7 @@ class PermissionCategory(metaclass=_PermissionCategoryMeta):
         if key in PermissionCategory._registry:
             raise ValueError(f"Permission category {name!r} already exists.")
         self.name = name
-        self.tools: set[type[BaseTool]] = set(tools)
+        self.tools: set[type[Tool]] = set(tools)
         PermissionCategory._registry[key] = self
 
     def __repr__(self) -> str:
@@ -123,7 +123,7 @@ class PermissionCategory(metaclass=_PermissionCategoryMeta):
         """
         return f"PermissionCategory({self.name!r})"
 
-    def add_tool(self, tool_cls: type[BaseTool]) -> None:
+    def add_tool(self, tool_cls: type[Tool]) -> None:
         """Add a tool class to this category.
 
         Args:
@@ -161,7 +161,7 @@ class PermissionCategory(metaclass=_PermissionCategoryMeta):
         """Return the category governing the tool with the given class name.
 
         Args:
-            tool_name: the tool's class name (``BaseTool.name``).
+            tool_name: the tool's class name (``Tool.name``).
 
         Returns:
             The matching category, or ``None`` when no category governs the

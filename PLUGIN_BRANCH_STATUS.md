@@ -7,7 +7,7 @@ the implemented behavior and the later changes, verified with 477 tests.
 ## Implemented behavior
 
 - **Hooks**: a `Hook` enum with 15 dispatch points and a `HookManager`.
-  The app lifecycle, agent loop, `BaseTool.call` and `PermissionManager.validate`
+  The app lifecycle, agent loop, `Tool.call` and `PermissionManager.validate`
   fire them.
 - **Plugins**: plain `@plugin(...)` classes in `~/.arancio/plugins/<folder>/plugin.py`.
   Each decorated class is independent; one file can hold several. Metadata is in
@@ -27,7 +27,7 @@ the implemented behavior and the later changes, verified with 477 tests.
 
 ## Shared context update (committed in `e1599fd`)
 
-1. `BaseTool._load_prompt`: `PluginTool` now calls `BaseTool.__init__`. It
+1. `Tool._load_prompt`: `PluginTool` now calls `Tool.__init__`. It
    only overrides how the description and schema are loaded.
 2. **Shared context dict**: every hook handler gets one argument,
    `HookManager.context`. `run()` writes the event data into it first.

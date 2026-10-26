@@ -5,10 +5,10 @@ from pathlib import Path
 from typing import Type
 
 from arancio.core.parsers.tool_result.files.edit import EditFileToolResultParser
-from arancio.core.tools.base import BaseTool
+from arancio.core.tools.base import Tool
 
 
-class EditFileTool(BaseTool):
+class EditFileTool(Tool):
     """Replace an exact substring in an existing UTF-8 file.
 
     The tool refuses to edit a file that was not read in this session or whose mtime has

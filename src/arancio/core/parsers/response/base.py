@@ -9,7 +9,7 @@ from arancio.core.messages import Message
 from arancio.core.parsers.base import Parser
 
 
-class BaseResponseParser(Parser, ABC):
+class ResponseParser(Parser, ABC):
     """Parse provider responses into normalized message streams."""
 
     @classmethod

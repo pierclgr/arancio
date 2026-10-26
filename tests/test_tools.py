@@ -263,7 +263,7 @@ def test_shell_truncates_oversized_output() -> None:
 
 
 def test_a_failing_tool_call_becomes_a_tool_error_message() -> None:
-    """``BaseTool.call`` never raises: the model gets the failure as a result."""
+    """``Tool.call`` never raises: the model gets the failure as a result."""
     message, hook_messages = ReadFileTool(hook_manager=HookManager()).call(
         call_id="c1", file_path="relative.txt"
     )
@@ -516,7 +516,7 @@ def test_fetch_rejects_a_non_http_url() -> None:
 def test_fetch_web_tool_forwards_its_hook_manager_to_base_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The hook manager threads through to the shared ``BaseTool.call`` dispatch."""
+    """The hook manager threads through to the shared ``Tool.call`` dispatch."""
     _stub_trafilatura(monkeypatch, "page body")
     client = ScriptedClient([[AssistantMessage(content="the answer")]])
     hooks = HookManager()

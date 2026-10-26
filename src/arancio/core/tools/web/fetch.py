@@ -6,11 +6,11 @@ from typing import Type
 import trafilatura
 from trafilatura.settings import use_config
 
-from arancio.core.clients.base import BaseClient
+from arancio.core.clients.base import Client
 from arancio.core.hooks.manager import HookManager
 from arancio.core.messages import AssistantMessage, ChunkMessage, UserMessage
 from arancio.core.parsers.tool_result.web.fetch import FetchWebToolResultParser
-from arancio.core.tools.base import BaseTool
+from arancio.core.tools.base import Tool
 
 _SYSTEM_PROMPT = (
     "You extract and summarize information from a single fetched web page. "
@@ -21,7 +21,7 @@ _SYSTEM_PROMPT = (
 )
 
 
-class FetchWebTool(BaseTool):
+class FetchWebTool(Tool):
     """Fetch a web page and answer a query against it with an injected LLM client.
 
     The tool downloads the URL and extracts its main readable content with trafilatura,
@@ -37,7 +37,7 @@ class FetchWebTool(BaseTool):
     _max_content_chars: int = 50_000
     _result_parser: Type[FetchWebToolResultParser] = FetchWebToolResultParser
 
-    def __init__(self, client: BaseClient, hook_manager: HookManager) -> None:
+    def __init__(self, client: Client, hook_manager: HookManager) -> None:
         """Initialize the tool with an externally built summarization client.
 
         Args:
@@ -45,13 +45,13 @@ class FetchWebTool(BaseTool):
                 page content. Built and configured by the caller so
                 summarization can run on a cheap model separate from the
                 agent's client.
-            hook_manager: forwarded to :meth:`BaseTool.__init__`.
+            hook_manager: forwarded to :meth:`Tool.__init__`.
         """
         super().__init__(hook_manager=hook_manager)
         self._client = client
 
     @property
-    def client(self) -> BaseClient:
+    def client(self) -> Client:
         """Return the summarization client.
 
         Returns:
@@ -60,7 +60,7 @@ class FetchWebTool(BaseTool):
         return self._client
 
     @client.setter
-    def client(self, value: BaseClient) -> None:
+    def client(self, value: Client) -> None:
         """Set the summarization client.
 
         Args:

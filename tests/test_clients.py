@@ -15,7 +15,7 @@ from fakes import ScriptedController
 
 import arancio.core.clients.litellm as litellm_module
 from arancio.core.builders.payload.litellm import LiteLLMPayloadBuilder
-from arancio.core.clients.base import BaseClient
+from arancio.core.clients.base import Client
 from arancio.core.clients.litellm import LiteLLMClient
 from arancio.core.controllers.requests import ChatGPTLoginRequest
 from arancio.core.messages import (
@@ -30,11 +30,11 @@ from arancio.core.messages import (
     UserMessage,
 )
 from arancio.core.parsers.response.litellm import LiteLLMResponseParser
-from arancio.core.requests import BaseRequest
+from arancio.core.requests import Request
 from arancio.core.tools.schema import ToolSchema
 
 
-def _request(**kwargs: Any) -> BaseRequest:
+def _request(**kwargs: Any) -> Request:
     """Build a request with everything optional left unset.
 
     Args:
@@ -43,7 +43,7 @@ def _request(**kwargs: Any) -> BaseRequest:
     Returns:
         A frozen request for the payload builder.
     """
-    return BaseRequest(model_id="openai/gpt-4o", **kwargs)
+    return Request(model_id="openai/gpt-4o", **kwargs)
 
 
 def test_a_minimal_payload_carries_nothing_it_was_not_given() -> None:
@@ -311,14 +311,14 @@ def test_a_device_code_login_is_shown_through_the_controller(
     assert request.user_code == "ABCD-1234"
 
 
-class _RestrictedClient(BaseClient):
+class _RestrictedClient(Client):
     """A client that accepts only one model and one thinking level."""
 
     _model_options = ["only/model"]
     _thinking_options = ["low"]
     _default_model_id = "unvalidated/default"
 
-    def send_request(self, request: BaseRequest) -> Iterator[Message]:
+    def send_request(self, request: Request) -> Iterator[Message]:
         """Answer nothing; this client exists to test option validation.
 
         Args:

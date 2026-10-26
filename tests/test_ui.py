@@ -9,8 +9,8 @@ import pytest
 from fakes import FakeApp
 
 from arancio.core.controllers.requests import (
-    BaseControllerRequest,
     ChatGPTLoginRequest,
+    ControllerRequest,
     PermissionRequest,
 )
 from arancio.core.controllers.responses import Decision, PermissionResponse
@@ -122,7 +122,7 @@ def test_an_unsupported_request_is_refused() -> None:
     controller.app = FakeApp()
 
     with pytest.raises(TypeError):
-        controller.request(BaseControllerRequest())
+        controller.request(ControllerRequest())
 
 
 @pytest.mark.parametrize(

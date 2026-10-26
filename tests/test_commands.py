@@ -14,7 +14,7 @@ import yaml
 from fakes import RecordingApp, ScriptedClient
 
 import arancio.storage.manager as storage_module
-from arancio.commands.base import BaseCommand
+from arancio.commands.base import Command
 from arancio.commands.cd import CdCommand
 from arancio.commands.clear import ClearCommand
 from arancio.commands.effort import EffortCommand
@@ -97,9 +97,7 @@ def test_every_registered_name_resolves_to_a_command() -> None:
     """The registry is the only lookup, so a broken entry breaks the command."""
     assert COMMAND_REGISTRY["quit"] is ExitCommand
     assert COMMAND_REGISTRY["new"] is ClearCommand
-    assert all(
-        issubclass(command, BaseCommand) for command in COMMAND_REGISTRY.values()
-    )
+    assert all(issubclass(command, Command) for command in COMMAND_REGISTRY.values())
     assert {command.name for command in COMMAND_REGISTRY.values()} <= set(
         COMMAND_REGISTRY
     )
