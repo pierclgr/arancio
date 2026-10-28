@@ -32,8 +32,9 @@ errors; `pre-push` runs the docstring check and the full test suite.
 ## Runtime working directory (important)
 
 At runtime tools do **not** read their prompts from the repo. They read from the arancio
-working directory `~/.arancio/` (base paths in `core/constants/path.py`, LiteLLM paths
-in `storage/constants.py`):
+working directory `~/.arancio/` (harness paths remain in `core/constants/path.py`).
+Storage uses `ARANCIO_DEFAULT_DIR` as its root;
+startup, Settings and Sessions caller migration is deferred:
 
 - `~/.arancio/harness/tools/<snake_tool_name>/{description.md,input_schema.yml}` — each
   tool's description and JSON input schema, loaded from disk by `Tool.__init__`.
@@ -42,11 +43,11 @@ in `storage/constants.py`):
   markdown once, and caches the text; `build()` (called once per agent turn) returns
   that cached text with the current date appended. Runtime context that must stay
   fresh belongs in `build()`, **not** in a `<script>` tag in the markdown — the file is
-  parsed once, so a date computed there would freeze at startup. Settings use the
-  dedicated `StorageManager.save_settings`.
+  parsed once, so a date computed there would freeze at startup.
 - `~/.arancio/settings.yml` — persisted `Settings`.
-- `~/.arancio/litellm/` — LiteLLM's config dir is symlinked here (LiteLLM hardcodes
-  `~/.config/litellm`; `StorageManager.bind_litellm_login_dir` redirects it).
+- `~/.arancio/litellm/` — the intended destination for LiteLLM login data. Future
+  startup wiring will supply the paths to Storage's generic `move_directory` and
+  `create_symlink`; the provider-specific Storage helper has been removed.
 - `~/.arancio/sessions/<creation-cwd>/<year>/<month>/<day>/<id>.jsonl` — one
   append-only chat session per file. The readable creation-CWD directory has a hash suffix
   to avoid collisions; session IDs are UUID4 hex strings. There is no persisted registry:
@@ -62,27 +63,24 @@ editing `harness/` in the repo has no effect on a real run until the files are p
 under `~/.arancio/harness/`. **Tests** must sidestep this by repointing
 `tools_base.TOOLS_HARNESS_PATH` and
 `system_prompt_builder.SYSTEM_PROMPT_HARNESS_PATH` at the repo's `harness/` before any
-test imports, or they read the real home directory. `tests/conftest.py` does this at
-import time, so the constants are already redirected before any test builds a tool —
-`Tool.__init__` reads the path at construction and raises when the directory is
-missing.
+test imports, or they read the real home directory. The previous suite's
+`tests/conftest.py` did this at import time. Test sources were removed before the
+Storage refactor and are not restored in this step. `Tool.__init__` reads the path
+at construction and raises when the directory is missing.
 
-**A `StorageManager`'s `root` does not sandbox everything it writes.** Four absolute
-module constants are read at call time and ignore it entirely, so anything exercising
-those paths must repoint the constant on the *importing* module — patching
-`core.constants.path` or `settings.constants` is too late, the name is already bound:
+**Storage's root anchors paths; it is not a sandbox.** Every Storage operation
+anchors relative paths to the application root; explicit absolute paths are accepted
+as supplied. No Storage method substitutes a global settings or login path.
+Other modules still have their own home-directory defaults. Future tests must
+redirect these on the *importing* module or pass explicit temporary paths:
 
 | Constant, as imported | Read by | What an unpatched test does |
 | --- | --- | --- |
-| `storage.manager.ARANCIO_SETTINGS_FILE` | `save_settings` / `load_settings` | overwrites the real `~/.arancio/settings.yml` |
-| `storage.manager.ARANCIO_LITELLM_DIR` | `bind_litellm_login_dir` | moves the real `~/.config/litellm` — the user's ChatGPT login — and replaces it with a symlink |
 | `core.plugins.manager.PLUGINS_PATH` | `PluginManager.__init__` | imports and runs the user's real plugins |
 | `sessions.manager` `root` default | `SessionManager.__init__` | scans and writes the user's real session history |
 
-`conftest.py` redirects the first three in an **autouse** fixture so no test can opt out
-by forgetting; the fourth is covered by always passing `root=tmp_path`. The plugins one
-never *writes*, which is why it is not a `StorageManager` concern at all — it reads
-`~/.arancio/` exactly like `tools_base.TOOLS_HARNESS_PATH` does.
+Storage tests should repoint `storage.manager.ARANCIO_DEFAULT_DIR` and use temporary
+source/target paths. Plugin loading remains a separate I/O boundary, outside Storage.
 
 ## Architecture
 
@@ -515,16 +513,34 @@ dataclass field) with `to_dict`/`from_dict`/`default`. The model is stored as se
 mutating anything, and `ActionExecutor._execute_prompt` checks `model_id` before sending a
 message, so both surface as an `ErrorMessage` instead of a crash.
 
-`StorageManager.load_settings()` (`storage/manager.py`) does *file-level* I/O only: it
-returns `(dict | None, list[Message])`. A missing `settings.yml` builds `Settings.default()`
-and writes it to disk (first run), but returns the dictionary as `None` and reports one
-`WarningMessage` — there is no file content to hand off, and deciding what "missing" should
-fall back to is not this method's call. A file that exists but is empty, has a YAML syntax
-error, or whose top level isn't a mapping likewise returns `None` with one `ErrorMessage`,
-leaving the file untouched. Otherwise the parsed dict is returned as-is, unvalidated.
-`SettingsManager.load()` (`settings/manager.py`) is the one that turns that `None` into
-`Settings.default()`; when the dict is not `None` it instead calls
-`SettingsValidator.validate(data)` (`settings/validator.py`), which does *field-level*
+`StorageManager` (`storage/manager.py`) is now generic file I/O. It uses the fixed
+`ARANCIO_DEFAULT_DIR` root and exposes instance operations for text, lines, byte chunks,
+sizes, discovery, writes, directory moves and symlinks. Private `__root`, `__resolve_path`
+and static `__validate_directory` use double-leading underscores. `READ_CHUNK_SIZE` lives
+in `storage/constants.py` and bounds byte reads at 64 KiB. Consumers must close
+an abandoned byte iterator. Every write, including `make_dir`, returns None;
+failures propagate as exceptions. File-size queries and file removal raise when the
+file is missing.
+
+`move_directory(source, target)` validates source, moves its direct entries with
+the existing `shutil.move` behavior and removes the emptied source. It creates or
+reuses target. `create_symlink(source, target)` creates the link **at source**,
+pointing to target. It validates target before checking source. An existing source
+link resolving to target is a no-op; other occupied sources raise FileExistsError.
+The shared validator rejects symlinks with ValueError, missing paths with
+FileNotFoundError and non-directories with NotADirectoryError before writes.
+
+**Caller migration is deferred.** `load_settings`, `save_settings` and
+`bind_litellm_login_dir` have been removed from Storage, but SettingsManager and
+startup still reference them. SessionRegistry still consumes `make_dir`'s old return
+value, and SessionChecksum still uses direct I/O. These callers must be migrated in their own architecture
+steps. No compatibility wrappers or tests are added in the Storage step.
+
+The settings policy to preserve during that later migration belongs entirely in
+SettingsManager: a missing file is created with defaults and reported as a warning;
+empty, malformed or non-mapping YAML is reported as an error and left unchanged.
+SettingsManager will parse `read_text` results and serialize values for `write_file`.
+`SettingsValidator.validate(data)` (`settings/validator.py`) retains *field-level*
 validation: a missing field silently takes its default, an invalid field falls back to its
 default and is reported as a `WarningMessage`, or an `ErrorMessage` when the field's default
 is `None`. `provider`/`model_name` are the only fields whose default is `None`, so `null` is
@@ -785,6 +801,8 @@ path/mtime state so a resumed session restores its read-first guard only for unc
 - **Comments**: start lowercase, no trailing period; only comment non-obvious slices.
 - **Files**: `snake_case.py`; Markdown `UPPER_SNAKE_CASE.md`. Source in `src/`, tests in `tests/`.
 - **Exceptions**: prefer built-ins (`ValueError`, `TypeError`, …); do not define custom exception classes.
+- **Storage internals**: double-leading underscores for private fields and methods;
+  constants belong in `storage/constants.py`. Callers own paths and serialization.
 - **New provider / tool / command**: follow the existing seams — subclass the relevant
   `base.py`, and for a tool also add its `harness/tools/<snake_name>/` prompt pair; for a
   command register it in `commands/registry.py`, and subclass
@@ -816,9 +834,10 @@ Only `pytest` is available — no `pytest-mock`, `pytest-asyncio` or coverage pl
   and removes synthetic plugin modules afterward so helpers cannot leak between tests.
   Tests describe the current registration and runtime contract, not removed internals.
 - **Never let a test reach the real home directory.** See the table under *Runtime
-  working directory*. `conftest.py`'s autouse fixtures cover it; a test that builds its
-  own `StorageManager`/`SessionManager` still has to pass `root=tmp_path` and an explicit
-  `litellm_config_dir`.
+  working directory*. When tests are restored, rebuild the isolation fixtures. A test
+  constructing `StorageManager` must repoint `storage.manager.ARANCIO_DEFAULT_DIR`;
+  `SessionManager` must receive `root=tmp_path`, and generic directory move/link calls
+  must also use explicit temporary source and target paths.
 - **`shared_session` is a process-wide singleton.** An autouse fixture clears it around
   every test; a test asserting on it in isolation should inject its own `ToolSession()`.
 - **Docstrings are enforced on `tests/` too.** A one-line docstring is enough for a test

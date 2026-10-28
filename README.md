@@ -47,7 +47,7 @@ src/arancio/
   prompt/       Prompt parsing and user-action execution
   sessions/     Session creation, persistence, validation, and resume support
   settings/     Runtime settings and validation
-  storage/      Local Arancio directory and configuration management
+  storage/      Generic filesystem operations under the application data root
 harness/        Source system prompt and tool descriptions/schemas
 tests/          Unit and integration tests
 hooks/          Git hooks for linting, formatting, docstrings, and tests
