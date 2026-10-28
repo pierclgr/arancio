@@ -36,7 +36,7 @@ def main() -> None:
     controller = UIController()
     hook_manager = HookManager()
     plugin_manager = PluginManager(hook_manager=hook_manager)
-    plugin_messages = plugin_manager.load()
+    plugin_messages = plugin_manager.load_plugins()
     client = LiteLLMClient(stream=True, controller=controller)
     summary_client = LiteLLMClient(stream=False, controller=controller)
     # the summary client never thinks (setters take None; the constructor ignores it)

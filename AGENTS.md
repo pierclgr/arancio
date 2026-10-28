@@ -91,7 +91,7 @@ provider file (e.g. `litellm.py`); adding a provider means a new `Client` subcla
 with its own builder/parser trio, not touching the core loop.
 
 **Wiring** (`ui/__main__.py:main`) — build order matters: `StorageManager` →
-`UIController` + `HookManager` → `PluginManager.load()` → two `LiteLLMClient`s (main
+`UIController` + `HookManager` → `PluginManager.load_plugins()` → two `LiteLLMClient`s (main
 *streaming*, summary *non-streaming*, thinking
 disabled) → `ToolManager` → `PermissionManager` → `Agent` → `SettingsManager.load()`
 (neither `PermissionManager` nor `Agent` receives the `SessionManager`: core does not save)
@@ -188,12 +188,11 @@ wraps success/exception into a `ToolResultMessage`/`ToolErrorMessage` through th
 `_result_parser`. It returns `(result, hook_messages)`, keeping plugin errors separate
 from the tool outcome. The tool's **name is its class name**, and its description/input schema
 are loaded from the harness dir (see runtime section); descriptions are dynamic-markdown
-(`<field>`, `<include>`, `<script>` tags expand against the tool instance). The module-level
-`ToolSession` singleton `shared_session` records which files were read so write/edit tools
-can refuse blind overwrites of unread or externally-modified files. Every tool reaches it
-through the `Tool._session` **class** attribute, so the guard outlives the tool
-instances that `ToolManager.create_tools` rebuilds whenever permissions change; there is
-no per-instance override. Families: `files/` (read, write, edit),
+(`<field>`, `<include>`, `<script>` tags expand against the tool instance). A
+`ToolSession` records which files were read so write/edit tools can refuse blind
+overwrites of unread or externally-modified files. Tools receive it as `tool_session`
+and store it as `_tool_session`. The same instance survives the tool rebuilds performed
+by `ToolManager.refresh_tools` whenever permissions change. Families: `files/` (read, write, edit),
 `commands/` (shell), `web/` (search, fetch — fetch takes an
 injected summary client).
 
@@ -204,13 +203,13 @@ It is **not** an `enum.Enum` — a category's tool set has to stay open for a pl
 to join it, or for a wholly new category to appear, after the built-ins already exist,
 which a closed `Enum` cannot do. A small `_PermissionCategoryMeta` metaclass gives it the
 same class-level surface an `Enum` would (`for category in PermissionCategory`,
-`PermissionCategory[name]`, `PermissionCategory.__members__`), backed by a `_registry`
+`PermissionCategory[name]`, `PermissionCategory.__members__`), backed by a `_REGISTRY`
 dict keyed by uppercased name so lookup stays case-insensitive; `get(name)`/
 `get_or_create(name)` are the non-raising, idempotent ways to read or register a category,
 and `add_tool(tool_cls)` grows its mutable `.tools` set (not names → still refactor-safe).
 `PermissionLevel` is NONE, ASK or AUTO. The grants dict always covers every *currently
 registered* category — a category not granted is present at `NONE`, never absent — which
-is why `PluginManager.load()` (see **Plugins**) has to run, and does run, before any
+is why `PluginManager.load_plugins()` (see **Plugins**) has to run, and does run, before any
 `PermissionManager`/`SettingsManager` is built: both seed their default grants by
 iterating `PermissionCategory`, so a category registered afterward would be invisible to
 them. `PermissionManager` owns the
@@ -235,34 +234,32 @@ every dispatch point: `startup`/`shutdown`, `agent_start`/`agent_end`, `turn_sta
 (`core/hooks/manager.py`) owns its own registrations — there is no global singleton, so
 two managers never share handlers. `register(hook, handler)` appends a handler for a hook;
 registering the same callable twice adds two invocations. Every handler takes **one**
-argument: the manager's public `context` dict. `run(hook, **event)` first writes the
+argument: the manager's public `context` dict. `run_hook(hook, **event)` first writes the
 event's own data into `context` under those keys (object identity kept), then calls every
 handler registered for that hook synchronously, on the caller's thread, in registration
 order, passing the **same** `context` object to each — never a copy. So a handler changes
 a value by assigning a key (`context["system_prompt"] = ...`), and the next handler and
 the caller both see it. Event keys are **not** erased after dispatch: they stay until a
-later `run` overwrites them, so a handler should read only the keys its own hook sets
+later `run_hook` overwrites them, so a handler should read only the keys its own hook sets
 (a `turn_start` handler still finds the last tool call's `result`). Besides the event
 keys, core fills the permanent keys **by itself**, with no outside wiring: each core
 component adds itself to the context of the hook manager it is built with —
-`HookManager.__init__` starts it as `{"hook_manager": self}`, `ToolManager` adds
-`summary_client` (its `web_summary_client`), `PermissionManager` adds
+`HookManager.__init__` starts it as `{"hook_manager": self}`, `PermissionManager` adds
 `permission_manager`, and `Agent` adds `agent` and `client`. The clients never receive
 a hook manager, so the object holding each one registers it. So any code that builds the
 core objects with one shared hook manager gets a full context, whatever frontend (if
 any) drives them. If two objects of the same kind share one hook manager, the last one
 built owns the key. Returned `Message` objects are collected into a list in dispatch order; other return
 values are ignored. An exception raised by an ordinary handler propagates immediately,
-so handlers after it do not run. Dispatch iterates a snapshot of the handler list taken when `run` starts, so
-a handler that registers another handler mid-dispatch only affects the next call to `run`.
+so handlers after it do not run. Dispatch iterates a snapshot of the handler list taken when `run_hook` starts, so
+a handler that registers another handler mid-dispatch only affects the next call to `run_hook`.
 A hook with no registered handlers returns an empty list. Both `core/hooks/__init__.py` and every
 sibling `core` package's `__init__.py` are empty; a caller imports `Hook` from
 `core.hooks.base` and `HookManager` from `core.hooks.manager` directly, the same as any
 other two-file `base.py`/`manager.py` package (`core/permissions/`, `core/controllers/`).
 
 Threading follows the same explicit-constructor-injection pattern as
-`controller`/`tool_manager` — never the class-attribute singleton `Tool._session`
-uses, since two callers must be able to hold independent hook managers — stored as
+`tool_session`, since two callers must be able to hold independent hook managers, stored as
 `self._hook_manager`. Every constructor that takes `hook_manager` (`Agent`,
 `PermissionManager`, `ToolManager`, `Tool`/`FetchWebTool`, `ActionExecutor`) requires
 it, with no `None` default: production code (`ui/__main__.py`) never has a reason to omit
@@ -351,7 +348,7 @@ wants every failure registers once for `error` and reads `source`; one that only
 tool failures filters on `context["source"] == "tool"`. The names in parentheses in the
 list above are the event keys each dispatch writes into `context`.
 
-**Plugins** (`core/plugins/`) — `PluginManager.load()` imports `plugin.py` from
+**Plugins** (`core/plugins/`) — `PluginManager.load_plugins()` imports `plugin.py` from
 immediate folders under `~/.arancio/plugins/`, sorted by folder name. Hidden and
 underscore-prefixed folders and folders without that entry file are skipped. The root
 is the module constant `manager.PLUGINS_PATH`, read by `PluginManager.__init__`, and
@@ -402,9 +399,9 @@ mixing helpers from different folders. `PLUGIN_PACKAGE_ROOT` lives in
 plugins. An unexpected import failure discards all declarations and queued diagnostics
 added during that import, removes newly cached plugin modules (including helpers), and
 reports the failure; unrelated entries still load. Cached entry modules and constructed
-instances are reused on subsequent `load()` calls. This is startup loading, not live reload.
+instances are reused on subsequent `load_plugins()` calls. This is startup loading, not live reload.
 
-`PluginManager.load() -> list[Message]` drains the temporary decorator diagnostic buffer
+`PluginManager.load_plugins() -> list[Message]` drains the temporary decorator diagnostic buffer
 and returns startup errors and warnings through the normal UI path. It runs before
 permission and settings initialization, so plugin tool categories exist when default
 grants and the tool catalog are built. Instances receive no injected metadata, paths

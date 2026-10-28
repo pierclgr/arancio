@@ -4,10 +4,11 @@
 class ToolSession:
     """Track files seen by read tools so write tools can refuse blind overwrites.
 
-    A single :class:`ToolSession` instance is shared across tools in a run, so a write
-    tool can detect that an existing file was never read this session or that its mtime
-    drifted since it was read. The session does not persist across processes; each agent
-    run starts (or resets) it.
+    One :class:`ToolSession` instance is injected into every tool of the active
+    conversation, so a write tool can detect that an existing file was never read this
+    session or that its mtime drifted since it was read. The same instance survives tool
+    reconstruction. The session does not persist across processes; the caller clears it
+    when a conversation is replaced.
     """
 
     def __init__(self) -> None:
@@ -63,10 +64,7 @@ class ToolSession:
     def clear(self) -> None:
         """Drop all recorded reads.
 
-        A new or replaced chat starts from a clean slate, since the module-level
-        :data:`shared_session` lives for the whole process.
+        A new or replaced chat starts from a clean slate, since the same instance lives
+        as long as the tools holding it.
         """
         self._reads.clear()
-
-
-shared_session: ToolSession = ToolSession()

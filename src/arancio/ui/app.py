@@ -132,7 +132,7 @@ class App(TextualApp):
         # the user scrolls up
         self.query_one("#log", VerticalScroll).anchor()
         self.populate_log()
-        messages = self._startup_messages + self._hook_manager.run(Hook.STARTUP)
+        messages = self._startup_messages + self._hook_manager.run_hook(Hook.STARTUP)
         for message in messages:
             self._mount(self._render(message))
 
@@ -141,7 +141,7 @@ class App(TextualApp):
 
         Widgets are already unmounted, so returned messages are not displayed.
         """
-        self._hook_manager.run(Hook.SHUTDOWN)
+        self._hook_manager.run_hook(Hook.SHUTDOWN)
 
     def populate_log(self) -> None:
         """Render the active session's visible messages into the log."""

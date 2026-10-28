@@ -1,8 +1,13 @@
-"""Central permission registry filtering and gating the agent's tool use."""
+"""Permission grants and the resolution of each tool call against them."""
 
-from arancio.core.controllers.base import Controller
-from arancio.core.controllers.requests import PermissionRequest
-from arancio.core.controllers.responses import Decision
+from collections.abc import Generator
+
+from arancio.core.events import (
+    CoreAnswer,
+    Decision,
+    PermissionRequest,
+    PermissionResponse,
+)
 from arancio.core.hooks.base import Hook
 from arancio.core.hooks.manager import HookManager
 from arancio.core.messages import Message, ToolCallMessage
@@ -12,40 +17,29 @@ from arancio.core.permissions.types import (
     PermissionLevel,
     PermissionOutcome,
 )
-from arancio.core.tools.base import Tool
-from arancio.core.tools.manager import ToolManager
 
 
 class PermissionManager:
-    """Hold the agent's permissions, create its tools and gate tool calls.
+    """Hold the agent's permission grants and resolve each tool call.
 
     The manager maps every :class:`PermissionCategory` to its
-    :class:`PermissionLevel`, and owns a :class:`ToolManager` that builds the
-    tools for the granted categories. Tools whose category is at
-    :attr:`PermissionLevel.NONE` are never created; calls to permitted tools
-    are gated by their level.
+    :class:`PermissionLevel`. It builds no tools and contacts no frontend: an
+    ``ask`` grant yields a :class:`~arancio.core.events.PermissionRequest`
+    from :meth:`validate` and waits for the caller to send the answer.
 
     Attributes:
         _permissions: mapping of every category to its permission level.
-        _tool_manager: the tool manager that creates tools from the grants.
-        _controller: the controller used to ask the user about ``ask`` grants.
         _hook_manager: the hook manager :meth:`validate` dispatches through.
     """
 
     def __init__(
         self,
-        tool_manager: ToolManager,
-        controller: Controller,
         hook_manager: HookManager,
         permissions: dict[PermissionCategory, PermissionLevel] | None = None,
     ) -> None:
-        """Initialize the manager with a tool manager, controller and grants.
+        """Initialize the manager with its hook manager and grants.
 
         Args:
-            tool_manager: the tool manager used to create the agent's tools and
-                to resolve which tools are available.
-            controller: the controller through which the manager asks the user
-                to approve or deny ``ask`` grants.
             hook_manager: the hook manager :meth:`validate` dispatches
                 through; this manager adds itself to its context as
                 ``permission_manager``.
@@ -58,8 +52,6 @@ class PermissionManager:
                 category: PermissionLevel.ASK for category in PermissionCategory
             }
         self._permissions: dict[PermissionCategory, PermissionLevel] = permissions
-        self._tool_manager: ToolManager = tool_manager
-        self._controller: Controller = controller
         self._hook_manager: HookManager = hook_manager
         self._hook_manager.context["permission_manager"] = self
 
@@ -90,7 +82,10 @@ class PermissionManager:
         Raises:
             ValueError: when the category is already granted.
         """
-        if self._permissions[category] is not PermissionLevel.NONE:
+        # a category created after construction (e.g. by a custom plugin)
+        # has no grant yet, so it counts as NONE
+        granted = self._permissions.get(category, PermissionLevel.NONE)
+        if granted is not PermissionLevel.NONE:
             raise ValueError(f"Permission already granted for category {category}.")
         self._permissions[category] = level
 
@@ -103,7 +98,8 @@ class PermissionManager:
         Raises:
             ValueError: when the category has no grant.
         """
-        if self._permissions[category] is PermissionLevel.NONE:
+        # a category created after construction has no grant to revoke
+        if self._permissions.get(category) in (None, PermissionLevel.NONE):
             raise ValueError(f"No permission granted for category {category}.")
         self._permissions[category] = PermissionLevel.NONE
 
@@ -130,50 +126,60 @@ class PermissionManager:
         self._permissions = permissions
 
     @property
-    def allowed_tools(self) -> list[Tool]:
-        """Create the tools the agent may access from the current grants.
+    def allowed_categories(self) -> set[PermissionCategory]:
+        """Return the categories whose tools may be built.
 
         Returns:
-            Tool instances for the granted categories, built by the tool
-            manager.
+            Every category granted at a level other than
+            :attr:`PermissionLevel.NONE`.
         """
-        return self._tool_manager.create_tools(self._permissions)
+        return {
+            category
+            for category, level in self._permissions.items()
+            if level is not PermissionLevel.NONE
+        }
 
     def validate(
-        self, call: ToolCallMessage
-    ) -> tuple[PermissionDecision, list[Message]]:
+        self, call: ToolCallMessage, category: PermissionCategory | None
+    ) -> Generator[
+        PermissionRequest, CoreAnswer, tuple[PermissionDecision, list[Message]]
+    ]:
         """Decide whether a requested tool call may execute.
 
         Dispatches ``before_permission_check`` before resolving the call and
-        ``after_permission_check`` once resolved, exactly once each
-        regardless of which of :meth:`_resolve`'s outcomes is reached.
-        Allows ``auto`` grants without asking and asks the user through the
-        controller for ``ask`` grants. A call whose category is at
-        :attr:`PermissionLevel.NONE` (or maps to no category) resolves as
-        unavailable. The
-        controller's :class:`~arancio.core.controllers.responses.PermissionResponse`
-        either allows the call (optionally with a note for the model) or denies
-        it (optionally with a reason for the model).
+        ``after_permission_check`` once a decision exists, exactly once each
+        regardless of which of :meth:`_resolve`'s outcomes is reached. Use it
+        with ``yield from``: an ``ask`` grant yields a
+        :class:`~arancio.core.events.PermissionRequest` and resumes with the
+        caller's :class:`~arancio.core.events.PermissionResponse`. Closing the
+        generator while it waits runs no after hook and decides nothing.
 
         Args:
             call: the tool call the agent wants to execute.
+            category: the call's category from the tool catalog, or ``None``
+                when the tool is unknown.
 
         Returns:
             The :class:`~arancio.core.permissions.types.PermissionDecision`
-            resolving the call, and hook messages in dispatch order.
-            The caller runs the tool and turns the decision
-            into the messages the model sees.
+            resolving the call, and hook messages in dispatch order. The
+            caller runs the tool and turns the decision into the messages the
+            model sees.
+
+        Yields:
+            The permission request of an ``ask`` grant.
         """
-        messages = self._hook_manager.run(Hook.BEFORE_PERMISSION_CHECK, call=call)
-        decision = self._resolve(call)
+        messages = self._hook_manager.run_hook(Hook.BEFORE_PERMISSION_CHECK, call=call)
+        decision = yield from self._resolve(call, category)
         messages.extend(
-            self._hook_manager.run(
+            self._hook_manager.run_hook(
                 Hook.AFTER_PERMISSION_CHECK, call=call, decision=decision
             )
         )
         return decision, messages
 
-    def _resolve(self, call: ToolCallMessage) -> PermissionDecision:
+    def _resolve(
+        self, call: ToolCallMessage, category: PermissionCategory | None
+    ) -> Generator[PermissionRequest, CoreAnswer, PermissionDecision]:
         """Resolve a tool call to a permission decision, without dispatching hooks.
 
         Kept separate from :meth:`validate` so hook dispatch there wraps
@@ -182,23 +188,49 @@ class PermissionManager:
 
         Args:
             call: the tool call the agent wants to execute.
+            category: the call's category, or ``None`` for an unknown tool.
 
         Returns:
             The resolved :class:`~arancio.core.permissions.types.PermissionDecision`.
+
+        Yields:
+            The permission request of an ``ask`` grant.
+
+        Raises:
+            TypeError: when the answer to a permission request is not a
+                :class:`~arancio.core.events.PermissionResponse`.
+            ValueError: when the answer does not match the pending request.
         """
-        # unavailable case
-        if not self._tool_manager.is_tool_available(call.name, self._permissions):
+        level = (
+            self._permissions.get(category, PermissionLevel.NONE)
+            if category is not None
+            else PermissionLevel.NONE
+        )
+
+        # unavailable case: an unknown tool or a category that is not granted
+        if level is PermissionLevel.NONE:
             return PermissionDecision(outcome=PermissionOutcome.UNAVAILABLE)
 
-        category = PermissionCategory.for_tool(call.name)
-
         # automatic case
-        if self._permissions[category] is PermissionLevel.AUTO:
+        if level is PermissionLevel.AUTO:
             return PermissionDecision(outcome=PermissionOutcome.ALLOWED)
 
-        # ask case: delegate to the controller and map its response; a deny
-        # keeps the user's reason on the decision, the caller words the refusal
-        response = self._controller.request(PermissionRequest(call))
+        # ask case: wait for the caller's answer; a wrong or missing answer
+        # never approves the call
+        request = PermissionRequest(call=call)
+        response = yield request
+        if not isinstance(response, PermissionResponse):
+            raise TypeError(
+                f"Permission request {request.id} needs a PermissionResponse, "
+                f"got {response!r}."
+            )
+        if response.request_id != request.id:
+            raise ValueError(
+                f"Permission response for request {response.request_id!r} does "
+                f"not match the pending request {request.id!r}."
+            )
+        # a deny keeps the user's reason on the decision, the caller words the
+        # refusal
         outcome = (
             PermissionOutcome.ALLOWED
             if response.decision is Decision.ALLOW

@@ -16,36 +16,40 @@ from arancio.core.messages import ErrorMessage, Message
 from arancio.core.permissions.types import PermissionCategory
 from arancio.core.plugins.base import Plugin
 from arancio.core.plugins.registry import PLUGIN_REGISTRY, REGISTRATION_MESSAGES
-from arancio.core.plugins.tool import CUSTOM
+from arancio.core.plugins.tool import CUSTOM, PluginTool
+from arancio.core.tools.definition import ToolDefinition
+from arancio.core.tools.manager import ToolManager
 
 
 class PluginManager:
-    """Load the shared registry and attach enabled plugins to the hook manager.
+    """Load the shared registry and attach enabled plugins to core.
 
     Decorators own registration, including classes imported from helpers. Each
-    enabled, non-conflicting plugin is constructed once. Disabled plugins and
-    constructor failures remain in the registry with no instance. A failing hook
-    method is disabled across its events without stopping sibling methods.
-
-    Tests must repoint this module's PLUGINS_PATH to avoid importing real plugins.
-    The root is never created by the manager.
+    enabled, non-conflicting plugin is constructed once. Its hooks are attached
+    to the hook manager and its tools are registered with the tool manager.
+    Disabled plugins and constructor failures remain in the registry with no
+    instance. A failing hook method is disabled across its events without
+    stopping sibling methods. The root is never created by the manager.
 
     Attributes:
         registry: the shared list filled by plugin decorators.
         _root: the directory containing plugin entry folders.
         _hook_manager: the shared hook manager plugins are attached to.
+        _tool_manager: the tool manager plugin tool definitions are added to.
         _disabled: instance/function pairs disabled after a hook failure.
     """
 
-    def __init__(self, hook_manager: HookManager) -> None:
-        """Keep the shared registry and the hook manager to attach it to.
+    def __init__(self, hook_manager: HookManager, tool_manager: ToolManager) -> None:
+        """Keep the shared registry and the managers to attach it to.
 
         Args:
             hook_manager: the hook manager receiving bound plugin methods.
+            tool_manager: the tool manager receiving plugin tool definitions.
         """
         self.registry: list[Plugin] = PLUGIN_REGISTRY
         self._root: Path = PLUGINS_PATH
         self._hook_manager: HookManager = hook_manager
+        self._tool_manager: ToolManager = tool_manager
         self._disabled: set[tuple[int, Callable]] = set()
 
     def __repr__(self) -> str:
@@ -56,7 +60,7 @@ class PluginManager:
         """
         return f"{type(self).__name__}({self._root})"
 
-    def load(self) -> list[Message]:
+    def load_plugins(self) -> list[Message]:
         """Import entry files, construct plugins and attach their declarations.
 
         Metadata errors skip only their class. Import failures discard that
@@ -67,6 +71,7 @@ class PluginManager:
             Startup errors and warnings, including decorator diagnostics.
         """
         messages: list[Message] = []
+        # import in folder-name order so hook registration stays predictable
         if self._root.is_dir():
             for directory in sorted(self._root.iterdir(), key=lambda path: path.name):
                 if (
@@ -76,9 +81,11 @@ class PluginManager:
                 ):
                     continue
                 messages.extend(self._import_module(directory))
+        # collect decorator diagnostics after every entry has been imported
         messages.extend(REGISTRATION_MESSAGES)
         REGISTRATION_MESSAGES.clear()
 
+        # detect all conflicting enabled names before constructing any plugin
         name_counts = Counter(
             plugin.name.upper() for plugin in self.registry if plugin.enabled
         )
@@ -105,6 +112,7 @@ class PluginManager:
                     )
                 )
                 continue
+            # bind hooks and tools to the same plugin instance
             plugin.hooks = [
                 (method.__get__(plugin.instance, plugin.plugin_cls), hooks)
                 for method, hooks in plugin.hooks
@@ -113,7 +121,14 @@ class PluginManager:
                 tool_class._method = tool_class._method.__get__(
                     plugin.instance, plugin.plugin_cls
                 )
-            messages.extend(self._register(plugin))
+            # register each declaration; an invalid tool does not block the rest
+            for method, hooks in plugin.hooks:
+                for hook in hooks:
+                    self.__register_hook(plugin, method, hook)
+            for tool_class in plugin.tools:
+                error = self.__register_tool(plugin, tool_class)
+                if error is not None:
+                    messages.append(error)
         return messages
 
     def _import_module(self, directory: Path) -> list[Message]:
@@ -173,41 +188,55 @@ class PluginManager:
             ]
         return []
 
-    def _register(self, plugin: Plugin) -> list[Message]:
-        """Attach the bound hooks and tools of a constructed plugin.
+    def __register_hook(self, plugin: Plugin, method: Callable, hook: Hook) -> None:
+        """Attach a bound plugin method to one hook.
 
         Args:
-            plugin: the record whose bound methods share one instance.
+            plugin: the record owning the method.
+            method: the method bound to the plugin instance.
+            hook: the event to attach the method to.
+        """
+        self._hook_manager.register(
+            hook, partial(self._guard_plugin_hook, plugin, method, hook)
+        )
+
+    def __register_tool(
+        self, plugin: Plugin, tool_class: type[PluginTool]
+    ) -> ErrorMessage | None:
+        """Register one plugin tool, or report why it cannot be registered.
+
+        Args:
+            plugin: the record owning the tool.
+            tool_class: the generated tool class bound to the plugin instance.
 
         Returns:
-            Errors for tools naming unknown permission categories.
+            An error for an unknown category or duplicate name, otherwise ``None``.
         """
-        messages: list[Message] = []
-        for method, hooks in plugin.hooks:
-            for hook in hooks:
-                self._hook_manager.register(
-                    hook, partial(self._run_hook, plugin, method, hook)
-                )
-        for tool_class in plugin.tools:
-            if tool_class.category == CUSTOM:
-                category = PermissionCategory.get_or_create(f"PLUGIN:{plugin.name}")
-            else:
-                category = PermissionCategory.get(tool_class.category)
-                if category is None:
-                    messages.append(
-                        ErrorMessage(
-                            content=(
-                                f"{plugin.location}: tool {tool_class.tool_name!r} "
-                                "names unknown permission category "
-                                f"{tool_class.category!r}; tool ignored."
-                            )
-                        )
+        if tool_class.category == CUSTOM:
+            category = PermissionCategory.get_or_create(f"PLUGIN:{plugin.name}")
+        else:
+            category = PermissionCategory.get(tool_class.category)
+            if category is None:
+                return ErrorMessage(
+                    content=(
+                        f"{plugin.location}: tool {tool_class.tool_name!r} "
+                        "names unknown permission category "
+                        f"{tool_class.category!r}; tool ignored."
                     )
-                    continue
-            category.add_tool(tool_class)
-        return messages
+                )
+        try:
+            self._tool_manager.register_tool_definition(
+                ToolDefinition(
+                    name=tool_class.__name__,
+                    category=category,
+                    factory=tool_class,
+                )
+            )
+        except ValueError as exc:
+            return ErrorMessage(content=f"{plugin.location}: {exc} Tool ignored.")
+        return None
 
-    def _run_hook(
+    def _guard_plugin_hook(
         self, plugin: Plugin, method: Callable, hook: Hook, context: dict[str, Any]
     ) -> Message | None:
         """Run a bound method, reporting and disabling it after its first failure.

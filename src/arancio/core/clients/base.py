@@ -1,11 +1,12 @@
 """Provider-agnostic base class for LLM clients."""
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Callable, Generator
 from typing import List, Type
 
 from arancio.core.builders.payload.base import PayloadBuilder
 from arancio.core.builders.request.base import RequestBuilder
+from arancio.core.events import LoginNotice
 from arancio.core.messages import Message
 from arancio.core.parsers.response.base import ResponseParser
 from arancio.core.requests import Request
@@ -40,16 +41,21 @@ class Client(ABC):
 
     def __init__(
         self,
+        on_login: Callable[[LoginNotice], None],
         model_id: str | None = None,
         thinking_effort: str | None = None,
         thinking_summary: str | None = None,
     ) -> None:
-        """Initialize the client with its per-instance overrides.
+        """Initialize the client with its login callback and per-instance overrides.
 
         Credentials are not passed here: they are resolved by the underlying
         transport (e.g. LiteLLM's native env-var lookup).
 
         Args:
+            on_login: one-way callback receiving the login details while the
+                provider waits for a sign-in. Required, so a caller cannot
+                forget it and hide a login code; a client without a login flow
+                never calls it.
             model_id: the model identifier to use for outgoing requests;
                 when ``None`` the class default ``_default_model_id`` is
                 kept.
@@ -61,6 +67,7 @@ class Client(ABC):
                 ``"detailed"``); when ``None`` the class default
                 ``_default_thinking_summary`` is kept.
         """
+        self._on_login: Callable[[LoginNotice], None] = on_login
         self._model_id: str | None = self._default_model_id
         self._thinking_effort: str | None = self._default_thinking_effort
         self._thinking_summary: str | None = self._default_thinking_summary
@@ -200,12 +207,13 @@ class Client(ABC):
         )
 
     @abstractmethod
-    def send_request(self, request: Request) -> Iterator[Message]:
+    def send_request(self, request: Request) -> Generator[Message, None, None]:
         """Send a request through the underlying transport.
 
         Subclasses implement the actual network or library call and
-        return an iterator of normalized messages parsed from the
-        provider response.
+        return a generator of normalized messages parsed from the
+        provider response. A subclass with a login flow passes the login
+        details to ``self._on_login`` instead of yielding them.
 
         Args:
             request: the generic request to send.

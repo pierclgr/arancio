@@ -2,9 +2,9 @@
 
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from itertools import count
-from typing import Dict, List
+from typing import List
 
 from arancio.core.builders.system_prompt import SystemPromptBuilder
 from arancio.core.clients.base import Client
@@ -15,6 +15,7 @@ from arancio.core.constants.agent import (
     AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
     AGENT_UNLIMITED_MAX_TURNS,
 )
+from arancio.core.events import CoreAnswer, CoreEvent
 from arancio.core.hooks.base import Hook
 from arancio.core.hooks.manager import HookManager
 from arancio.core.messages import (
@@ -33,8 +34,7 @@ from arancio.core.permissions.types import (
     PermissionLevel,
     PermissionOutcome,
 )
-from arancio.core.tools.base import Tool
-from arancio.core.tools.schema import ToolSchema
+from arancio.core.tools.manager import ToolManager
 
 
 class Agent:
@@ -44,6 +44,7 @@ class Agent:
         self,
         client: Client,
         permission_manager: PermissionManager,
+        tool_manager: ToolManager,
         hook_manager: HookManager,
         message_history: List[Message] | None = None,
         max_turns: int | str = AGENT_DEFAULT_MAX_TURNS,
@@ -51,12 +52,15 @@ class Agent:
         retry_delay: float = AGENT_DEFAULT_TURN_WAIT_TIME,
         retry_delay_multiplier: float = AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
     ) -> None:
-        """Initialize the agent with a client, permission manager and hook manager.
+        """Initialize the agent with its client and managers.
 
         Args:
             client: the LLM client used to send requests.
-            permission_manager: the permission manager that creates the agent's
-                tools and gates each tool call.
+            permission_manager: the permission manager holding the grants and
+                resolving each tool call.
+            tool_manager: the tool catalog; the agent asks it for schemas and
+                categories and runs every allowed call through it, refreshing
+                its active tools from the allowed categories.
             hook_manager: the hook manager the loop and system-prompt build
                 dispatch through (see AGENTS.md's Hooks section); the agent
                 adds itself and ``client`` to its context as ``agent`` and
@@ -82,10 +86,10 @@ class Agent:
         self._message_history: List[Message] = list(message_history or [])
         self._system_prompt_builder: SystemPromptBuilder = SystemPromptBuilder()
         self._permission_manager: PermissionManager = permission_manager
+        self._tool_manager: ToolManager = tool_manager
         self._hook_manager: HookManager = hook_manager
         self._hook_manager.context.update(agent=self, client=client)
 
-        self._tools: Dict[str, Tool] = {}
         self._refresh_tools()
 
     def __repr__(self) -> str:
@@ -100,7 +104,7 @@ class Agent:
             f"permissions={self._permission_manager!r}, "
             f"max_turns={self._max_turns!r}, "
             f"max_retries={self._max_retries!r}, "
-            f"tools={list(self._tools.values())!r}"
+            f"tool_manager={self._tool_manager!r}"
             ")"
         )
 
@@ -108,26 +112,17 @@ class Agent:
         """Return a pretty, multi-line representation of the agent.
 
         Returns:
-            An indented, one-tool-per-line rendering suitable for printing.
+            An indented, one-field-per-line rendering suitable for printing.
         """
-        if self._tools:
-            tools = "\n".join(f"        {tool!r}," for tool in self._tools.values())
-            tools_block = f"[\n{tools}\n    ]"
-        else:
-            tools_block = "[]"
         return (
             f"{type(self).__name__}(\n"
             f"    client={self._client!r},\n"
             f"    permissions={self._permission_manager!r},\n"
             f"    max_turns={self._max_turns!r},\n"
             f"    max_retries={self._max_retries!r},\n"
-            f"    tools={tools_block},\n"
+            f"    tool_manager={self._tool_manager!r},\n"
             ")"
         )
-
-    @property
-    def _tool_schemas(self) -> List[ToolSchema]:
-        return [tool.schema() for tool in self._tools.values()]
 
     @property
     def max_turns(self) -> int | str:
@@ -203,19 +198,9 @@ class Agent:
         """
         self._retry_delay_multiplier = value
 
-    def add_tool(self, tool: Tool):
-        """Append a tool to the agent's tool catalog.
-
-        Args:
-            tool: the tool definition to expose to the model.
-        """
-        self._tools[tool.name] = tool
-
     def _refresh_tools(self) -> None:
-        """Rebuild the tool catalog from the permission manager's grants."""
-        self._tools = {
-            tool.name: tool for tool in self._permission_manager.allowed_tools
-        }
+        """Rebuild the active tools from the permission manager's grants."""
+        self._tool_manager.refresh_tools(self._permission_manager.allowed_categories)
 
     def add_permission(
         self,
@@ -340,28 +325,30 @@ class Agent:
     def _run_tool(
         self, call: ToolCallMessage
     ) -> tuple[ToolResultMessage, list[Message]]:
-        """Execute a tool call and return its result alongside hook messages.
+        """Run one tool call through the tool manager.
 
         Args:
-            call: the tool call message to execute.
+            call: the tool call to run.
 
         Returns:
-            The tool result and any hook messages.
+            The tool result and hook messages.
         """
-        tool = self._tools.get(call.name)
-        if tool is None:
-            message = f"Unknown tool {call.name}"
-            return ToolErrorMessage(
-                content=message,
-                id=call.id,
-            ), []
-        else:
-            return tool.call(call_id=call.id, **(call.arguments or {}))
+        return self._tool_manager.run_tool_call(call)
 
     def __call__(
-        self, message: Message, prelude: List[Message] | None = None
-    ) -> Iterator[Message]:
+        self,
+        message: Message,
+        prelude: List[Message] | None = None,
+    ) -> Generator[CoreEvent, CoreAnswer, None]:
         """Run the agent loop starting from the given user message.
+
+        The run is a generator driven by the caller: start it with ``next()``
+        or ``.send(None)``, continue with ``.send(None)`` after a message, and
+        answer a :class:`~arancio.core.events.PermissionRequest` with its
+        matching :class:`~arancio.core.events.PermissionResponse`. The value
+        returned by ``.send()`` is the next event. A wrong or missing answer
+        never approves a call: it raises a protocol error, which ends the run
+        with an :class:`ErrorMessage` and no model retry.
 
         The user message, every parsed client message, and every local
         tool result are appended to conversation history. Produced client
@@ -382,7 +369,7 @@ class Agent:
         replaces an in-flight ``return`` or exception rather than following
         it, per ordinary Python ``finally`` semantics. Returned hook messages
         are yielded directly; turn-end messages are suppressed during generator
-        closure so cleanup never yields while handling GeneratorExit.
+        closure so cleanup never yields.
 
         Args:
             message: the initial user message that starts the turn.
@@ -393,11 +380,12 @@ class Agent:
 
         Yields:
             Each ``prelude`` message, then each message produced during the
-            run, including intermediate tool calls and tool results. The
-            initial ``message`` is appended to history but never yielded, since
-            the caller already holds it.
+            run, including intermediate tool calls and tool results, and a
+            permission request for each tool call that needs an answer. The
+            initial ``message`` is appended to history but never yielded,
+            since the caller already holds it.
         """
-        yield from self._hook_manager.run(Hook.AGENT_START, message=message)
+        yield from self._hook_manager.run_hook(Hook.AGENT_START, message=message)
         self.add_message_to_history(message)
         for extra in prelude or []:
             yield from self._emit(extra)
@@ -419,10 +407,10 @@ class Agent:
 
             # try sending request to the client, if something goes wrong, retry
             try:
-                yield from self._hook_manager.run(Hook.TURN_START, turn=turn)
+                yield from self._hook_manager.run_hook(Hook.TURN_START, turn=turn)
 
                 system_prompt = self._system_prompt_builder.build()
-                yield from self._hook_manager.run(
+                yield from self._hook_manager.run_hook(
                     Hook.SYSTEM_PROMPT_BUILD, system_prompt=system_prompt
                 )
                 # a handler may have replaced the prompt in the shared context
@@ -430,25 +418,30 @@ class Agent:
                 request = self._client.build_request(
                     messages=self._message_history,
                     system_prompt=system_prompt,
-                    tools=self._tool_schemas,
+                    tools=self._tool_manager.tool_schemas,
                 )
-                yield from self._hook_manager.run(
+                yield from self._hook_manager.run_hook(
                     Hook.BEFORE_MODEL_REQUEST, request=request
                 )
 
-                for response_message in self._client.send_request(request=request):
-                    if isinstance(response_message, ChunkMessage):
-                        yield response_message
-                        continue
-                    received_finalized = True
-                    if isinstance(response_message, ToolCallMessage):
-                        tool_calls.append(response_message)
-                    yield from self._hook_manager.run(
-                        Hook.MESSAGE_RECEIVED, response_message=response_message
-                    )
-                    yield from self._emit(response_message)
+                # close the client stream when the turn ends or the run is closed
+                stream = self._client.send_request(request=request)
+                try:
+                    for response_message in stream:
+                        if isinstance(response_message, ChunkMessage):
+                            yield response_message
+                            continue
+                        received_finalized = True
+                        if isinstance(response_message, ToolCallMessage):
+                            tool_calls.append(response_message)
+                        yield from self._hook_manager.run_hook(
+                            Hook.MESSAGE_RECEIVED, response_message=response_message
+                        )
+                        yield from self._emit(response_message)
+                finally:
+                    stream.close()
 
-                yield from self._hook_manager.run(
+                yield from self._hook_manager.run_hook(
                     Hook.AFTER_MODEL_RESPONSE, request=request, tool_calls=tool_calls
                 )
 
@@ -459,14 +452,17 @@ class Agent:
 
                 # natural stop: text-only reply
                 if not tool_calls:
-                    yield from self._hook_manager.run(
+                    yield from self._hook_manager.run_hook(
                         Hook.AGENT_END, message_history=self._message_history
                     )
                     return
 
                 # call the tools if tools are requested
                 for call in tool_calls:
-                    decision, hook_messages = self._permission_manager.validate(call)
+                    category = self._tool_manager.get_tool_category(call.name)
+                    decision, hook_messages = yield from (
+                        self._permission_manager.validate(call, category)
+                    )
                     yield from hook_messages
                     feedback = self._permission_message(call, decision)
                     if decision.outcome is PermissionOutcome.ALLOWED:
@@ -474,8 +470,8 @@ class Agent:
                         yield from hook_messages
                         yield from self._emit(result)
 
-                    # the note follows the result; a refusal is fed back to the
-                    # model and surfaced to the user so the model can react
+                    # the note follows the result; a refusal is fed back to the model
+                    # and surfaced to the user so the model can react
                     if feedback:
                         yield from self._emit(feedback)
 
@@ -483,17 +479,18 @@ class Agent:
                 # dispatched for every failed turn, retried or not; the
                 # source="agent" dispatch below additionally fires only when
                 # the run is about to end
-                yield from self._hook_manager.run(
+                yield from self._hook_manager.run_hook(
                     Hook.ERROR, source="model", error=e, request=request
                 )
                 # always surface the error to the consumer for visibility, but
                 # only retry the turn when nothing finalized came through;
                 # post-stream errors that fire after finalized messages were
                 # already delivered (e.g. provider-side logging callback bugs)
-                # must not trigger a retry
+                # must not trigger a retry, and neither must a failure in the
+                # tool phase, such as a wrong permission answer
                 yield ErrorMessage(content=f"Error while executing user request: {e}")
                 if received_finalized:
-                    yield from self._hook_manager.run(
+                    yield from self._hook_manager.run_hook(
                         Hook.ERROR, source="agent", error=e
                     )
                     return
@@ -501,7 +498,7 @@ class Agent:
                 consecutive_errors += 1
                 if consecutive_errors >= self._max_retries:
                     yield ErrorMessage(content="Max retries exceeded")
-                    yield from self._hook_manager.run(
+                    yield from self._hook_manager.run_hook(
                         Hook.ERROR, source="agent", error=e
                     )
                     return
@@ -511,11 +508,11 @@ class Agent:
                 retry_wait *= self._retry_delay_multiplier
 
             finally:
-                # closing a generator must run cleanup without yielding
+                # closing a run must clean up without yielding
                 closing = isinstance(sys.exception(), GeneratorExit)
-                hook_messages = self._hook_manager.run(Hook.TURN_END, turn=turn)
+                hook_messages = self._hook_manager.run_hook(Hook.TURN_END, turn=turn)
                 if not closing:
                     yield from hook_messages
 
-        yield from self._hook_manager.run(Hook.ERROR, source="agent", error=None)
+        yield from self._hook_manager.run_hook(Hook.ERROR, source="agent", error=None)
         yield ErrorMessage(content="Max turns exceeded")

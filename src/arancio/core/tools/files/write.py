@@ -55,12 +55,12 @@ class WriteFileTool(Tool):
 
         if path.exists():
             current_mtime = path.stat().st_mtime
-            if not self._session.is_known(canonical):
+            if not self._tool_session.is_known(canonical):
                 raise PermissionError(
                     f"File exists but was not read this session; "
                     f"read it first before overwriting: {file_path}"
                 )
-            if not self._session.is_fresh(canonical, current_mtime):
+            if not self._tool_session.is_fresh(canonical, current_mtime):
                 raise PermissionError(
                     f"File has changed on disk since it was read; "
                     f"re-read before overwriting: {file_path}"
@@ -72,7 +72,7 @@ class WriteFileTool(Tool):
         encoded = content.encode("utf-8")
         path.write_bytes(encoded)
 
-        self._session.record_read(path=canonical, mtime=path.stat().st_mtime)
+        self._tool_session.record_read(path=canonical, mtime=path.stat().st_mtime)
 
         total_lines = len(content.splitlines()) if content else 0
 

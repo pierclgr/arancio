@@ -2,15 +2,7 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import ClassVar, Iterable, Iterator
-
-from arancio.core.tools.base import Tool
-from arancio.core.tools.commands.shell import ShellCommandTool
-from arancio.core.tools.files.edit import EditFileTool
-from arancio.core.tools.files.read import ReadFileTool
-from arancio.core.tools.files.write import WriteFileTool
-from arancio.core.tools.web.fetch import FetchWebTool
-from arancio.core.tools.web.search import SearchWebTool
+from typing import ClassVar, Iterator
 
 
 class PermissionLevel(Enum):
@@ -41,7 +33,7 @@ class _PermissionCategoryMeta(type):
         Returns:
             An iterator over the registered categories.
         """
-        return iter(cls._registry.values())
+        return iter(cls._REGISTRY.values())
 
     def __getitem__(cls, name: str) -> "PermissionCategory":
         """Look up a registered category by name, case-insensitively.
@@ -52,7 +44,7 @@ class _PermissionCategoryMeta(type):
         Returns:
             The matching category.
         """
-        return cls._registry[name.upper()]
+        return cls._REGISTRY[name.upper()]
 
     def __len__(cls) -> int:
         """Return how many categories are registered.
@@ -60,7 +52,7 @@ class _PermissionCategoryMeta(type):
         Returns:
             The number of registered categories.
         """
-        return len(cls._registry)
+        return len(cls._REGISTRY)
 
     @property
     def __members__(cls) -> dict[str, "PermissionCategory"]:
@@ -69,27 +61,27 @@ class _PermissionCategoryMeta(type):
         Returns:
             A copy of the registry.
         """
-        return dict(cls._registry)
+        return dict(cls._REGISTRY)
 
 
 class PermissionCategory(metaclass=_PermissionCategoryMeta):
-    """Capability class grouping tools that perform the same kind of operation.
+    """Identity of a capability that a permission grant covers.
 
-    Not an ``enum.Enum``: a plugin tool can add itself to one of these
-    categories, or (via ``@tool(category="CUSTOM")``) create a brand new
-    one, after the built-in categories already exist — something a closed
-    ``Enum`` cannot do. Every category, built-in or plugin-created, is this
-    same type, registered by name (case-insensitively) in one place, so
-    nothing downstream special-cases one kind against the other.
+    A category does not own tools: each tool definition registered with
+    :class:`~arancio.core.tools.manager.ToolManager` names its category. Not an
+    ``enum.Enum``: a plugin can create a brand new category (via
+    ``@tool(category="CUSTOM")``) after the built-in categories already exist,
+    which a closed ``Enum`` cannot do. Every category, built-in or
+    plugin-created, is this same type, registered by name (case-insensitively)
+    in one place, so nothing downstream special-cases one kind against the
+    other.
 
     Attributes:
         name: the category's display name, as given at creation (e.g.
             ``"READ"``, ``"PLUGIN"``, ``"PLUGIN:TestPlugin"``).
-        tools: the tool classes this category currently governs. Mutable —
-            a plugin tool is added to it after the category already exists.
     """
 
-    _registry: ClassVar[dict[str, "PermissionCategory"]] = {}
+    _REGISTRY: ClassVar[dict[str, "PermissionCategory"]] = {}
 
     READ: ClassVar["PermissionCategory"]
     WRITE: ClassVar["PermissionCategory"]
@@ -97,23 +89,21 @@ class PermissionCategory(metaclass=_PermissionCategoryMeta):
     EXECUTE: ClassVar["PermissionCategory"]
     PLUGIN: ClassVar["PermissionCategory"]
 
-    def __init__(self, name: str, tools: Iterable[type[Tool]] = ()) -> None:
+    def __init__(self, name: str) -> None:
         """Create and register a new category.
 
         Args:
             name: the category's display name; registered case-insensitively.
-            tools: the tool classes it starts out governing.
 
         Raises:
             ValueError: when a category with this name (case-insensitively)
                 is already registered.
         """
         key = name.upper()
-        if key in PermissionCategory._registry:
+        if key in PermissionCategory._REGISTRY:
             raise ValueError(f"Permission category {name!r} already exists.")
         self.name = name
-        self.tools: set[type[Tool]] = set(tools)
-        PermissionCategory._registry[key] = self
+        PermissionCategory._REGISTRY[key] = self
 
     def __repr__(self) -> str:
         """Return a developer-friendly representation of the category.
@@ -122,14 +112,6 @@ class PermissionCategory(metaclass=_PermissionCategoryMeta):
             The category's own name, qualified by the class name.
         """
         return f"PermissionCategory({self.name!r})"
-
-    def add_tool(self, tool_cls: type[Tool]) -> None:
-        """Add a tool class to this category.
-
-        Args:
-            tool_cls: the tool class to add, e.g. a plugin-synthesized one.
-        """
-        self.tools.add(tool_cls)
 
     @classmethod
     def get(cls, name: str) -> "PermissionCategory | None":
@@ -141,7 +123,7 @@ class PermissionCategory(metaclass=_PermissionCategoryMeta):
         Returns:
             The matching category, or ``None`` when none is registered.
         """
-        return cls._registry.get(name.upper())
+        return cls._REGISTRY.get(name.upper())
 
     @classmethod
     def get_or_create(cls, name: str) -> "PermissionCategory":
@@ -156,27 +138,11 @@ class PermissionCategory(metaclass=_PermissionCategoryMeta):
         """
         return cls.get(name) or cls(name)
 
-    @classmethod
-    def for_tool(cls, tool_name: str) -> "PermissionCategory | None":
-        """Return the category governing the tool with the given class name.
 
-        Args:
-            tool_name: the tool's class name (``Tool.name``).
-
-        Returns:
-            The matching category, or ``None`` when no category governs the
-            tool.
-        """
-        for category in cls:
-            if any(tool.__name__ == tool_name for tool in category.tools):
-                return category
-        return None
-
-
-PermissionCategory.READ = PermissionCategory("READ", {ReadFileTool})
-PermissionCategory.WRITE = PermissionCategory("WRITE", {WriteFileTool, EditFileTool})
-PermissionCategory.WEB = PermissionCategory("WEB", {SearchWebTool, FetchWebTool})
-PermissionCategory.EXECUTE = PermissionCategory("EXECUTE", {ShellCommandTool})
+PermissionCategory.READ = PermissionCategory("READ")
+PermissionCategory.WRITE = PermissionCategory("WRITE")
+PermissionCategory.WEB = PermissionCategory("WEB")
+PermissionCategory.EXECUTE = PermissionCategory("EXECUTE")
 PermissionCategory.PLUGIN = PermissionCategory("PLUGIN")
 
 
@@ -186,7 +152,7 @@ class PermissionOutcome(Enum):
     Attributes:
         ALLOWED: the call may run.
         DENIED: the user refused the call.
-        UNAVAILABLE: no granted category builds the requested tool.
+        UNAVAILABLE: the tool is unknown or its category is not granted.
     """
 
     ALLOWED = "allowed"

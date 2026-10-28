@@ -14,10 +14,11 @@ class PluginTool(Tool):
     Overrides :meth:`~arancio.core.tools.base.Tool._load_prompt` so the
     description and input schema come from the decorator instead of
     ``~/.arancio/harness/tools/<name>/``, since a plugin cannot ship files
-    there. The plugin decorator builds a subclass per tool method with metadata
-    stored directly as class attributes. The manager binds the method to the
-    owning plugin instance before registering the tool's permission category.
-    It stays constructible as ``tool_cls(hook_manager=...)`` like any built-in tool.
+    there. The plugin decorator creates a subclass per tool method with
+    :meth:`create_class`, storing metadata directly as class attributes. The
+    manager binds the method to the owning plugin instance, then registers the
+    class as a tool definition with the tool manager, which builds it like any
+    built-in tool.
     Its exposed name is ``<plugin_name>-<tool_name>``, using the decorator's
     name (defaulting to the class name) and the method name or tool override.
     Dictionary results keep their raw content and are displayed as JSON by
@@ -39,7 +40,7 @@ class PluginTool(Tool):
     _input_schema: ClassVar[dict[str, Any]]
 
     @classmethod
-    def build(
+    def create_class(
         cls,
         plugin_name: str,
         method: Callable,
@@ -49,7 +50,10 @@ class PluginTool(Tool):
         input_schema: dict[str, Any],
         category: str,
     ) -> type["PluginTool"]:
-        """Synthesize a tool subclass for one @tool-decorated method.
+        """Create a new tool subclass for one @tool-decorated method.
+
+        It creates a class only: it builds no tool object and registers
+        nothing.
 
         Args:
             plugin_name: the owning plugin's name, used as the tool-name prefix.

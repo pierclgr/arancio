@@ -57,7 +57,7 @@ def plugin(**metadata: Any) -> Callable[[type], type]:
                 record.hooks.append((func, PENDING_HOOKS[func]))
             if func in PENDING_TOOLS:
                 record.tools.append(
-                    PluginTool.build(record.name, func, **PENDING_TOOLS[func])
+                    PluginTool.create_class(record.name, func, **PENDING_TOOLS[func])
                 )
         PLUGIN_REGISTRY.append(record)
         if not record.hooks and not record.tools:

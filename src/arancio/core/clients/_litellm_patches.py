@@ -3,7 +3,7 @@
 Temporary monkeypatches applied at import time by
 :mod:`arancio.core.clients.litellm`. Bug patches are written to be a no-op
 once upstream is fixed; the ChatGPT adapter preserves LiteLLM behavior while
-also forwarding a device code to the UI.
+also forwarding a device code to the active client's login callback.
 """
 
 from collections.abc import Callable, Iterator

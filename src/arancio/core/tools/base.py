@@ -16,7 +16,7 @@ from arancio.core.hooks.manager import HookManager
 from arancio.core.messages import Message, ToolResultMessage
 from arancio.core.parsers.tool_result.base import ToolResultParser
 from arancio.core.tools.schema import ToolSchema
-from arancio.core.tools.session import ToolSession, shared_session
+from arancio.core.tools.session import ToolSession
 from arancio.core.utils.naming import camel_to_snake
 
 
@@ -37,28 +37,30 @@ class Tool(ABC):
             description from disk via ``.reload()``.
         _result_parser: parser converting raw tool output into a tool
             result message.
-        _session: the process-wide :class:`ToolSession` for cross-tool
-            coordination (e.g. read-first guards), shared by every tool
-            through this class attribute.
+        _tool_session: the injected :class:`ToolSession` for cross-tool
+            coordination (e.g. read-first guards), shared by every tool of
+            the active conversation.
         _hook_manager: the hook manager :meth:`call` dispatches
             ``before_tool_call``/``after_tool_call``/``error`` through,
             injected by the caller (typically
-            :meth:`~arancio.core.tools.manager.ToolManager.create_tools`).
+            :class:`~arancio.core.tools.manager.ToolManager`).
     """
 
     _result_parser: Type[ToolResultParser] = ToolResultParser
-    _session: ToolSession = shared_session
 
-    def __init__(self, hook_manager: HookManager) -> None:
-        """Initialize the tool with its hook manager, description and input schema.
+    def __init__(self, hook_manager: HookManager, tool_session: ToolSession) -> None:
+        """Initialize the tool with its dependencies, description and input schema.
 
         The description and raw input schema come from :meth:`_load_prompt`;
         the schema is then wrapped as a closed JSON object.
 
         Args:
             hook_manager: the hook manager :meth:`call` dispatches through.
+            tool_session: the file-read state shared by every tool of the active
+                conversation.
         """
         self._hook_manager = hook_manager
+        self._tool_session = tool_session
         self.description, raw_input_schema = self._load_prompt()
         self.input_schema = {
             "type": "object",
@@ -135,7 +137,7 @@ class Tool(ABC):
         Returns:
             The tool result and hook messages in dispatch order.
         """
-        messages = self._hook_manager.run(
+        messages = self._hook_manager.run_hook(
             Hook.BEFORE_TOOL_CALL, name=self.name, call_id=call_id, arguments=kwargs
         )
         try:
@@ -143,7 +145,7 @@ class Tool(ABC):
             is_error = False
         except Exception as exc:
             messages.extend(
-                self._hook_manager.run(
+                self._hook_manager.run_hook(
                     Hook.ERROR,
                     source="tool",
                     name=self.name,
@@ -161,7 +163,7 @@ class Tool(ABC):
             is_error=is_error,
         )
         messages.extend(
-            self._hook_manager.run(
+            self._hook_manager.run_hook(
                 Hook.AFTER_TOOL_CALL,
                 name=self.name,
                 call_id=call_id,

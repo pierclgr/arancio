@@ -1,106 +1,172 @@
-"""Tool construction driven by a permission list."""
+"""Tool catalog: registered definitions, active instances and execution."""
+
+from collections.abc import Collection
+from functools import partial
 
 from arancio.core.clients.base import Client
 from arancio.core.hooks.manager import HookManager
-from arancio.core.permissions.types import PermissionCategory, PermissionLevel
+from arancio.core.messages import (
+    Message,
+    ToolCallMessage,
+    ToolErrorMessage,
+    ToolResultMessage,
+)
+from arancio.core.permissions.types import PermissionCategory
 from arancio.core.tools.base import Tool
+from arancio.core.tools.commands.shell import ShellCommandTool
+from arancio.core.tools.definition import ToolDefinition
+from arancio.core.tools.files.edit import EditFileTool
+from arancio.core.tools.files.read import ReadFileTool
+from arancio.core.tools.files.write import WriteFileTool
+from arancio.core.tools.schema import ToolSchema
+from arancio.core.tools.session import ToolSession
 from arancio.core.tools.web.fetch import FetchWebTool
+from arancio.core.tools.web.search import SearchWebTool
 
 
 class ToolManager:
-    """Construct tool instances for a set of granted categories.
+    """Own the tool catalog and run every tool the agent calls.
 
-    Reads each category's tool classes from :class:`PermissionCategory`'s
-    :attr:`~arancio.core.permissions.types.PermissionCategory.tools` and
-    instantiates them. Every tool builds with no required arguments except
-    :class:`FetchWebTool`, which receives the summarization client this
-    manager holds and injects.
+    The catalog maps each tool name to its :class:`ToolDefinition`. The built-in
+    tools register at construction; plugin tools register through
+    :meth:`register_tool_definition`. :meth:`refresh_tools` builds instances only for
+    the allowed categories, so a tool whose category is not granted is never
+    instantiated.
+    Permission checks stay outside this class: the agent calls :meth:`run_tool_call`
+    only after an allowed decision.
 
     Attributes:
-        _web_summary_client: the client injected into :class:`FetchWebTool`.
-        _hook_manager: the hook manager injected into every tool this
-            manager builds.
+        _definitions: registered definitions, keyed by tool name.
+        _tools: the instances active for the current grants, keyed by tool name.
+        _hook_manager: injected into every tool this manager builds.
+        _tool_session: the file-read state injected into every tool this manager
+            builds.
     """
 
-    def __init__(self, web_summary_client: Client, hook_manager: HookManager) -> None:
-        """Initialize the manager with the summarization client and hooks to inject.
+    def __init__(
+        self,
+        web_summary_client: Client,
+        hook_manager: HookManager,
+        tool_session: ToolSession,
+    ) -> None:
+        """Initialize the manager and register the built-in tools.
 
         Args:
             web_summary_client: the client injected into :class:`FetchWebTool`;
                 held by reference so its settings can be changed in place at
                 runtime and seen by the tool.
             hook_manager: the hook manager injected into every tool this
-                manager builds; ``web_summary_client`` is added to its
-                context as ``summary_client``.
+                manager builds.
+            tool_session: the file-read state injected into every tool this manager
+                builds; the same instance survives every :meth:`refresh_tools`.
         """
-        self._web_summary_client = web_summary_client
+        self._definitions: dict[str, ToolDefinition] = {}
+        self._tools: dict[str, Tool] = {}
         self._hook_manager = hook_manager
-        self._hook_manager.context["summary_client"] = web_summary_client
+        self._tool_session = tool_session
 
-    @staticmethod
-    def available_tools(
-        permissions: dict[PermissionCategory, PermissionLevel],
-    ) -> list[type[Tool]]:
-        """Return the granted categories' tool classes without instantiating them.
-
-        Args:
-            permissions: mapping of category to level; categories at
-                :attr:`PermissionLevel.NONE` are skipped.
-
-        Returns:
-            One class per tool across the granted categories, not instantiated.
-        """
-        return [
-            tool_cls
-            for category, level in permissions.items()
-            if level is not PermissionLevel.NONE
-            for tool_cls in category.tools
+        builtin_definitions = [
+            ToolDefinition(
+                ReadFileTool.__name__, PermissionCategory.READ, ReadFileTool
+            ),
+            ToolDefinition(
+                WriteFileTool.__name__, PermissionCategory.WRITE, WriteFileTool
+            ),
+            ToolDefinition(
+                EditFileTool.__name__, PermissionCategory.WRITE, EditFileTool
+            ),
+            ToolDefinition(
+                SearchWebTool.__name__, PermissionCategory.WEB, SearchWebTool
+            ),
+            ToolDefinition(
+                FetchWebTool.__name__,
+                PermissionCategory.WEB,
+                partial(FetchWebTool, client=web_summary_client),
+            ),
+            ToolDefinition(
+                ShellCommandTool.__name__, PermissionCategory.EXECUTE, ShellCommandTool
+            ),
         ]
+        for definition in builtin_definitions:
+            self.register_tool_definition(definition)
 
-    @classmethod
-    def is_tool_available(
-        cls,
-        tool_name: str,
-        permissions: dict[PermissionCategory, PermissionLevel],
-    ) -> bool:
-        """Return whether a tool is among those available for the given grants.
-
-        Args:
-            tool_name: the tool's class name (``Tool.name``).
-            permissions: mapping of category to level; categories at
-                :attr:`PermissionLevel.NONE` are skipped.
+    def __repr__(self) -> str:
+        """Return a developer-friendly representation of the active tools.
 
         Returns:
-            ``True`` when the tool's class is among the available tools for the
-            given grants, ``False`` otherwise.
+            The class name followed by the active tool instances.
         """
-        return any(
-            tool_cls.__name__ == tool_name
-            for tool_cls in cls.available_tools(permissions)
-        )
+        return f"{type(self).__name__}(tools={list(self._tools.values())!r})"
 
-    def create_tools(
-        self, permissions: dict[PermissionCategory, PermissionLevel]
-    ) -> list[Tool]:
-        """Instantiate the tools for the granted categories.
+    def register_tool_definition(self, definition: ToolDefinition) -> None:
+        """Add a tool definition to the catalog.
+
+        The tool is built on the next :meth:`refresh_tools` that allows its category.
 
         Args:
-            permissions: mapping of category to level; categories at
-                :attr:`PermissionLevel.NONE` are skipped.
+            definition: the definition to add.
+
+        Raises:
+            ValueError: when a definition with the same name is already
+                registered.
+        """
+        if definition.name in self._definitions:
+            raise ValueError(f"Tool {definition.name!r} is already registered.")
+        self._definitions[definition.name] = definition
+
+    def get_tool_category(self, name: str) -> PermissionCategory | None:
+        """Return the permission category of a registered tool.
+
+        Args:
+            name: the tool name.
 
         Returns:
-            One instance per tool class across the granted categories, each
-            built with this manager's hook manager injected.
+            The category named by the tool's definition, or ``None`` when no
+            definition has this name.
         """
-        tools = []
-        for tool_cls in self.available_tools(permissions):
-            if tool_cls is FetchWebTool:
-                tools.append(
-                    FetchWebTool(
-                        client=self._web_summary_client,
-                        hook_manager=self._hook_manager,
-                    )
-                )
-            else:
-                tools.append(tool_cls(hook_manager=self._hook_manager))
-        return tools
+        definition = self._definitions.get(name)
+        return definition.category if definition is not None else None
+
+    def refresh_tools(self, categories: Collection[PermissionCategory]) -> None:
+        """Rebuild the active tools for the allowed categories.
+
+        Every allowed tool gets a new instance. The injected session is kept,
+        so the file-read guard survives the rebuild.
+
+        Args:
+            categories: the categories whose tools may be built.
+        """
+        self._tools = {
+            name: definition.factory(
+                hook_manager=self._hook_manager,
+                tool_session=self._tool_session,
+            )
+            for name, definition in self._definitions.items()
+            if definition.category in categories
+        }
+
+    @property
+    def tool_schemas(self) -> list[ToolSchema]:
+        """Return the schemas of the active tools.
+
+        Returns:
+            One schema per active tool, in catalog order.
+        """
+        return [tool.schema() for tool in self._tools.values()]
+
+    def run_tool_call(
+        self, call: ToolCallMessage
+    ) -> tuple[ToolResultMessage, list[Message]]:
+        """Run an allowed tool call and return its result alongside hook messages.
+
+        Args:
+            call: the tool call to run.
+
+        Returns:
+            The tool result and hook messages in dispatch order. A call naming
+            no active tool returns a tool error and no hook messages.
+        """
+        tool = self._tools.get(call.name)
+        if tool is None:
+            return ToolErrorMessage(content=f"Unknown tool {call.name}", id=call.id), []
+        return tool.call(call_id=call.id, **(call.arguments or {}))

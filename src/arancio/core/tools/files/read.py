@@ -102,7 +102,7 @@ class ReadFileTool(Tool):
             f"{start_idx + 1 + i:>6}\t{line}" for i, line in enumerate(capped_lines)
         )
 
-        self._session.record_read(path=canonical, mtime=mtime)
+        self._tool_session.record_read(path=canonical, mtime=mtime)
 
         return {
             "file_path": canonical,

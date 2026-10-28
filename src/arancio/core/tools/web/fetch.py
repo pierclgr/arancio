@@ -11,6 +11,7 @@ from arancio.core.hooks.manager import HookManager
 from arancio.core.messages import AssistantMessage, ChunkMessage, UserMessage
 from arancio.core.parsers.tool_result.web.fetch import FetchWebToolResultParser
 from arancio.core.tools.base import Tool
+from arancio.core.tools.session import ToolSession
 
 _SYSTEM_PROMPT = (
     "You extract and summarize information from a single fetched web page. "
@@ -37,7 +38,12 @@ class FetchWebTool(Tool):
     _max_content_chars: int = 50_000
     _result_parser: Type[FetchWebToolResultParser] = FetchWebToolResultParser
 
-    def __init__(self, client: Client, hook_manager: HookManager) -> None:
+    def __init__(
+        self,
+        client: Client,
+        hook_manager: HookManager,
+        tool_session: ToolSession,
+    ) -> None:
         """Initialize the tool with an externally built summarization client.
 
         Args:
@@ -46,8 +52,9 @@ class FetchWebTool(Tool):
                 summarization can run on a cheap model separate from the
                 agent's client.
             hook_manager: forwarded to :meth:`Tool.__init__`.
+            tool_session: forwarded to :meth:`Tool.__init__`.
         """
-        super().__init__(hook_manager=hook_manager)
+        super().__init__(hook_manager=hook_manager, tool_session=tool_session)
         self._client = client
 
     @property

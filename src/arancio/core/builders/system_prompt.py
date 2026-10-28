@@ -24,8 +24,8 @@ class SystemPromptBuilder(Builder):
     def __init__(self) -> None:
         """Load and cache the system prompt from the harness file.
 
-        Seeds ``SYSTEM_PROMPT.md`` with the default when missing, then parses it as
-        dynamic markdown. This mirrors how tool descriptions are loaded once in
+        Seeds the file with the default when missing, then parses it as dynamic
+        markdown. This mirrors how tool descriptions are loaded once in
         :class:`~arancio.core.tools.base.Tool`.
         """
         self._system_prompt = self._load_system_prompt()
@@ -63,8 +63,8 @@ class SystemPromptBuilder(Builder):
         Returns:
             The rendered system prompt string.
         """
-        # Path.cwd() tracks the app's working directory because
-        # App.set_working_directory mirrors every move to os.chdir
+        # Path.cwd() tracks the app's working directory because the
+        # application mirrors every directory change to os.chdir
         return (
             f"{self._system_prompt}\n\n"
             f"Today: {date.today().isoformat()}\n"

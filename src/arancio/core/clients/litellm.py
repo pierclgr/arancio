@@ -1,7 +1,7 @@
 """Generic LiteLLM-backed client using the Responses API."""
 
 import warnings
-from collections.abc import Iterator
+from collections.abc import Callable, Generator
 from typing import Type
 
 import litellm
@@ -14,8 +14,7 @@ from arancio.core.constants.litellm import (
     LITELLM_DEFAULT_THINKING_EFFORT,
     LITELLM_DEFAULT_THINKING_SUMMARY,
 )
-from arancio.core.controllers.base import Controller
-from arancio.core.controllers.requests import ChatGPTLoginRequest
+from arancio.core.events import LoginNotice
 from arancio.core.messages import Message
 from arancio.core.parsers.response.litellm import LiteLLMResponseParser
 from arancio.core.requests import LiteLLMRequest
@@ -65,16 +64,17 @@ class LiteLLMClient(Client):
 
     def __init__(
         self,
-        controller: Controller,
+        on_login: Callable[[LoginNotice], None],
         max_output_tokens: int | None = None,
         stream: bool = False,
         *args,
         **kwargs,
     ) -> None:
-        """Initialize the client with its frontend port and optional caps.
+        """Initialize the client with its login callback and optional caps.
 
         Args:
-            controller: frontend port receiving ChatGPT device-login notices.
+            on_login: one-way callback receiving ChatGPT device-login details,
+                forwarded to :class:`Client`.
             max_output_tokens: per-request cap forwarded as
                 ``max_output_tokens`` to ``litellm.responses``. Useful
                 with credit-gated routers (e.g. OpenRouter) which
@@ -96,10 +96,9 @@ class LiteLLMClient(Client):
             *args: positional arguments forwarded to :class:`Client`.
             **kwargs: keyword arguments forwarded to :class:`Client`.
         """
-        super().__init__(*args, **kwargs)
+        super().__init__(on_login, *args, **kwargs)
         self._max_output_tokens = max_output_tokens
         self._stream = stream
-        self._controller = controller
 
     def __repr__(self) -> str:
         """Return a developer-friendly representation of the client.
@@ -136,7 +135,7 @@ class LiteLLMClient(Client):
         """
         self._stream = value
 
-    def send_request(self, request: LiteLLMRequest) -> Iterator[Message]:
+    def send_request(self, request: LiteLLMRequest) -> Generator[Message, None, None]:
         """Send a request through LiteLLM and yield normalized messages.
 
         Builds the kwargs payload via ``_payload_builder``, optionally
@@ -174,14 +173,15 @@ class LiteLLMClient(Client):
                 yield from self._response_parser.parse(response)
 
     def _on_chatgpt_device_code(self, verification_url: str, user_code: str) -> None:
-        """Forward a ChatGPT device code to the configured frontend.
+        """Forward a ChatGPT device code to the login callback.
 
         Args:
             verification_url: browser address where the user enters the code.
             user_code: short code for the active ChatGPT login attempt.
         """
-        self._controller.request(
-            ChatGPTLoginRequest(
+        self._on_login(
+            LoginNotice(
+                provider="ChatGPT",
                 verification_url=verification_url,
                 user_code=user_code,
             )
