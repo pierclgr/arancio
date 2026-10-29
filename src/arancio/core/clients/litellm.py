@@ -10,14 +10,14 @@ from arancio.core.builders.payload.litellm import LiteLLMPayloadBuilder
 from arancio.core.builders.request.litellm import LiteLLMRequestBuilder
 from arancio.core.clients import _litellm_patches
 from arancio.core.clients.base import Client
-from arancio.core.constants.litellm import (
+from arancio.core.clients.constants import (
     LITELLM_DEFAULT_THINKING_EFFORT,
     LITELLM_DEFAULT_THINKING_SUMMARY,
 )
 from arancio.core.events import LoginNotice
-from arancio.core.messages import Message
+from arancio.core.messages.base import Message
 from arancio.core.parsers.response.litellm import LiteLLMResponseParser
-from arancio.core.requests import LiteLLMRequest
+from arancio.core.requests.litellm import LiteLLMRequest
 
 # silence LiteLLM's pydantic serializer warnings when streaming Responses
 # usage objects; the warning is purely informational noise from a third-

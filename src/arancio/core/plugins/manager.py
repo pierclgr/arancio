@@ -8,13 +8,16 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
 
-from arancio.core.constants.path import PLUGIN_MODULE_FILENAME, PLUGINS_PATH
-from arancio.core.constants.plugins import PLUGIN_PACKAGE_ROOT
 from arancio.core.hooks.base import Hook
 from arancio.core.hooks.manager import HookManager
-from arancio.core.messages import ErrorMessage, Message
+from arancio.core.messages.base import ErrorMessage, Message
 from arancio.core.permissions.types import PermissionCategory
 from arancio.core.plugins.base import Plugin
+from arancio.core.plugins.constants import (
+    PLUGIN_MODULE_FILENAME,
+    PLUGIN_PACKAGE_ROOT,
+    PLUGINS_PATH,
+)
 from arancio.core.plugins.registry import PLUGIN_REGISTRY, REGISTRATION_MESSAGES
 from arancio.core.plugins.tool import CUSTOM, PluginTool
 from arancio.core.tools.definition import ToolDefinition

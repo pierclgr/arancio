@@ -4,8 +4,9 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from arancio.core.builders.base import Builder
-from arancio.core.messages import Message, ToolResultMessage
-from arancio.core.requests import Request
+from arancio.core.messages.base import Message
+from arancio.core.messages.tool import ToolResultMessage
+from arancio.core.requests.base import Request
 from arancio.core.tools.schema import ToolSchema
 
 

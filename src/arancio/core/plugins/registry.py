@@ -4,7 +4,7 @@ from typing import Any, Callable
 from weakref import WeakKeyDictionary
 
 from arancio.core.hooks.base import Hook
-from arancio.core.messages import Message
+from arancio.core.messages.base import Message
 from arancio.core.plugins.base import Plugin
 
 PLUGIN_REGISTRY: list[Plugin] = []

@@ -5,9 +5,9 @@ from pathlib import Path
 
 from dynamic_markdown.types.files.base import DynamicMarkdownFile
 
+from arancio.core.agents.constants import AGENT_DEFAULT_SYSTEM_PROMPT
 from arancio.core.builders.base import Builder
-from arancio.core.constants.agent import AGENT_DEFAULT_SYSTEM_PROMPT
-from arancio.core.constants.path import SYSTEM_PROMPT_HARNESS_PATH
+from arancio.core.builders.constants import SYSTEM_PROMPT_HARNESS_PATH
 
 
 class SystemPromptBuilder(Builder):

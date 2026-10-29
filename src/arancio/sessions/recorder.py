@@ -7,12 +7,8 @@ from collections.abc import Iterator
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from arancio.core.messages import (
-    ErrorMessage,
-    Message,
-    ToolCallMessage,
-    ToolErrorMessage,
-)
+from arancio.core.messages.base import ErrorMessage, Message
+from arancio.core.messages.tool import ToolCallMessage, ToolErrorMessage
 from arancio.core.tools.session import ToolSession
 from arancio.sessions.checksum import SessionChecksum
 from arancio.sessions.codec import (

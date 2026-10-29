@@ -4,7 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 from arancio.core.hooks.base import Hook
-from arancio.core.messages import Message
+from arancio.core.messages.base import Message
 
 
 class HookManager:
@@ -22,7 +22,7 @@ class HookManager:
     after it do not run.
 
     Dispatched from :class:`~arancio.ui.app.App` for application lifecycle hooks,
-    :meth:`~arancio.core.agents.Agent.__call__`,
+    :meth:`~arancio.core.agents.base.Agent.__call__`,
     :meth:`~arancio.core.tools.base.Tool.call` and
     :meth:`~arancio.core.permissions.manager.PermissionManager.validate`; see
     AGENTS.md's Hooks section for the full call-site and keyword-argument

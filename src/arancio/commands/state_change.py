@@ -8,7 +8,7 @@ from arancio.commands.base import Command
 from arancio.sessions.session import SessionConfiguration
 
 if TYPE_CHECKING:
-    from arancio.core.messages import ErrorMessage
+    from arancio.core.messages.base import ErrorMessage
     from arancio.sessions.manager import SessionManager
     from arancio.settings.manager import SettingsManager
 

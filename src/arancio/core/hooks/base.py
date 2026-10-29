@@ -7,7 +7,7 @@ class Hook(Enum):
     """A named point in application or agent execution for registered handlers.
 
     Dispatched from :class:`~arancio.ui.app.App` (``STARTUP``/``SHUTDOWN``),
-    :meth:`~arancio.core.agents.Agent.__call__` (most
+    :meth:`~arancio.core.agents.base.Agent.__call__` (most
     members, plus ``ERROR`` with ``source="model"``/``"agent"``),
     :meth:`~arancio.core.tools.base.Tool.call`
     (the ``TOOL_CALL`` members, plus ``ERROR`` with ``source="tool"``) and

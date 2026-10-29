@@ -5,17 +5,15 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from arancio.core.messages import (
-    AssistantMessage,
-    ChunkMessage,
-    ErrorMessage,
-    Message,
-    ReasoningMessage,
+from arancio.core.messages.assistant import AssistantMessage
+from arancio.core.messages.base import ChunkMessage, ErrorMessage, Message
+from arancio.core.messages.reasoning import ReasoningMessage
+from arancio.core.messages.tool import (
     ToolCallMessage,
     ToolErrorMessage,
     ToolResultMessage,
-    UserMessage,
 )
+from arancio.core.messages.user import UserMessage
 
 
 def message_to_record(message: Message, visible: bool = True) -> dict[str, Any] | None:

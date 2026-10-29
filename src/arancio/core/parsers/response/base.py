@@ -5,7 +5,7 @@ from collections.abc import Iterator
 
 import requests
 
-from arancio.core.messages import Message
+from arancio.core.messages.base import Message
 from arancio.core.parsers.base import Parser
 
 

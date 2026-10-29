@@ -32,9 +32,10 @@ errors; `pre-push` runs the docstring check and the full test suite.
 ## Runtime working directory (important)
 
 At runtime tools do **not** read their prompts from the repo. They read from the arancio
-working directory `~/.arancio/` (harness paths remain in `core/constants/path.py`).
+working directory `~/.arancio/` (shared paths are in `core/constants.py`, with
+component-specific paths in each component's `constants.py`).
 Storage uses `ARANCIO_DEFAULT_DIR` as its root;
-startup, Settings and Sessions caller migration is deferred:
+startup and Sessions caller migration is deferred; Settings now uses Storage's text API:
 
 - `~/.arancio/harness/tools/<snake_tool_name>/{description.md,input_schema.yml}` — each
   tool's description and JSON input schema, loaded from disk by `Tool.__init__`.
@@ -44,7 +45,8 @@ startup, Settings and Sessions caller migration is deferred:
   that cached text with the current date appended. Runtime context that must stay
   fresh belongs in `build()`, **not** in a `<script>` tag in the markdown — the file is
   parsed once, so a date computed there would freeze at startup.
-- `~/.arancio/settings.yml` — persisted `Settings`.
+- `~/.arancio/settings.yml` — values persisted by SettingsManager through Storage;
+  `settings/constants.py` supplies only the relative `ARANCIO_SETTINGS_FILENAME`.
 - `~/.arancio/litellm/` — the intended destination for LiteLLM login data. Future
   startup wiring will supply the paths to Storage's generic `move_directory` and
   `create_symlink`; the provider-specific Storage helper has been removed.
@@ -88,31 +90,21 @@ Layered and provider-agnostic. The recurring pattern is a `base.py` abstract cla
 provider file (e.g. `litellm.py`); adding a provider means a new `Client` subclass
 with its own builder/parser trio, not touching the core loop.
 
-**Wiring** (`ui/__main__.py:main`) — build order matters: `StorageManager` →
-`UIController` + `HookManager` → `PluginManager.load_plugins()` → two `LiteLLMClient`s (main
-*streaming*, summary *non-streaming*, thinking
-disabled) → `ToolManager` → `PermissionManager` → `Agent` → `SettingsManager.load()`
-(neither `PermissionManager` nor `Agent` receives the `SessionManager`: core does not save)
-(validates `settings.yml` and applies the result to the live objects, returning any
-fallback messages) → `SessionManager` → Textual `App`, which also receives the
-`SettingsManager` so
-settings-mutating commands (e.g. `/model`) can apply and persist their changes, and the
-plugin plus `load()` messages as `startup_messages`, rendered once in `on_mount`. The
-plugins load right after the hook manager they attach to, and **before** `ToolManager`/
-`PermissionManager` are even constructed and `SettingsManager.load()` applies the
-permission grants and rebuilds the tool catalog — the point any plugin-defined tool
-(see **Plugins** below) must already be registered by, since `PermissionManager`'s and
-`SettingsValidator`'s default-grants loops both iterate `PermissionCategory` once, early.
-The controller is
-created before the app because app→agent→permission-manager→controller; `controller.app`
-is assigned once the app exists. The `SessionManager` comes **after** `SettingsManager.load()`
-because its constructor opens the process's session and that session snapshots the loaded
-settings — built earlier, its header would record the defaults. Its `current` is therefore
-never `None`; what is deferred is the *log*, which reaches disk on the first write that has
-something to save (see **Sessions** below), so closing the app without ever typing anything
-— or having typed only `/exit` (or its `/quit` alias) — leaves no session file behind.
+**Wiring** (`ui/__main__.py:main`) — the existing entry point is legacy caller code
+awaiting its architecture migration. It still calls Storage's removed login helper,
+supplies SettingsManager's removed client/agent arguments and expects `load_settings()` to
+apply settings to Core. Commands still mutate returned settings and call the removed
+`apply()`; Sessions still calls `apply_session_configuration()`. These callers
+are deliberately not adapted in the Settings step, so the full app is not wired yet.
 
-**Messages** (`core/messages.py`) — the lingua franca between clients, agent and UI. Every
+The next startup migration must discover plugins before constructing SettingsManager
+and supply its supported provider names. Loading returns a detached Settings
+snapshot and notices; Application will apply model/thinking values, Agent loop limits
+and permissions to Core. Build the initial session after loading so its header uses the
+selected values. Startup notices are displayed without entering history or creating a
+session log. Application will own later apply/save/session coordination.
+
+**Messages** (`core/messages/`) — the lingua franca between clients, agent and UI. Every
 message carries `content` (fed to the model) and `display_text` (shown in the UI), plus
 **one** routing flag: `in_history` (model context). That is the only consumer core speaks
 for, because it owns neither a session nor a UI — persistence and display are each
@@ -131,7 +123,7 @@ validation is its main producer. There is no audit message type: a fact that onl
 session would keep — the mtime a file tool left behind — is derived by the session layer
 from the shared `ToolSession`, not announced by core.
 
-**Agent loop** (`core/agents.py`) — holds a flat `List[Message]` history, empty unless the
+**Agent loop** (`core/agents/base.py`) — holds a flat `List[Message]` history, empty unless the
 constructor is given a `message_history` (copied, not aliased) — the seam a resumed session
 will use to hand its restored model context to the agent at startup, alongside the existing
 post-construction `restore_history`. Per turn: build
@@ -208,9 +200,10 @@ and `add_tool(tool_cls)` grows its mutable `.tools` set (not names → still ref
 `PermissionLevel` is NONE, ASK or AUTO. The grants dict always covers every *currently
 registered* category — a category not granted is present at `NONE`, never absent — which
 is why `PluginManager.load_plugins()` (see **Plugins**) has to run, and does run, before any
-`PermissionManager`/`SettingsManager` is built: both seed their default grants by
-iterating `PermissionCategory`, so a category registered afterward would be invisible to
-them. `PermissionManager` owns the
+`PermissionManager`/`SettingsManager` is built. Settings snapshots the known categories
+from the registry at construction; categories discovered afterward are not
+added to its snapshots.
+`PermissionManager` owns the
 `ToolManager`, so tools in a NONE category are **never even instantiated**; the
 `allowed_tools` property is what builds them. `validate` runs
 AUTO calls silently and delegates ASK calls to the controller; denials and user notes are
@@ -393,7 +386,7 @@ including when permission changes rebuild tool instances.
 Entry files load as `arancio_plugins.<folder>.plugin`. Their parent package points to
 the entry folder, allowing `from .helpers import X` without changing `sys.path` or
 mixing helpers from different folders. `PLUGIN_PACKAGE_ROOT` lives in
-`core/constants/plugins.py`. Importing executes module-level code even for disabled
+`core/plugins/constants.py`. Importing executes module-level code even for disabled
 plugins. An unexpected import failure discards all declarations and queued diagnostics
 added during that import, removes newly cached plugin modules (including helpers), and
 reports the failure; unrelated entries still load. Cached entry modules and constructed
@@ -505,13 +498,55 @@ command errors (`_execute_command`) and an unconfigured model on a plain prompt
 (`_execute_prompt`, via `Settings.model_id`) are caught by the executor and turned into an
 `ErrorMessage` rather than raising out to the UI.
 
-**Settings & storage** (`settings/`, `storage/`) — `Settings` is a plain class (not a
-`dataclass`: `provider` needs a validating `@property`, which can't share a name with a
-dataclass field) with `to_dict`/`from_dict`/`default`. The model is stored as separate
-`provider`/`model_name` fields; `Settings.model_id` joins them, raising `ValueError`
-(separately) when either is unset — `ModelCommand` checks `provider` itself before
-mutating anything, and `ActionExecutor._execute_prompt` checks `model_id` before sending a
-message, so both surface as an `ErrorMessage` instead of a crash.
+**Settings & storage** (`settings/`, `storage/`) — SettingsManager is the only Settings
+entry point. Its constructor requires StorageManager and `supported_providers`, without
+live Agent, Client, Sessions or frontend services. Construction performs no I/O. The
+manager snapshots registered categories and copies the supplied provider metadata.
+Plugins must be loaded first so their categories are included.
+
+`settings` and `global_settings` always return detached snapshots, including separate
+permission dictionaries. `set_field(field, value)`, `restore_active` and `reset_to_global_settings`
+change active values only and return None. `set_field` accepts any settings field, validates
+before publication and merges permission changes; model selection requires a usable
+model ID, effort changes require a configured model, and provider selection may precede
+model selection. Application will read `settings` afterward and apply it to Core.
+
+`save_settings(settings)` promotes the supplied snapshot; `save_field(field, category)`
+promotes only the selected field or permission category. Writes happen before publishing
+global defaults, and failures propagate.
+`reset_to_default_settings()` creates code defaults inside SettingsManager, writes
+them, then replaces both active and global snapshots. A failed write leaves both in-memory
+snapshots unchanged. It returns None. `reset_to_global_settings()` performs no file I/O.
+`restore_active()` accepts four plain values (provider, model name, thinking effort and
+complete permissions) and overlays them on global defaults without saving.
+
+`Settings` remains a plain holder with equality, representation and derived `model_id`.
+Its provider is a plain field, checked by SettingsValidator. SettingsManager creates
+defaults using its snapshot of registered categories. Built-in category levels are
+declared in `core/permissions/constants.py` and also used by PermissionManager; other
+categories default to ASK. The instance method
+`from_dict(data, categories)` fills its receiver and returns None. Only the manager
+constructs and copies Settings. `model_id` raises ValueError while provider/model is unset.
+
+`SettingsValidator` returns checked mappings and diagnostic Messages, never Settings
+objects. File loading applies defaults, reports warnings and errors, and
+reports unset provider/model values. Explicit edits use the same rules with strict
+rejection, allowing nullable unconfigured values. Missing file permissions use the code
+defaults; explicit null means NONE. Unknown names are ignored with notices on load and rejected
+for edits. Strict permission maps must cover every known category. Types are checked
+before membership/conversion; booleans are not numeric limits. The filename lives in
+`settings/constants.py`; scalar predicates and allowed permission levels are private
+class fields on SettingsValidator. Private members use double-leading underscores.
+
+SettingsManager calls Storage's `read_text` and `write_file` with
+`ARANCIO_SETTINGS_FILENAME = "settings.yml"`; Storage adds its root. A missing file is
+created from code defaults and reported. Empty, malformed or non-mapping YAML remains
+untouched while fallback values are used in memory. Other I/O and UTF-8 decoding failures
+propagate. `load_settings()` initializes both snapshots and returns a detached snapshot plus
+file/field notices, without applying values to Core.
+
+SettingsManager uses PyYAML safe conversion directly and preserves mapping order when
+dumping settings.
 
 `StorageManager` (`storage/manager.py`) is now generic file I/O. It uses the fixed
 `ARANCIO_DEFAULT_DIR` root and exposes instance operations for text, lines, byte chunks,
@@ -530,48 +565,12 @@ link resolving to target is a no-op; other occupied sources raise FileExistsErro
 The shared validator rejects symlinks with ValueError, missing paths with
 FileNotFoundError and non-directories with NotADirectoryError before writes.
 
-**Caller migration is deferred.** `load_settings`, `save_settings` and
-`bind_litellm_login_dir` have been removed from Storage, but SettingsManager and
-startup still reference them. SessionRegistry still consumes `make_dir`'s old return
-value, and SessionChecksum still uses direct I/O. These callers must be migrated in their own architecture
-steps. No compatibility wrappers or tests are added in the Storage step.
-
-The settings policy to preserve during that later migration belongs entirely in
-SettingsManager: a missing file is created with defaults and reported as a warning;
-empty, malformed or non-mapping YAML is reported as an error and left unchanged.
-SettingsManager will parse `read_text` results and serialize values for `write_file`.
-`SettingsValidator.validate(data)` (`settings/validator.py`) retains *field-level*
-validation: a missing field silently takes its default, an invalid field falls back to its
-default and is reported as a `WarningMessage`, or an `ErrorMessage` when the field's default
-is `None`. `provider`/`model_name` are the only fields whose default is `None`, so `null` is
-never a valid value for them (unlike e.g. `thinking_effort`, where `null` is an intentional,
-supported state): present-as-`null` gets its own clearer `"<field>" is not set.` message,
-distinct from the generic invalid-value wording used for a genuinely wrong value (unknown
-provider name, wrong type). `permissions` is validated per entry against the total
-4-category map `PermissionManager` requires — an unknown category is dropped with a
-`WarningMessage`, a known category with an invalid level falls back to `"ask"`, and an
-explicit `null` level (`PermissionLevel.NONE`) is accepted as a valid, meaningful value. A
-top-level key naming none of the known fields is likewise dropped with a `WarningMessage`
-(same treatment as an unknown permission category, for consistency) rather than silently
-ignored. An invalid file is never written back, so its messages resurface on every load
-until fixed. Each `SettingsValidator._FIELD_RULES` predicate is an inline lambda spelling
-out exactly the check its field needs (type, positivity, membership in
-`LITELLM_PROVIDER_NAMES`), so no shared predicate module exists;
-`Settings.provider`'s setter checks `LITELLM_PROVIDER_NAMES` membership directly. An
-invalid provider assignment raises an error containing the alphabetically sorted
-`LITELLM_PROVIDER_NAMES`, which `/provider` surfaces through the command executor.
-
-`SettingsManager.load()` concatenates the file-level and field-level messages lists,
-applies the result, and returns `(Settings, list[Message])`. **`settings` and
-`global_settings` are never `None`**: both start as `Settings.default()` and `load()`
-replaces them before anything can read them, since `main()` calls it between building the
-manager and building the `App`. Callers therefore dereference them directly — `/model`,
-`/provider`, `/effort`, `/permissions`, `/clear` and the executor all do — instead of each
-one guarding a state that cannot occur.
-`SettingsManager.apply()` never raises: it falls back to a `None` client model_id when
-unconfigured (safe at startup), and keeps the summary client on the same model as the main
-client — there is no separate summary model setting. `apply()` also pushes thinking, agent
-loop limits and permission grants (which rebuilds the tool catalog) into the live objects.
+**Caller migration is deferred.** Startup still references the removed
+`bind_litellm_login_dir` and the old SettingsManager constructor. Commands must move
+from direct mutation and `apply()` to setters, explicit saves and snapshot reads.
+Sessions must replace `apply_session_configuration` with value-only `restore_active`.
+SessionRegistry still consumes `make_dir`'s old return value, and SessionChecksum still
+uses direct I/O. No compatibility wrappers or tests are added in this step.
 
 **Sessions** (`sessions/`) — `SessionManager` decides *which* chat is active and owns the
 read side; `SessionRecorder` (`sessions/recorder.py`) owns the **write** side; `StorageManager`
@@ -801,6 +800,9 @@ path/mtime state so a resumed session restores its read-first guard only for unc
 - **Comments**: start lowercase, no trailing period; only comment non-obvious slices.
 - **Files**: `snake_case.py`; Markdown `UPPER_SNAKE_CASE.md`. Source in `src/`, tests in `tests/`.
 - **Exceptions**: prefer built-ins (`ValueError`, `TypeError`, …); do not define custom exception classes.
+- **Settings internals**: double-leading underscores for private fields and methods;
+  shared constants belong in `settings/constants.py`; validator-only rules are private
+  class fields. Only SettingsManager constructs Settings.
 - **Storage internals**: double-leading underscores for private fields and methods;
   constants belong in `storage/constants.py`. Callers own paths and serialization.
 - **New provider / tool / command**: follow the existing seams — subclass the relevant

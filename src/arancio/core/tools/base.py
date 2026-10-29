@@ -6,15 +6,16 @@ from typing import Any, Type
 import yaml
 from dynamic_markdown.types.files.base import DynamicMarkdownFile
 
-from arancio.core.constants.path import (
+from arancio.core.hooks.base import Hook
+from arancio.core.hooks.manager import HookManager
+from arancio.core.messages.base import Message
+from arancio.core.messages.tool import ToolResultMessage
+from arancio.core.parsers.tool_result.base import ToolResultParser
+from arancio.core.tools.constants import (
     TOOL_DESCRIPTION_FILENAME,
     TOOL_INPUT_SCHEMA_FILENAME,
     TOOLS_HARNESS_PATH,
 )
-from arancio.core.hooks.base import Hook
-from arancio.core.hooks.manager import HookManager
-from arancio.core.messages import Message, ToolResultMessage
-from arancio.core.parsers.tool_result.base import ToolResultParser
 from arancio.core.tools.schema import ToolSchema
 from arancio.core.tools.session import ToolSession
 from arancio.core.utils.naming import camel_to_snake
@@ -128,7 +129,7 @@ class Tool(ABC):
         gets. Only a :meth:`_call`
         failure is caught here — a hook handler's own exception during any
         of these three dispatches propagates out of this method instead of
-        becoming a :class:`~arancio.core.messages.ToolErrorMessage`.
+        becoming a :class:`~arancio.core.messages.tool.ToolErrorMessage`.
 
         Args:
             call_id: identifier of the tool call this result answers.

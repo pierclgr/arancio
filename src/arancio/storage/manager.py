@@ -6,7 +6,7 @@ import shutil
 from collections.abc import Generator
 from pathlib import Path
 
-from arancio.core.constants.path import ARANCIO_DEFAULT_DIR
+from arancio.core.constants import ARANCIO_DEFAULT_DIR
 from arancio.storage.constants import READ_CHUNK_SIZE
 
 

@@ -1,232 +1,282 @@
-"""Validation of the parsed settings mapping into a usable settings snapshot."""
+"""Shared validation rules for settings-file fallback and explicit edits."""
 
-from typing import Any, Callable, ClassVar
+from collections.abc import Callable, Collection, Mapping
+from typing import Any, ClassVar
 
-from arancio.core.constants.agent import (
-    AGENT_DEFAULT_MAX_RETRIES,
-    AGENT_DEFAULT_MAX_TURNS,
-    AGENT_DEFAULT_TURN_WAIT_TIME,
-    AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
-    AGENT_UNLIMITED_MAX_TURNS,
-)
-from arancio.core.constants.litellm import (
-    LITELLM_DEFAULT_THINKING_EFFORT,
-    LITELLM_DEFAULT_THINKING_SUMMARY,
-    LITELLM_PROVIDER_NAMES,
-)
-from arancio.core.messages import ErrorMessage, Message, WarningMessage
-from arancio.core.permissions.types import PermissionCategory, PermissionLevel
-from arancio.settings.settings import Settings
+from arancio.core.agents.constants import AGENT_UNLIMITED_MAX_TURNS
+from arancio.core.messages.base import ErrorMessage, Message, WarningMessage
+from arancio.core.permissions.types import PermissionLevel
+from arancio.settings.constants import ARANCIO_SETTINGS_FILENAME
 
 
 class SettingsValidator:
-    """Validate a parsed ``settings.yml`` mapping into a usable settings snapshot.
+    """Check plain values without constructing or changing Settings objects.
 
-    Every field falls back to its code default when missing or invalid, so a malformed
-    settings file never prevents the app from starting. A missing field is silently
-    defaulted; an invalid field falls back to its default and is reported through a
-    :class:`~arancio.core.messages.WarningMessage`, or an
-    :class:`~arancio.core.messages.ErrorMessage` when the field's default is ``None``.
-    The caller (:class:`~arancio.storage.manager.StorageManager`) is responsible for
-    reading and YAML-parsing the file and for handling a missing or unparseable file;
-    this validator only ever sees an already-parsed mapping.
+    File loading returns fallback values and notices. Strict validation rejects
+    invalid or incomplete candidates with ValueError. Provider and category
+    metadata comes from the manager, never from a process-wide registry.
+
+    Attributes:
+        __SETTINGS_FIELD_RULES: scalar predicates shared by loading and explicit edits.
+        __PERMISSION_LEVEL_VALUES: the accepted serialized permission levels.
+        __defaults: copied code defaults, including known permission names.
+        __supported_providers: copied, lowercased provider names.
     """
 
-    # each predicate composes the unit checks with the and/or the field needs
-    _FIELD_RULES: ClassVar[tuple[tuple[str, Any, Callable[[Any], bool]], ...]] = (
-        (
-            "provider",
-            None,
-            lambda v: isinstance(v, str) and v.lower() in LITELLM_PROVIDER_NAMES,
+    # provider membership is checked separately against the supplied metadata
+    __SETTINGS_FIELD_RULES: ClassVar[dict[str, Callable[[Any], bool]]] = {
+        "provider": lambda value: value is None or isinstance(value, str),
+        "model_name": lambda value: value is None or isinstance(value, str),
+        "thinking_effort": lambda value: value is None or isinstance(value, str),
+        "thinking_summary": lambda value: value is None or isinstance(value, str),
+        "max_turns": lambda value: (
+            (isinstance(value, str) and value == AGENT_UNLIMITED_MAX_TURNS)
+            or (isinstance(value, int) and not isinstance(value, bool) and value > 0)
         ),
-        ("model_name", None, lambda v: isinstance(v, str)),
-        (
-            "thinking_effort",
-            LITELLM_DEFAULT_THINKING_EFFORT,
-            lambda v: v is None or isinstance(v, str),
+        "max_retries": lambda value: (
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
         ),
-        (
-            "thinking_summary",
-            LITELLM_DEFAULT_THINKING_SUMMARY,
-            lambda v: v is None or isinstance(v, str),
+        "turn_wait_time": lambda value: (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and value >= 0
         ),
-        (
-            "max_turns",
-            AGENT_DEFAULT_MAX_TURNS,
-            lambda v: (
-                v == AGENT_UNLIMITED_MAX_TURNS
-                or (isinstance(v, int) and not isinstance(v, bool) and v > 0)
-            ),
+        "turn_wait_time_multiplier": lambda value: (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and value >= 0
         ),
-        (
-            "max_retries",
-            AGENT_DEFAULT_MAX_RETRIES,
-            lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 0,
-        ),
-        (
-            "turn_wait_time",
-            AGENT_DEFAULT_TURN_WAIT_TIME,
-            lambda v: (
-                isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0
-            ),
-        ),
-        (
-            "turn_wait_time_multiplier",
-            AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
-            lambda v: (
-                isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0
-            ),
-        ),
+    }
+
+    __PERMISSION_LEVEL_VALUES: ClassVar[frozenset[str | None]] = frozenset(
+        level.value for level in PermissionLevel
     )
 
-    @classmethod
-    def validate(cls, data: dict[str, Any]) -> tuple[Settings, list[Message]]:
-        """Validate a parsed settings mapping into a settings snapshot.
-
-        Every field is checked individually: a missing field silently falls
-        back to its default, and an invalid field falls back to its default
-        and is reported as a warning, or an error when the field's default is
-        ``None``. A top-level key that names none of the known fields is
-        reported as a warning and ignored, the same treatment as an unknown
-        permission category. ``provider``/``model_name`` are the exception to
-        the "missing is silent" rule: since their default is ``None``, a
-        missing key resolves to the same unconfigured ``None`` as a present
-        ``null`` value, so both are reported the same way.
+    def __init__(
+        self,
+        defaults: Mapping[str, Any],
+        supported_providers: Collection[str],
+    ) -> None:
+        """Copy code defaults and provider metadata supplied by the manager.
 
         Args:
-            data: the mapping parsed from the settings file (the caller
-                handles a missing or unparseable file before reaching here).
+            defaults: complete serialized code defaults and permission names.
+            supported_providers: the supported provider prefixes.
+        """
+        self.__defaults: dict[str, Any] = dict(defaults)
+        self.__defaults["permissions"] = dict(defaults["permissions"])
+        self.__supported_providers: frozenset[str] = frozenset(
+            provider.lower() for provider in supported_providers
+        )
+
+    def validate(
+        self,
+        data: Mapping[str, Any],
+        *,
+        strict: bool = False,
+    ) -> tuple[dict[str, Any], list[Message]]:
+        """Return checked values and notices, or reject an invalid strict edit.
+
+        Missing ordinary file fields use code defaults silently. Unset provider
+        and model fields produce their existing unconfigured notices. Strict
+        candidates must be complete, but may retain nullable unconfigured values.
+
+        Args:
+            data: the settings mapping to check.
+            strict: reject invalid, missing or unknown values instead of falling back.
 
         Returns:
-            A ``(settings, messages)`` pair: the validated settings, and the
-            messages to surface in the UI describing any fallback applied.
+            Checked serialized values and file-mode diagnostics. Strict validation
+            returns an empty diagnostic list on success.
+
+        Raises:
+            ValueError: when data is not a mapping or a strict candidate is invalid.
         """
-        permissions, messages = cls._validate_permissions(data)
+        if not isinstance(data, Mapping):
+            raise ValueError(f"Settings must be a mapping, got {data!r}.")
+
+        permissions, messages = self.__validate_permissions(data, strict=strict)
         normalized: dict[str, Any] = {"permissions": permissions}
 
-        known_fields = {"permissions", *(field for field, _, _ in cls._FIELD_RULES)}
-        for field, default, is_valid in cls._FIELD_RULES:
-            if field not in data and default is not None:
+        for field in self.__SETTINGS_FIELD_RULES:
+            if strict and field not in data:
+                raise ValueError(f"Missing settings field: {field!r}.")
+            default = self.__defaults[field]
+            value = data.get(field, default)
+            try:
+                normalized[field] = self.__normalize_field(field, value)
+            except ValueError:
+                if strict:
+                    raise
                 normalized[field] = default
-                continue
-            value = data.get(field)
-            if is_valid(value):
-                normalized[field] = value
-                continue
-            normalized[field] = default
-            message_cls = ErrorMessage if default is None else WarningMessage
-            text = (
-                cls._not_set_text(field)
-                if value is None and default is None
-                else cls._invalid_field_text(field, value, default)
-            )
-            messages.append(message_cls(content=text))
-
-        for key in data:
-            if key not in known_fields:
+                message_cls = ErrorMessage if default is None else WarningMessage
                 messages.append(
-                    WarningMessage(
-                        content=f"settings.yml: unknown field {key!r}; entry ignored."
+                    message_cls(
+                        content=self.__invalid_field_text(field, value, default)
                     )
                 )
+                continue
 
-        return Settings.from_dict(normalized), messages
+            if (
+                not strict
+                and field in ("provider", "model_name")
+                and normalized[field] is None
+            ):
+                messages.append(ErrorMessage(content=self.__not_set_text(field)))
 
-    @classmethod
-    def _validate_permissions(
-        cls, data: dict[str, Any]
-    ) -> tuple[dict[str, str | None], list[Message]]:
-        """Validate the ``permissions`` field, always returning a complete mapping.
+        known_fields = {"permissions", *self.__SETTINGS_FIELD_RULES}
+        for key in data:
+            if key in known_fields:
+                continue
+            if strict:
+                raise ValueError(f"Unknown settings field: {key!r}.")
+            messages.append(
+                WarningMessage(
+                    content=(
+                        f"{ARANCIO_SETTINGS_FILENAME}: unknown field {key!r}; "
+                        "entry ignored."
+                    )
+                )
+            )
 
-        A category missing from the file is silently defaulted to
-        ``"ask"``, matching the missing-field rule applied to every other
-        field. A known category with an invalid level falls back to
-        ``"ask"`` with a warning; an unknown category name is dropped with a
-        warning since there is no category to default it to.
+        return normalized, messages
+
+    def __normalize_field(self, field: str, value: Any) -> Any:
+        """Check one scalar field and normalize a configured provider name.
 
         Args:
-            data: the raw mapping parsed from the settings file.
+            field: a known settings field name.
+            value: the candidate value.
 
         Returns:
-            A ``(permissions, messages)`` pair: the permissions as a flat
-            mapping of lowercase category name to level value (covering
-            every known category), and the warnings produced by invalid
-            entries.
+            The checked value, with provider names lowercased.
+
+        Raises:
+            ValueError: when the type, range or provider name is invalid.
         """
-        result: dict[str, str | None] = {
-            category.name.lower(): PermissionLevel.ASK.value
-            for category in PermissionCategory
-        }
+        if not self.__SETTINGS_FIELD_RULES[field](value):
+            raise ValueError(f"Invalid value {value!r} for settings field {field!r}.")
+        if field != "provider" or value is None:
+            return value
+
+        provider = value.lower()
+        if provider not in self.__supported_providers:
+            supported = ", ".join(sorted(self.__supported_providers))
+            raise ValueError(
+                f"Unknown provider: {value!r}. Supported providers: {supported}."
+            )
+        return provider
+
+    def __validate_permissions(
+        self,
+        data: Mapping[str, Any],
+        *,
+        strict: bool,
+    ) -> tuple[dict[str, str | None], list[Message]]:
+        """Check permissions against supplied names and return a complete mapping.
+
+        Args:
+            data: the complete candidate settings mapping.
+            strict: require every known category and reject invalid entries.
+
+        Returns:
+            Checked lowercase category names and serialized levels, plus file-mode
+            warnings. Missing or invalid file entries retain their code defaults.
+
+        Raises:
+            ValueError: when a strict permission mapping is missing or invalid.
+        """
+        result: dict[str, str | None] = dict(self.__defaults["permissions"])
         if "permissions" not in data:
+            if strict:
+                raise ValueError("Missing settings field: 'permissions'.")
             return result, []
 
         raw = data["permissions"]
-        if not isinstance(raw, dict):
-            return result, [
-                WarningMessage(
-                    content=(
-                        f'settings.yml: "permissions" must be a mapping, got {raw!r}; '
-                        'using defaults (all categories "ask").'
-                    )
-                )
-            ]
+        if not isinstance(raw, Mapping):
+            text = (
+                f'{ARANCIO_SETTINGS_FILENAME}: "permissions" must be a mapping, '
+                f"got {raw!r}"
+            )
+            if strict:
+                raise ValueError(f"{text}.")
+            return result, [WarningMessage(content=f"{text}; using defaults.")]
 
-        valid_levels = {level.value for level in PermissionLevel}
         messages: list[Message] = []
+        seen: set[str] = set()
         for name, level in raw.items():
-            if (
-                not isinstance(name, str)
-                or name.upper() not in PermissionCategory.__members__
-            ):
+            if not isinstance(name, str) or name.lower() not in result:
+                if strict:
+                    raise ValueError(f"Unknown permission category: {name!r}.")
                 messages.append(
                     WarningMessage(
                         content=(
-                            f"settings.yml: unknown permission category {name!r}; "
-                            "entry ignored."
+                            f"{ARANCIO_SETTINGS_FILENAME}: unknown permission "
+                            f"category {name!r}; entry ignored."
                         )
                     )
                 )
                 continue
-            if level not in valid_levels:
-                messages.append(
-                    WarningMessage(
-                        content=(
-                            f"settings.yml: invalid permission level {level!r} for "
-                            f'category {name!r}; using default "ask".'
-                        )
-                    )
-                )
-                continue
-            result[name.lower()] = level
 
+            # check the type before membership so collections cannot leak TypeError
+            if (
+                not (level is None or isinstance(level, str))
+                or level not in self.__PERMISSION_LEVEL_VALUES
+            ):
+                if strict:
+                    raise ValueError(
+                        f"Invalid permission level {level!r} for category {name!r}."
+                    )
+                default = self.__defaults["permissions"][name.lower()]
+                default_text = f'"{default}"' if default is not None else "null"
+                messages.append(
+                    WarningMessage(
+                        content=(
+                            f"{ARANCIO_SETTINGS_FILENAME}: invalid permission level "
+                            f"{level!r} for category {name!r}; "
+                            f"using default {default_text}."
+                        )
+                    )
+                )
+                continue
+
+            key = name.lower()
+            result[key] = level
+            seen.add(key)
+
+        if strict:
+            missing = result.keys() - seen
+            if missing:
+                raise ValueError(
+                    f"Missing permission categories: {', '.join(sorted(missing))}."
+                )
         return result, messages
 
     @staticmethod
-    def _not_set_text(field: str) -> str:
-        """Build the message text for a null-default field left unset.
+    def __not_set_text(field: str) -> str:
+        """Build the existing notice for an unconfigured provider or model.
 
         Args:
-            field: the name of the unset field.
+            field: the unset field name.
 
         Returns:
-            The message text naming the file and the field.
+            The notice text naming the settings file and field.
         """
-        return f'settings.yml: "{field}" is not set.'
+        return f'{ARANCIO_SETTINGS_FILENAME}: "{field}" is not set.'
 
     @staticmethod
-    def _invalid_field_text(field: str, value: Any, default: Any) -> str:
-        """Build the message text for an invalid top-level field.
+    def __invalid_field_text(field: str, value: Any, default: Any) -> str:
+        """Build the existing notice for an invalid file field and its fallback.
 
         Args:
-            field: the name of the invalid field.
-            value: the offending value read from the settings file.
-            default: the default value the field falls back to.
+            field: the invalid field name.
+            value: the rejected value.
+            default: the code-default fallback.
 
         Returns:
-            The message text naming the file, field, offending value and
-            default.
+            The notice text naming the file, field, value and fallback.
         """
         return (
-            f'settings.yml: invalid value {value!r} for "{field}"; '
+            f'{ARANCIO_SETTINGS_FILENAME}: invalid value {value!r} for "{field}"; '
             f"using default {default!r}."
         )

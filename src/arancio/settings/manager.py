@@ -1,202 +1,325 @@
-"""Settings facade: coordinate persistence and apply settings to live objects."""
+"""Settings values, validation and YAML persistence through generic Storage."""
 
-from __future__ import annotations
+from collections.abc import Collection, Mapping
+from typing import Any
 
-from typing import TYPE_CHECKING
+import yaml
 
-from arancio.core.agents import Agent
-from arancio.core.clients.base import Client
-from arancio.core.messages import Message
-from arancio.core.permissions.types import PermissionCategory
+from arancio.core.agents.constants import (
+    AGENT_DEFAULT_MAX_RETRIES,
+    AGENT_DEFAULT_MAX_TURNS,
+    AGENT_DEFAULT_TURN_WAIT_TIME,
+    AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
+)
+from arancio.core.clients.constants import (
+    LITELLM_DEFAULT_THINKING_EFFORT,
+    LITELLM_DEFAULT_THINKING_SUMMARY,
+)
+from arancio.core.messages.base import ErrorMessage, Message, WarningMessage
+from arancio.core.permissions.constants import DEFAULT_PERMISSION_LEVELS
+from arancio.core.permissions.types import PermissionCategory, PermissionLevel
+from arancio.settings.constants import ARANCIO_SETTINGS_FILENAME
 from arancio.settings.settings import Settings
 from arancio.settings.validator import SettingsValidator
 from arancio.storage.manager import StorageManager
 
-if TYPE_CHECKING:
-    from arancio.sessions.session import SessionConfiguration
-
 
 class SettingsManager:
-    """Coordinate settings persistence and apply them to the live objects.
+    """Own active settings and global defaults without applying them to Core.
 
-    The single settings surface the entry points use: it loads settings through
-    the storage layer (creating defaults on first run), pushes them into the
-    client, summary client (kept on the same model as the client) and agent, and
-    persists changes back to disk.
+    Only this facade constructs and copies Settings objects. Callers edit active
+    values through its methods and read detached snapshots through properties.
+    File policy belongs here; Storage supplies UTF-8 reads and writes.
 
     Attributes:
-        _storage_manager: the storage layer reading and writing the settings file.
-        _client: the agent's main client (model and thinking settings).
-        _summary_client: the web-summary client (uses the main client's model).
-        _agent: the agent (loop limits and permissions).
-        _settings: the current in-memory settings, seeded with the defaults
-            until :meth:`load` replaces them.
-        _global_settings: the persisted defaults new sessions start from, seeded
-            the same way.
+        __storage_manager: the injected generic file I/O service.
+        __categories: category identities registered before construction.
+        __validator: shared validation for file loading and explicit edits.
+        __settings: the active conversation values.
+        __global_settings: the defaults selected by load or a successful save.
     """
 
     def __init__(
         self,
         storage_manager: StorageManager,
-        client: Client,
-        summary_client: Client,
-        agent: Agent,
+        supported_providers: Collection[str],
     ) -> None:
-        """Initialize the manager with the storage layer and live objects.
+        """Initialize defaults and copy metadata without reading or writing files.
 
         Args:
-            storage_manager: the storage layer reading and writing the settings file.
-            client: the agent's main client.
-            summary_client: the web-summary client; kept on the same model as
-                ``client``.
-            agent: the agent whose loop limits and permissions are configured.
+            storage_manager: the service reading and writing relative settings paths.
+            supported_providers: the provider names available to the application.
         """
-        self._storage_manager = storage_manager
-        self._client = client
-        self._summary_client = summary_client
-        self._agent = agent
-        self._settings: Settings = Settings.default()
-        self._global_settings: Settings = Settings.default()
+        self.__storage_manager = storage_manager
+        self.__categories: tuple[PermissionCategory, ...] = tuple(PermissionCategory)
+        self.__global_settings: Settings = self.__default_settings()
+        self.__settings: Settings = self.__copy_settings(self.__global_settings)
+        self.__validator = SettingsValidator(
+            self.__global_settings.to_dict(), supported_providers
+        )
 
     @property
     def settings(self) -> Settings:
-        """Return the current in-memory settings.
+        """Return a detached copy of the active settings.
 
         Returns:
-            The current settings.
+            A snapshot whose fields and permission dictionary can be changed
+            without changing manager-owned values.
         """
-        return self._settings
-
-    @settings.setter
-    def settings(self, value: Settings) -> None:
-        """Replace the current in-memory settings without applying them.
-
-        Args:
-            value: the new settings; call :meth:`apply` and :meth:`save` to push
-                and persist them.
-        """
-        self._settings = value
+        return self.__copy_settings(self.__settings)
 
     @property
     def global_settings(self) -> Settings:
-        """Return the persisted defaults used by newly created sessions.
+        """Return a detached copy of the loaded or successfully saved defaults.
 
         Returns:
-            The global defaults.
+            An independent snapshot of the global-default values.
         """
-        return self._global_settings
+        return self.__copy_settings(self.__global_settings)
 
-    def load(self) -> tuple[Settings, list[Message]]:
-        """Load, validate and apply the settings from disk.
+    def load_settings(self) -> tuple[Settings, list[Message]]:
+        """Load settings through Storage and return file and field diagnostics.
 
-        Creates the default settings file on first run (delegated to the
-        storage layer, which also reports a missing or unreadable file). The
-        storage layer signals that condition with ``None`` in place of a
-        dictionary; deciding that ``None`` means "use the default settings"
-        is this method's call, not the storage layer's — the default
-        settings' own dictionary form is validated field by field the same
-        way a real file's would be, so e.g. an unconfigured
-        ``provider``/``model_name`` is still reported. Otherwise, the parsed
-        dictionary is validated by
-        :class:`~arancio.settings.validator.SettingsValidator`, which falls
-        back to defaults for any missing or invalid field. The loaded
-        settings are then applied to the live objects.
+        A missing file is created from code defaults. Empty, malformed or
+        non-mapping YAML is left unchanged while defaults are used in memory.
+        Other I/O and UTF-8 decoding failures propagate without publishing values.
 
         Returns:
-            A ``(settings, messages)`` pair: the loaded settings, and the
-            file-level and field-level messages to surface in the UI.
+            A detached active snapshot and the notices produced by loading.
         """
-        data, file_messages = self._storage_manager.load_settings()
-        if data is None:
-            data = Settings.default().to_dict()
-        self._global_settings, field_messages = SettingsValidator.validate(data)
-        self._settings = self._copy_settings(self._global_settings)
-        self.apply()
-        return self._settings, file_messages + field_messages
+        defaults = self.__default_settings()
+        file_messages: list[Message] = []
+        try:
+            text = self.__storage_manager.read_text(ARANCIO_SETTINGS_FILENAME)
+        except FileNotFoundError:
+            data = defaults.to_dict()
+            self.__storage_manager.write_file(
+                ARANCIO_SETTINGS_FILENAME, yaml.safe_dump(data, sort_keys=False)
+            )
+            file_messages.append(
+                WarningMessage(
+                    content=(
+                        f"{ARANCIO_SETTINGS_FILENAME} not found; "
+                        "creating it with default settings."
+                    )
+                )
+            )
+        else:
+            try:
+                data = yaml.safe_load(text)
+            except yaml.YAMLError:
+                data = None
+            if not isinstance(data, Mapping):
+                data = defaults.to_dict()
+                file_messages.append(
+                    ErrorMessage(
+                        content=(
+                            f"{ARANCIO_SETTINGS_FILENAME} is empty or not a valid "
+                            "YAML mapping; using default settings."
+                        )
+                    )
+                )
 
-    def save(self) -> None:
-        """Persist the current settings to disk through the storage layer."""
-        self._storage_manager.save_settings(self._settings)
-        self._global_settings = self._copy_settings(self._settings)
+        checked, field_messages = self.__validator.validate(data)
+        defaults.from_dict(checked, self.__categories)
+        active = self.__copy_settings(defaults)
+        self.__global_settings = defaults
+        self.__settings = active
+        return self.settings, file_messages + field_messages
 
-    def save_provider(self) -> None:
-        """Persist only the active provider as a global default."""
-        self._global_settings.provider = self._settings.provider
-        self._storage_manager.save_settings(self._global_settings)
+    def set_field(
+        self,
+        field: str,
+        value: Any,
+    ) -> None:
+        """Validate and update one active setting without saving it.
 
-    def save_model_name(self) -> None:
-        """Persist only the active model name as a global default."""
-        self._global_settings.model_name = self._settings.model_name
-        self._storage_manager.save_settings(self._global_settings)
-
-    def save_thinking_effort(self) -> None:
-        """Persist only the active thinking effort as a global default."""
-        self._global_settings.thinking_effort = self._settings.thinking_effort
-        self._storage_manager.save_settings(self._global_settings)
-
-    def save_permission(self, category: PermissionCategory) -> None:
-        """Persist one active permission category as a global default.
+        Permissions are merged rather than replaced. A model name must form a
+        usable model ID, and changing thinking effort requires a configured model.
 
         Args:
-            category: the permission category whose active level to persist.
-        """
-        self._global_settings.permissions[category] = self._settings.permissions[
-            category
-        ]
-        self._storage_manager.save_settings(self._global_settings)
+            field: the setting to change.
+            value: the new value, or typed category-to-level changes for permissions.
 
-    def apply_session_configuration(self, configuration: SessionConfiguration) -> None:
-        """Apply a restored session's command-controlled configuration.
+        Raises:
+            ValueError: when the field or value is invalid, or a model is required.
+        """
+        data = self.__settings.to_dict()
+        if not isinstance(field, str) or field not in data:
+            raise ValueError(f"Unknown editable settings field: {field!r}.")
+        if field == "thinking_effort":
+            self.__settings.model_id
+
+        if field == "permissions":
+            value = self.__permission_values(value)
+        if field == "permissions":
+            data[field].update(value)
+        else:
+            data[field] = value
+
+        candidate = self.__prepare_settings(data)
+        if field == "model_name":
+            candidate.model_id
+        self.__settings = candidate
+
+    def restore_active(
+        self,
+        *,
+        provider: str | None,
+        model_name: str | None,
+        thinking_effort: str | None,
+        permissions: Mapping[PermissionCategory, PermissionLevel],
+    ) -> None:
+        """Restore four session-controlled values on top of global defaults.
+
+        Thinking summary and loop limits retain their global-default values.
+        This operation does not save settings or receive a Sessions object.
+        Invalid values or incomplete permissions raise ValueError.
 
         Args:
-            configuration: an object exposing provider, model_name,
-                thinking_effort and permissions from a saved session.
+            provider: the restored provider, or None when unconfigured.
+            model_name: the restored model name, or None when unconfigured.
+            thinking_effort: the restored effort, or None when disabled.
+            permissions: the complete restored permission map for known categories.
         """
-        settings = self._copy_settings(self._global_settings)
-        settings.provider = configuration.provider
-        settings.model_name = configuration.model_name
-        settings.thinking_effort = configuration.thinking_effort
-        settings.permissions = dict(configuration.permissions)
-        self._settings = settings
-        self.apply()
-
-    def reset_to_global(self) -> None:
-        """Restore the active runtime configuration from global defaults."""
-        self._settings = self._copy_settings(self._global_settings)
-        self.apply()
-
-    def apply(self) -> None:
-        """Push the current settings into the live objects.
-
-        Sets the client's model and thinking settings, the summary client's model (the
-        same model as the main client), the agent's loop limits, and replaces the
-        agent's permission grants (which rebuilds its tool catalog). The summary
-        client's thinking is left untouched: it is disabled once where the summary
-        client is constructed. The client's model is left ``None`` while the provider or
-        model name is not yet configured.
-        """
-        settings = self._settings
-        model_id = (
-            settings.model_id if settings.provider and settings.model_name else None
+        values = self.__permission_values(permissions)
+        data = self.__global_settings.to_dict()
+        data.update(
+            provider=provider,
+            model_name=model_name,
+            thinking_effort=thinking_effort,
+            permissions=values,
         )
-        self._client.model_id = model_id
-        self._client.thinking_effort = settings.thinking_effort
-        self._client.thinking_summary = settings.thinking_summary
-        self._summary_client.model_id = model_id
-        self._agent.max_turns = settings.max_turns
-        self._agent.max_retries = settings.max_retries
-        self._agent.retry_delay = settings.turn_wait_time
-        self._agent.retry_delay_multiplier = settings.turn_wait_time_multiplier
-        self._agent.set_permissions(settings.permissions)
+        self.__settings = self.__prepare_settings(data)
 
-    @staticmethod
-    def _copy_settings(settings: Settings) -> Settings:
-        """Return an independent settings copy from its serialized form.
+    def reset_to_global_settings(self) -> None:
+        """Replace active values with global defaults without file I/O."""
+        self.__settings = self.__copy_settings(self.__global_settings)
+
+    def reset_to_default_settings(self) -> None:
+        """Write code defaults, then replace both active and global settings.
+
+        Write failures propagate and leave both in-memory snapshots unchanged.
+        """
+        candidate = self.__default_settings()
+        self.save_settings(candidate)
+        self.__settings = candidate
+
+    def save_field(
+        self, field: str, category: PermissionCategory | None = None
+    ) -> None:
+        """Persist one active field or permission category as a global default.
+
+        Write failures propagate without changing global defaults.
 
         Args:
-            settings: the settings snapshot to copy.
+            field: the settings field whose active value to save.
+            category: the known category to save when field is permissions.
+
+        Raises:
+            ValueError: when the field or category is invalid.
+        """
+        if not isinstance(field, str) or field not in self.__settings.to_dict():
+            raise ValueError(f"Unknown settings field: {field!r}.")
+        if field == "permissions" and category not in self.__categories:
+            raise ValueError(f"Unknown permission category: {category!r}.")
+        if field != "permissions" and category is not None:
+            raise ValueError(f"Category is only valid for permissions: {category!r}.")
+
+        candidate = self.__copy_settings(self.__global_settings)
+        if field == "permissions":
+            candidate.permissions[category] = self.__settings.permissions[category]
+        else:
+            setattr(candidate, field, getattr(self.__settings, field))
+        self.save_settings(candidate)
+
+    def __default_settings(self) -> Settings:
+        """Build settings from code defaults and the known categories.
 
         Returns:
-            An independent settings object with equal values.
+            A settings snapshot with built-in defaults and additional categories at ASK.
         """
-        return Settings.from_dict(settings.to_dict())
+        return Settings(
+            permissions={
+                category: DEFAULT_PERMISSION_LEVELS.get(category, PermissionLevel.ASK)
+                for category in self.__categories
+            },
+            provider=None,
+            model_name=None,
+            thinking_effort=LITELLM_DEFAULT_THINKING_EFFORT,
+            thinking_summary=LITELLM_DEFAULT_THINKING_SUMMARY,
+            max_turns=AGENT_DEFAULT_MAX_TURNS,
+            max_retries=AGENT_DEFAULT_MAX_RETRIES,
+            turn_wait_time=AGENT_DEFAULT_TURN_WAIT_TIME,
+            turn_wait_time_multiplier=AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
+        )
+
+    def __copy_settings(self, settings: Settings) -> Settings:
+        """Copy checked values into a new Settings object.
+
+        Args:
+            settings: the checked snapshot to copy.
+
+        Returns:
+            An independent object, including its permission dictionary.
+        """
+        copied = self.__default_settings()
+        copied.from_dict(settings.to_dict(), self.__categories)
+        return copied
+
+    def __prepare_settings(self, data: Mapping[str, Any]) -> Settings:
+        """Strictly validate values before populating an unpublished object.
+
+        Invalid or incomplete candidates raise ValueError.
+
+        Args:
+            data: the complete serialized candidate settings.
+
+        Returns:
+            A new checked Settings object ready for publication.
+        """
+        checked, _ = self.__validator.validate(data, strict=True)
+        candidate = self.__default_settings()
+        candidate.from_dict(checked, self.__categories)
+        return candidate
+
+    def __permission_values(
+        self, permissions: Mapping[PermissionCategory, PermissionLevel]
+    ) -> dict[str, str | None]:
+        """Check typed permission input before converting it to plain values.
+
+        Args:
+            permissions: the category identities and typed levels supplied by a caller.
+
+        Returns:
+            Lowercase category names mapped to serialized permission levels.
+
+        Raises:
+            ValueError: when the mapping, a category or a level is invalid.
+        """
+        if not isinstance(permissions, Mapping):
+            raise ValueError(f"Permissions must be a mapping, got {permissions!r}.")
+        values: dict[str, str | None] = {}
+        for category, level in permissions.items():
+            if category not in self.__categories:
+                raise ValueError(f"Unknown permission category: {category!r}.")
+            if not isinstance(level, PermissionLevel):
+                raise ValueError(
+                    f"Invalid permission level {level!r} "
+                    f"for category {category.name!r}."
+                )
+            values[category.name.lower()] = level.value
+        return values
+
+    def save_settings(self, candidate: Settings) -> None:
+        """Write a detached candidate before publishing it as global defaults.
+
+        Write failures propagate without publishing the candidate.
+
+        Args:
+            candidate: the checked settings values to persist.
+        """
+        saved = self.__copy_settings(candidate)
+        text = yaml.safe_dump(saved.to_dict(), sort_keys=False)
+        self.__storage_manager.write_file(ARANCIO_SETTINGS_FILENAME, text)
+        self.__global_settings = saved

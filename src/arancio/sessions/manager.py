@@ -9,11 +9,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from arancio.core.constants.path import ARANCIO_DEFAULT_DIR
-from arancio.core.messages import (
-    Message,
-    UserMessage,
-)
+from arancio.core.constants import ARANCIO_DEFAULT_DIR
+from arancio.core.messages.base import Message
+from arancio.core.messages.user import UserMessage
 from arancio.core.tools.session import ToolSession, shared_session
 from arancio.sessions.codec import (
     is_message_record,
@@ -27,7 +25,7 @@ from arancio.sessions.validator import SessionValidator
 from arancio.storage.manager import StorageManager
 
 if TYPE_CHECKING:
-    from arancio.core.agents import Agent
+    from arancio.core.agents.base import Agent
     from arancio.settings.manager import SettingsManager
 
 

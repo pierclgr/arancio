@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from typing import List
 
-from arancio.core.messages import Message
+from arancio.core.messages.base import Message
 from arancio.core.tools.schema import ToolSchema
 
 
@@ -17,6 +17,3 @@ class Request:
     system_prompt: str = ""
     tool_list: List[ToolSchema] = field(default_factory=list)
     message_list: List[Message] = field(default_factory=list)
-
-
-LiteLLMRequest = Request

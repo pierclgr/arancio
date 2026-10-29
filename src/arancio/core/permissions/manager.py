@@ -10,7 +10,9 @@ from arancio.core.events import (
 )
 from arancio.core.hooks.base import Hook
 from arancio.core.hooks.manager import HookManager
-from arancio.core.messages import Message, ToolCallMessage
+from arancio.core.messages.base import Message
+from arancio.core.messages.tool import ToolCallMessage
+from arancio.core.permissions.constants import DEFAULT_PERMISSION_LEVELS
 from arancio.core.permissions.types import (
     PermissionCategory,
     PermissionDecision,
@@ -44,12 +46,13 @@ class PermissionManager:
                 through; this manager adds itself to its context as
                 ``permission_manager``.
             permissions: initial category-to-level grants, covering every
-                category. When omitted (``None``) every category is granted at
-                :attr:`PermissionLevel.ASK`.
+                category. When omitted (``None``), built-in categories use their
+                configured defaults and other categories default to ASK.
         """
         if permissions is None:
             permissions = {
-                category: PermissionLevel.ASK for category in PermissionCategory
+                category: DEFAULT_PERMISSION_LEVELS.get(category, PermissionLevel.ASK)
+                for category in PermissionCategory
             }
         self._permissions: dict[PermissionCategory, PermissionLevel] = permissions
         self._hook_manager: HookManager = hook_manager

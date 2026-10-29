@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from arancio.core.hooks.base import Hook
-from arancio.core.messages import ErrorMessage, WarningMessage
+from arancio.core.messages.base import ErrorMessage, WarningMessage
 from arancio.core.plugins.base import Plugin
 from arancio.core.plugins.registry import (
     PENDING_HOOKS,

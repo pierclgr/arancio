@@ -7,9 +7,9 @@ from typing import List, Type
 from arancio.core.builders.payload.base import PayloadBuilder
 from arancio.core.builders.request.base import RequestBuilder
 from arancio.core.events import LoginNotice
-from arancio.core.messages import Message
+from arancio.core.messages.base import Message
 from arancio.core.parsers.response.base import ResponseParser
-from arancio.core.requests import Request
+from arancio.core.requests.base import Request
 from arancio.core.tools.schema import ToolSchema
 
 

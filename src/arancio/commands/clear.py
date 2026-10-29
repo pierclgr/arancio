@@ -8,7 +8,7 @@ from arancio.commands.base import Command
 from arancio.sessions.session import SessionConfiguration
 
 if TYPE_CHECKING:
-    from arancio.core.agents import Agent
+    from arancio.core.agents.base import Agent
     from arancio.sessions.manager import SessionManager
     from arancio.settings.manager import SettingsManager
     from arancio.ui.app import App
@@ -36,7 +36,7 @@ class ClearCommand(Command):
             settings_manager: the active settings manager.
             session_manager: the active session manager.
         """
-        settings_manager.reset_to_global()
+        settings_manager.reset_to_global_settings()
         session_manager.discard_and_create(
             working_directory=application.working_directory,
             configuration=SessionConfiguration.from_settings(settings_manager.settings),

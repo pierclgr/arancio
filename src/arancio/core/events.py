@@ -10,7 +10,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from uuid import uuid4
 
-from arancio.core.messages import Message, ToolCallMessage
+from arancio.core.messages.base import Message
+from arancio.core.messages.tool import ToolCallMessage
 
 
 @dataclass(frozen=True)

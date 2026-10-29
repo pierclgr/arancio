@@ -11,20 +11,16 @@ from textual.widget import Widget
 from textual.widgets import Input, Markdown, Static
 from textual.widgets.markdown import MarkdownStream
 
-from arancio.core.agents import Agent
+from arancio.core.agents.base import Agent
 from arancio.core.hooks.base import Hook
 from arancio.core.hooks.manager import HookManager
-from arancio.core.messages import (
-    AssistantChunkMessage,
-    AssistantMessage,
-    ErrorMessage,
-    Message,
-    ReasoningChunkMessage,
-    ReasoningMessage,
+from arancio.core.messages.assistant import AssistantChunkMessage, AssistantMessage
+from arancio.core.messages.base import ErrorMessage, Message, WarningMessage
+from arancio.core.messages.reasoning import ReasoningChunkMessage, ReasoningMessage
+from arancio.core.messages.tool import (
     ToolCallMessage,
     ToolErrorMessage,
     ToolResultMessage,
-    WarningMessage,
 )
 from arancio.prompt.actions.executor import ActionExecutor
 from arancio.prompt.actions.factory import ActionFactory

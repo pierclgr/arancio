@@ -1,39 +1,25 @@
 """User-configurable settings holder and its YAML-serializable form."""
 
+from collections.abc import Collection, Mapping
 from typing import Any
 
-from arancio.core.constants.agent import (
-    AGENT_DEFAULT_MAX_RETRIES,
-    AGENT_DEFAULT_MAX_TURNS,
-    AGENT_DEFAULT_TURN_WAIT_TIME,
-    AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
-)
-from arancio.core.constants.litellm import (
-    LITELLM_DEFAULT_THINKING_EFFORT,
-    LITELLM_DEFAULT_THINKING_SUMMARY,
-    LITELLM_PROVIDER_NAMES,
-)
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 
 
 class Settings:
     """In-memory snapshot of arancio's user-configurable settings.
 
-    A plain data holder produced from disk by the storage layer and pushed into
-    the live objects by the settings manager. :meth:`default` builds it from the
-    registered code defaults, so the generated default file matches the values
-    the code itself uses. Not a ``dataclass``: ``provider`` needs a validating
-    property (matching it against LiteLLM's supported providers), and a
-    ``@property`` cannot share a name with a plain ``dataclass`` field without
-    breaking field-default resolution for every field declared after it.
+    SettingsManager constructs and copies these objects after validation.
+    This holder performs no provider discovery, validation or file I/O.
+    :meth:`from_dict` populates an existing object from a complete checked mapping.
 
     Attributes:
         permissions: category to autonomy level mapping, covering every
             category; :attr:`~arancio.core.permissions.types.PermissionLevel.NONE`
             marks a category as not granted.
         provider: the agent model's provider prefix (e.g. ``"openai"``), or
-            ``None`` when not yet configured. Validated against LiteLLM's
-            supported providers on every assignment, including construction.
+            ``None`` when not yet configured. SettingsManager supplies the
+            normalized, validated value.
         model_name: the agent model's name, without the provider prefix, or
             ``None`` when not yet configured. The web-summary client uses this
             same model.
@@ -67,9 +53,7 @@ class Settings:
         Args:
             permissions: category to autonomy level mapping, covering every
                 category.
-            provider: the agent model's provider prefix, or ``None`` when not
-                yet configured; validated against LiteLLM's supported
-                providers.
+            provider: the checked provider prefix, or ``None`` when not configured.
             model_name: the agent model's name, or ``None`` when not yet
                 configured.
             thinking_effort: the model's reasoning effort, or ``None`` to
@@ -139,33 +123,6 @@ class Settings:
         )
 
     @property
-    def provider(self) -> str | None:
-        """Return the currently configured provider.
-
-        Returns:
-            The lowercased provider prefix, or ``None`` when not yet
-            configured.
-        """
-        return self._provider
-
-    @provider.setter
-    def provider(self, value: str | None) -> None:
-        """Validate and set the provider, matched case-insensitively.
-
-        Args:
-            value: the provider name, in any case, or ``None`` to unset it.
-
-        Raises:
-            ValueError: when ``value`` is not a valid LiteLLM provider name.
-        """
-        if value is None:
-            self._provider = None
-            return
-        if value.lower() not in LITELLM_PROVIDER_NAMES:
-            raise ValueError(f"Unknown provider: {value!r}.")
-        self._provider = value.lower()
-
-    @property
     def model_id(self) -> str:
         """Build the model id from the current provider and model name.
 
@@ -181,29 +138,6 @@ class Settings:
         if not self.model_name:
             raise ValueError("No model name configured.")
         return f"{self.provider}/{self.model_name}"
-
-    @classmethod
-    def default(cls) -> "Settings":
-        """Build settings from the registered code defaults.
-
-        Returns:
-            A settings snapshot with every category granted at
-            :attr:`PermissionLevel.ASK`, unconfigured models and the registered
-            thinking and agent-loop defaults.
-        """
-        return cls(
-            permissions={
-                category: PermissionLevel.ASK for category in PermissionCategory
-            },
-            provider=None,
-            model_name=None,
-            thinking_effort=LITELLM_DEFAULT_THINKING_EFFORT,
-            thinking_summary=LITELLM_DEFAULT_THINKING_SUMMARY,
-            max_turns=AGENT_DEFAULT_MAX_TURNS,
-            max_retries=AGENT_DEFAULT_MAX_RETRIES,
-            turn_wait_time=AGENT_DEFAULT_TURN_WAIT_TIME,
-            turn_wait_time_multiplier=AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
-        )
 
     def to_dict(self) -> dict[str, Any]:
         """Render the settings as a YAML-serializable dictionary.
@@ -230,32 +164,29 @@ class Settings:
             "turn_wait_time_multiplier": self.turn_wait_time_multiplier,
         }
 
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Settings":
-        """Rebuild settings from a dictionary loaded from the YAML file.
-
-        Constructing below raises ``ValueError`` when the persisted provider
-        is no longer a valid LiteLLM provider name.
+    def from_dict(
+        self,
+        data: Mapping[str, Any],
+        categories: Collection[PermissionCategory],
+    ) -> None:
+        """Replace this object's fields from a complete, checked mapping.
 
         Args:
-            data: the dictionary parsed from disk, as produced by
-                :meth:`to_dict`.
-
-        Returns:
-            The reconstructed settings, with permission strings resolved back to
-            :class:`PermissionCategory` and :class:`PermissionLevel` members.
+            data: the validated serialized values, as produced by :meth:`to_dict`.
+            categories: the known permission category identities used for lookup.
         """
-        return cls(
-            permissions={
-                PermissionCategory[name.upper()]: PermissionLevel(level)
-                for name, level in data["permissions"].items()
-            },
-            provider=data["provider"],
-            model_name=data["model_name"],
-            thinking_effort=data["thinking_effort"],
-            thinking_summary=data["thinking_summary"],
-            max_turns=data["max_turns"],
-            max_retries=data["max_retries"],
-            turn_wait_time=data["turn_wait_time"],
-            turn_wait_time_multiplier=data["turn_wait_time_multiplier"],
-        )
+        categories_by_name = {
+            category.name.lower(): category for category in categories
+        }
+        self.permissions = {
+            categories_by_name[name.lower()]: PermissionLevel(level)
+            for name, level in data["permissions"].items()
+        }
+        self.provider = data["provider"]
+        self.model_name = data["model_name"]
+        self.thinking_effort = data["thinking_effort"]
+        self.thinking_summary = data["thinking_summary"]
+        self.max_turns = data["max_turns"]
+        self.max_retries = data["max_retries"]
+        self.turn_wait_time = data["turn_wait_time"]
+        self.turn_wait_time_multiplier = data["turn_wait_time_multiplier"]

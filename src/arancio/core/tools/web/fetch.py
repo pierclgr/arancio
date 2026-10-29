@@ -8,7 +8,9 @@ from trafilatura.settings import use_config
 
 from arancio.core.clients.base import Client
 from arancio.core.hooks.manager import HookManager
-from arancio.core.messages import AssistantMessage, ChunkMessage, UserMessage
+from arancio.core.messages.assistant import AssistantMessage
+from arancio.core.messages.base import ChunkMessage
+from arancio.core.messages.user import UserMessage
 from arancio.core.parsers.tool_result.web.fetch import FetchWebToolResultParser
 from arancio.core.tools.base import Tool
 from arancio.core.tools.session import ToolSession

@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from arancio.commands.base import Command
-from arancio.core.messages import AssistantMessage
+from arancio.core.messages.assistant import AssistantMessage
 from arancio.sessions.session import SessionConfiguration
 
 if TYPE_CHECKING:

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from arancio.commands.base import Command
 
 if TYPE_CHECKING:
-    from arancio.core.agents import Agent
+    from arancio.core.agents.base import Agent
     from arancio.sessions.manager import SessionManager
     from arancio.settings.manager import SettingsManager
     from arancio.ui.app import App

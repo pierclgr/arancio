@@ -1,6 +1,6 @@
 """Entry point wiring the agent stack to the Textual UI and running it."""
 
-from arancio.core.agents import Agent
+from arancio.core.agents.base import Agent
 from arancio.core.clients.litellm import LiteLLMClient
 from arancio.core.hooks.manager import HookManager
 from arancio.core.permissions.manager import PermissionManager
@@ -25,10 +25,10 @@ def main() -> None:
     (which forwards it to its executor's own tool instances), so one handler registered
     anywhere in that graph sees every dispatch from every component. The plugin manager
     loads straight after, so the plugins are attached to that same hook manager before
-    anything can dispatch, and before ``settings_manager.load()`` applies the permission
-    grants and rebuilds the tool catalog. Its messages are shown alongside the settings
-    ones. The session manager comes after the settings are loaded, because the session
-    it opens snapshots them.
+    anything can dispatch, and before ``settings_manager.load_settings()`` loads the
+    permission settings. Its messages are shown alongside the settings ones. The session
+    manager comes after the settings are loaded, because the session it opens snapshots
+    them.
     """
     storage_manager = StorageManager()
     storage_manager.bind_litellm_login_dir()
@@ -60,7 +60,7 @@ def main() -> None:
         summary_client=summary_client,
         agent=agent,
     )
-    settings, settings_messages = settings_manager.load()
+    settings, settings_messages = settings_manager.load_settings()
     startup_messages = plugin_messages + settings_messages
 
     session_manager = SessionManager(

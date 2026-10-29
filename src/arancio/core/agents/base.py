@@ -6,27 +6,25 @@ from collections.abc import Generator, Iterator
 from itertools import count
 from typing import List
 
-from arancio.core.builders.system_prompt import SystemPromptBuilder
-from arancio.core.clients.base import Client
-from arancio.core.constants.agent import (
+from arancio.core.agents.constants import (
     AGENT_DEFAULT_MAX_RETRIES,
     AGENT_DEFAULT_MAX_TURNS,
     AGENT_DEFAULT_TURN_WAIT_TIME,
     AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
     AGENT_UNLIMITED_MAX_TURNS,
 )
+from arancio.core.builders.system_prompt import SystemPromptBuilder
+from arancio.core.clients.base import Client
 from arancio.core.events import CoreAnswer, CoreEvent
 from arancio.core.hooks.base import Hook
 from arancio.core.hooks.manager import HookManager
-from arancio.core.messages import (
-    ChunkMessage,
-    ErrorMessage,
-    Message,
+from arancio.core.messages.base import ChunkMessage, ErrorMessage, Message
+from arancio.core.messages.tool import (
     ToolCallMessage,
     ToolErrorMessage,
     ToolResultMessage,
-    UserMessage,
 )
+from arancio.core.messages.user import UserMessage
 from arancio.core.permissions.manager import PermissionManager
 from arancio.core.permissions.types import (
     PermissionCategory,

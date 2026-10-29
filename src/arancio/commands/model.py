@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from arancio.commands.state_change import StateChangeCommand
-from arancio.core.messages import ErrorMessage
+from arancio.core.messages.base import ErrorMessage
 
 if TYPE_CHECKING:
     from arancio.sessions.manager import SessionManager

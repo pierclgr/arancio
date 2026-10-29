@@ -4,14 +4,10 @@ import json
 from collections.abc import Iterable, Iterator
 from typing import Any, List
 
-from arancio.core.messages import (
-    AssistantChunkMessage,
-    AssistantMessage,
-    Message,
-    ReasoningChunkMessage,
-    ReasoningMessage,
-    ToolCallMessage,
-)
+from arancio.core.messages.assistant import AssistantChunkMessage, AssistantMessage
+from arancio.core.messages.base import Message
+from arancio.core.messages.reasoning import ReasoningChunkMessage, ReasoningMessage
+from arancio.core.messages.tool import ToolCallMessage
 from arancio.core.parsers.base import Parser
 
 

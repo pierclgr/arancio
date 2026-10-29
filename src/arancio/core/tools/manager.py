@@ -5,8 +5,8 @@ from functools import partial
 
 from arancio.core.clients.base import Client
 from arancio.core.hooks.manager import HookManager
-from arancio.core.messages import (
-    Message,
+from arancio.core.messages.base import Message
+from arancio.core.messages.tool import (
     ToolCallMessage,
     ToolErrorMessage,
     ToolResultMessage,

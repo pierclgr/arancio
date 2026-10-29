@@ -3,7 +3,7 @@
 from abc import abstractmethod
 from typing import Any
 
-from arancio.core.messages import ToolErrorMessage, ToolResultMessage
+from arancio.core.messages.tool import ToolErrorMessage, ToolResultMessage
 from arancio.core.parsers.base import Parser
 
 

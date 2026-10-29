@@ -15,15 +15,12 @@ from arancio.commands.registry import (
     COMMAND_REGISTRY,
     SESSION_DISCARDING_COMMANDS,
 )
-from arancio.core.agents import Agent
+from arancio.core.agents.base import Agent
 from arancio.core.hooks.manager import HookManager
-from arancio.core.messages import (
-    AssistantMessage,
-    ErrorMessage,
-    Message,
-    ToolCallMessage,
-    UserMessage,
-)
+from arancio.core.messages.assistant import AssistantMessage
+from arancio.core.messages.base import ErrorMessage, Message
+from arancio.core.messages.tool import ToolCallMessage
+from arancio.core.messages.user import UserMessage
 from arancio.core.tools.commands.shell import ShellCommandTool
 from arancio.core.tools.files.read import ReadFileTool
 from arancio.prompt.actions.constants import INJECTABLE_COMMAND_PARAMETERS

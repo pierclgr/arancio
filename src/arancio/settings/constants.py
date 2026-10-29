@@ -1,6 +1,4 @@
-"""Constants used to persist settings."""
+"""Relative filename used to persist settings through Storage."""
 
-from arancio.core.constants.path import ARANCIO_DEFAULT_DIR
-
-# settings persisted under the arancio working-directory root
-ARANCIO_SETTINGS_FILE = ARANCIO_DEFAULT_DIR / "settings.yml"
+# storage anchors this relative filename to its application-data root
+ARANCIO_SETTINGS_FILENAME: str = "settings.yml"

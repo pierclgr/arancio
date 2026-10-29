@@ -46,7 +46,7 @@ src/arancio/
   commands/     Slash-command implementations
   prompt/       Prompt parsing and user-action execution
   sessions/     Session creation, persistence, validation, and resume support
-  settings/     Runtime settings and validation
+  settings/     Settings snapshots, validation and persistence through Storage
   storage/      Generic filesystem operations under the application data root
 harness/        Source system prompt and tool descriptions/schemas
 tests/          Unit and integration tests
