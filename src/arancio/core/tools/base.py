@@ -138,7 +138,7 @@ class Tool(ABC):
         Returns:
             The tool result and hook messages in dispatch order.
         """
-        messages = self._hook_manager.run_hook(
+        messages = self._hook_manager.run(
             Hook.BEFORE_TOOL_CALL, name=self.name, call_id=call_id, arguments=kwargs
         )
         try:
@@ -146,7 +146,7 @@ class Tool(ABC):
             is_error = False
         except Exception as exc:
             messages.extend(
-                self._hook_manager.run_hook(
+                self._hook_manager.run(
                     Hook.ERROR,
                     source="tool",
                     name=self.name,
@@ -164,7 +164,7 @@ class Tool(ABC):
             is_error=is_error,
         )
         messages.extend(
-            self._hook_manager.run_hook(
+            self._hook_manager.run(
                 Hook.AFTER_TOOL_CALL,
                 name=self.name,
                 call_id=call_id,

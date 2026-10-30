@@ -1,74 +1,78 @@
-"""SHA-256 checksums letting the registry verify a session log without parsing it.
-
-Every session log has a sibling checksum file recording the digest of the bytes that
-were last fully flushed. The registry scan recomputes the digest and compares it with
-the stored one instead of parsing the whole log: a match means the file is byte-
-identical to a state that was cleanly validated, a mismatch means something changed it
-afterwards.
-"""
+"""SHA-256 sidecars for session logs, with all file I/O supplied by Storage."""
 
 from __future__ import annotations
 
 import hashlib
+from contextlib import closing
 from pathlib import Path
 
 from arancio.sessions.constants import SESSION_CHECKSUM_SUFFIX
-
-_CHECKSUM_CHUNK_SIZE = 1 << 16
+from arancio.storage.manager import StorageManager
 
 
 class SessionChecksum:
-    """Read, verify and refresh the checksum file paired with a session log."""
+    """Read, verify and refresh a session log's checksum through Storage.
 
-    @staticmethod
-    def path(log_path: Path) -> Path:
-        """Return the checksum file paired with a session log.
+    Attributes:
+        __storage_manager: the supplied byte and text I/O service.
+    """
 
-        Args:
-            log_path: the JSONL session log the checksum covers.
-
-        Returns:
-            The sibling checksum path next to the log.
-        """
-        return log_path.with_name(log_path.name + SESSION_CHECKSUM_SUFFIX)
-
-    @classmethod
-    def write(cls, log_path: Path) -> None:
-        """Persist the checksum of a session log next to it.
+    def __init__(self, storage_manager: StorageManager) -> None:
+        """Store the service used for log bytes and checksum text.
 
         Args:
-            log_path: the session log whose current bytes are checksumed.
+            storage_manager: the generic file I/O service.
         """
-        cls.path(log_path).write_text(cls._digest(log_path), encoding="ascii")
+        self.__storage_manager = storage_manager
 
-    @classmethod
-    def verify(cls, log_path: Path) -> bool | None:
-        """Compare a session log's bytes with its recorded checksum.
+    def write(self, log_path: Path) -> None:
+        """Persist the current log digest in its sibling sidecar.
+
+        Args:
+            log_path: the session log whose bytes are hashed.
+        """
+        self.__storage_manager.write_file(
+            self.__path(log_path), self.__digest(log_path)
+        )
+
+    def verify(self, log_path: Path) -> bool | None:
+        """Compare current log bytes with the saved digest.
 
         Args:
             log_path: the session log to verify.
 
         Returns:
-            True when the file matches its recorded checksum, False on a
-            mismatch, or ``None`` when no checksum file exists.
+            True for a match, False for a mismatch, or None for a missing sidecar.
         """
-        stored = cls.path(log_path)
-        if not stored.exists():
+        try:
+            stored = self.__storage_manager.read_text(self.__path(log_path))
+        except FileNotFoundError:
             return None
-        return stored.read_text(encoding="ascii").strip() == cls._digest(log_path)
+        return stored.strip() == self.__digest(log_path)
 
-    @staticmethod
-    def _digest(path: Path) -> str:
-        """Hash a file's bytes, reading it in chunks.
+    def __digest(self, path: Path) -> str:
+        """Hash Storage's bounded byte chunks and close the iterator.
 
         Args:
             path: the file to hash.
 
         Returns:
-            The lowercase hex SHA-256 digest of the file's content.
+            The lowercase hexadecimal SHA-256 digest.
         """
         digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(_CHECKSUM_CHUNK_SIZE), b""):
+        with closing(self.__storage_manager.iter_file_bytes(path)) as chunks:
+            for chunk in chunks:
                 digest.update(chunk)
         return digest.hexdigest()
+
+    @staticmethod
+    def __path(log_path: Path) -> Path:
+        """Derive a log's sibling checksum path.
+
+        Args:
+            log_path: the session log covered by the checksum.
+
+        Returns:
+            The log path with the checksum suffix appended.
+        """
+        return log_path.with_name(log_path.name + SESSION_CHECKSUM_SUFFIX)

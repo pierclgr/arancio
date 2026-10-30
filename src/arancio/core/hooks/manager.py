@@ -13,7 +13,7 @@ class HookManager:
     Each instance owns its own registrations; there is no global singleton,
     so two managers never share handlers. Dispatch runs every handler
     registered for a hook on the caller's thread, in registration order,
-    over a snapshot of the handler list taken when :meth:`run_hook` starts — a
+    over a snapshot of the handler list taken when :meth:`run` starts — a
     handler that registers another handler during dispatch affects only
     later calls. Every handler receives the same :attr:`context` dict, so a
     value one handler assigns is seen by the next handler and by the caller.
@@ -33,7 +33,7 @@ class HookManager:
             ``hook_manager`` (this manager); the core components built with
             this manager add themselves to it (``permission_manager``,
             ``agent``, ``client``), and each
-            :meth:`run_hook` writes its event keys, which stay until a later
+            :meth:`run` writes its event keys, which stay until a later
             dispatch overwrites them.
         _handlers: registered handlers, keyed by hook.
     """
@@ -58,7 +58,7 @@ class HookManager:
         """
         self._handlers.setdefault(hook, []).append(handler)
 
-    def run_hook(self, hook: Hook, **event: Any) -> list[Message]:
+    def run(self, hook: Hook, **event: Any) -> list[Message]:
         """Write the event into the context and run every handler for the hook.
 
         Args:

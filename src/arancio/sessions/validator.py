@@ -1,55 +1,61 @@
-"""Validation of session logs: cheap checksum scan, full validation at load.
+"""Session discovery, full log validation and partial state-change validation.
 
-A session is inspected at two moments with different depth. The registry scan wants only
-metadata and a cheap integrity signal, so it parses the header line and compares the
-checksum written after the last clean flush. Loading wants to trust the content itself,
-so it parses and validates every line. Both live in one class so the two layers can
-never drift apart.
+Scans read the log to recover its last state and checksum status. Full loads also
+validate every record. Both readers share the same state decoding rules.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from collections.abc import Callable, Collection, Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
+from arancio.core.permissions.types import PermissionCategory, PermissionLevel
+from arancio.sessions.base import Session, SessionConfiguration, SessionScan
 from arancio.sessions.checksum import SessionChecksum
 from arancio.sessions.codec import is_message_record, message_from_record
 from arancio.sessions.constants import SESSION_FORMAT_VERSION
-from arancio.sessions.session import Session, SessionConfiguration
 from arancio.storage.manager import StorageManager
 
 
-@dataclass
-class SessionScan:
-    """What the registry needs from one session log: metadata plus integrity."""
-
-    explicit_name: str | None
-    working_directory: Path | None
-    configuration: SessionConfiguration | None
-    status: Literal["healthy", "unverified", "damaged"]
-    damage_reason: str | None = None
-
-
 class SessionValidator:
-    """Check every discovered session cheaply, and one loaded session fully."""
+    """Validate discovered logs, loaded records and requested state replacements.
 
-    def __init__(self, storage_manager: StorageManager) -> None:
-        """Initialize the validator with the storage service it reads through.
+    Attributes:
+        __storage_manager: the supplied file I/O service.
+        __categories: copied known permission-category identities.
+        __checksum: the checksum helper using the same Storage service.
+        __state_change_normalizers: editable names and validation/copy operations.
+    """
+
+    def __init__(
+        self,
+        storage_manager: StorageManager,
+        categories: Collection[PermissionCategory],
+    ) -> None:
+        """Store Storage and copy the category metadata used for decoding.
 
         Args:
-            storage_manager: the file-only storage service reading session logs.
+            storage_manager: the generic file I/O service.
+            categories: the known permission-category identities.
         """
-        self._storage_manager = storage_manager
+        self.__storage_manager = storage_manager
+        self.__categories = tuple(categories)
+        self.__checksum = SessionChecksum(storage_manager)
+        self.__state_change_normalizers: dict[str, Callable[[Any], Any]] = {
+            "configuration": self.__normalize_configuration,
+            "working_directory": self.__normalize_directory,
+            "explicit_name": self.__normalize_name,
+        }
 
     def scan(self, path: Path) -> SessionScan:
         """Inspect one session log without parsing it fully.
 
         Statuses: ``healthy`` when the checksum matches the file, ``unverified``
-        when no checksum exists, ``damaged`` when the checksum mismatches or
-        the header cannot be trusted as a session header.
+        when no checksum exists, ``damaged`` when scanning or checksum
+        verification fails.
 
         Args:
             path: the discovered JSONL session path.
@@ -57,17 +63,20 @@ class SessionValidator:
         Returns:
             The scan result with recovered metadata and integrity status.
         """
+        configuration = None
+        working_directory = None
+        name = None
         try:
-            configuration, working_directory, name = self._scan_state(path)
+            configuration, working_directory, name = self.__scan_state(path)
+            matches = self.__checksum.verify(path)
         except (OSError, ValueError) as exc:
             return SessionScan(
-                explicit_name=None,
-                working_directory=None,
-                configuration=None,
+                explicit_name=name,
+                working_directory=working_directory,
+                configuration=configuration,
                 status="damaged",
                 damage_reason=str(exc),
             )
-        matches = SessionChecksum.verify(path)
         if matches is None:
             return SessionScan(
                 explicit_name=name,
@@ -102,22 +111,24 @@ class SessionValidator:
         Raises:
             ValueError: when any line is malformed or violates the session schema.
         """
-        lines = self._storage_manager.read_lines(path)
+        lines = self.__storage_manager.read_lines(path)
         if not lines:
             raise ValueError("Missing session_created record")
 
-        records = [self._parse_line(line, index) for index, line in enumerate(lines, 1)]
+        records = [
+            self.__parse_line(line, index) for index, line in enumerate(lines, 1)
+        ]
         first = records[0]
         if first.get("type") != "session_created":
             raise ValueError("Missing session_created record")
         if first.get("format_version") != SESSION_FORMAT_VERSION:
             raise ValueError("Unsupported or missing session format version")
 
-        session_id = self._required_string(first, "id")
+        session_id = self.__required_string(first, "id")
         if session_id != path.stem:
             raise ValueError("Session ID does not match filename")
-        created_at = self._parse_datetime(self._required_string(first, "timestamp"))
-        creation_directory = self._absolute_path(first, "creation_working_directory")
+        created_at = self.__parse_datetime(self.__required_string(first, "timestamp"))
+        creation_directory = self.__absolute_path(first, "creation_working_directory")
         # not part of a state_changed snapshot, so read directly off the header
         forked_from = first.get("forked_from")
         if "forked_from" not in first or (
@@ -125,12 +136,12 @@ class SessionValidator:
         ):
             raise ValueError("forked_from is missing or invalid")
 
-        self._state_from_record(first)
+        self.__state_from_record(first)
         latest_state_record = first
         for record in records[1:]:
             if record.get("type") == "state_changed":
                 latest_state_record = record
-        configuration, working_directory, name = self._state_from_record(
+        configuration, working_directory, name = self.__state_from_record(
             latest_state_record
         )
 
@@ -146,9 +157,90 @@ class SessionValidator:
         )
         session.add_event(first, saved=True)
         for record in records[1:]:
-            self._apply_record(session, record)
+            self.__apply_record(session, record)
             session.add_event(record, saved=True)
         return session
+
+    def validate_state_changes(self, changes: Mapping[str, Any]) -> dict[str, Any]:
+        """Validate and copy supplied replacements without changing a Session.
+
+        Args:
+            changes: supplied editable fields; omitted fields are unchanged.
+
+        Returns:
+            Validated replacements with independent mutable values.
+
+        Raises:
+            ValueError: when a field name or its value is invalid.
+        """
+        replacements: dict[str, Any] = {}
+        for field, value in changes.items():
+            if field not in self.__state_change_normalizers:
+                raise ValueError(f"Unknown editable session field {field!r}: {value!r}")
+            normalize = self.__state_change_normalizers[field]
+            replacements[field] = normalize(value)
+        return replacements
+
+    def __normalize_configuration(self, value: Any) -> SessionConfiguration:
+        """Validate and copy a typed session configuration.
+
+        Args:
+            value: the proposed configuration replacement.
+
+        Returns:
+            A checked configuration with independent permission values.
+
+        Raises:
+            ValueError: when the replacement is not a configuration object.
+        """
+        if not isinstance(value, SessionConfiguration):
+            raise ValueError(f"Invalid session configuration: {value!r}")
+        if not isinstance(value.permissions, Mapping):
+            raise ValueError(
+                f"Invalid configuration permissions: {value.permissions!r}"
+            )
+        for category, level in value.permissions.items():
+            if category not in self.__categories:
+                raise ValueError(
+                    f"Unknown configuration permission category: {category!r}"
+                )
+            if not isinstance(level, PermissionLevel):
+                raise ValueError(f"Invalid configuration permission level: {level!r}")
+        return SessionConfiguration.from_dict(value.to_dict(), self.__categories)
+
+    @staticmethod
+    def __normalize_directory(value: Any) -> Path:
+        """Require an absolute working-directory value without filesystem checks.
+
+        Args:
+            value: the proposed directory replacement.
+
+        Returns:
+            The supplied absolute Path.
+
+        Raises:
+            ValueError: when the value is not an absolute Path.
+        """
+        if not isinstance(value, Path) or not value.is_absolute():
+            raise ValueError(f"Expected an absolute working_directory Path: {value!r}")
+        return value
+
+    @staticmethod
+    def __normalize_name(value: Any) -> str | None:
+        """Require a string name or an explicit None to clear it.
+
+        Args:
+            value: the proposed explicit name.
+
+        Returns:
+            The supplied string or None.
+
+        Raises:
+            ValueError: when the name is neither a string nor None.
+        """
+        if value is not None and not isinstance(value, str):
+            raise ValueError(f"Invalid session explicit_name: {value!r}")
+        return value
 
     def certify(self, path: Path) -> None:
         """Persist the checksum of a session log that just validated cleanly.
@@ -156,9 +248,9 @@ class SessionValidator:
         Args:
             path: the session log whose current bytes are checksumed.
         """
-        SessionChecksum.write(path)
+        self.__checksum.write(path)
 
-    def _scan_state(self, path: Path) -> tuple[SessionConfiguration, Path, str | None]:
+    def __scan_state(self, path: Path) -> tuple[SessionConfiguration, Path, str | None]:
         """Recover a session's latest state snapshot without a full parse.
 
         Reads every line, but only inspects each one's ``type`` to find the
@@ -177,27 +269,27 @@ class SessionValidator:
             ValueError: when the first line is missing, not a session header,
                 or the winning state record is invalid.
         """
-        lines = self._storage_manager.read_lines(path)
+        lines = self.__storage_manager.read_lines(path)
         if not lines:
             raise ValueError("Missing session_created record")
-        first = self._parse_line(lines[0], 1)
+        first = self.__parse_line(lines[0], 1)
         if first.get("type") != "session_created":
             raise ValueError("Missing session_created record")
 
         latest = first
         for index, line in enumerate(lines[1:], 2):
-            record = self._parse_line(line, index)
+            record = self.__parse_line(line, index)
             if record.get("type") == "state_changed":
                 latest = record
-        return self._state_from_record(latest)
+        return self.__state_from_record(latest)
 
-    @staticmethod
-    def _state_from_record(
+    def __state_from_record(
+        self,
         record: dict[str, Any],
     ) -> tuple[SessionConfiguration, Path, str | None]:
         """Build the configuration, working directory and name a state snapshot carries.
 
-        Shared by :meth:`_scan_state` and :meth:`read`, both of which need to
+        Shared by :meth:`__scan_state` and :meth:`read`, both of which need to
         turn a ``session_created`` or ``state_changed`` record into the same
         three values.
 
@@ -211,15 +303,16 @@ class SessionValidator:
             ValueError: when the name is absent or neither a string nor null.
         """
         configuration = SessionConfiguration.from_dict(
-            SessionValidator._required_mapping(record, "configuration")
+            self.__required_mapping(record, "configuration"),
+            self.__categories,
         )
-        working_directory = SessionValidator._absolute_path(record, "working_directory")
+        working_directory = self.__absolute_path(record, "working_directory")
         name = record.get("name")
-        if "name" not in record or (name is not None and not isinstance(name, str)):
-            raise ValueError("name is missing or invalid")
-        return configuration, working_directory, name
+        if "name" not in record:
+            raise ValueError("name is missing")
+        return configuration, working_directory, self.__normalize_name(name)
 
-    def _apply_record(self, session: Session, record: dict[str, Any]) -> None:
+    def __apply_record(self, session: Session, record: dict[str, Any]) -> None:
         """Validate one non-creation record and apply it to session state.
 
         Each record type states its own required fields and its own effect, so
@@ -233,7 +326,7 @@ class SessionValidator:
             ValueError: when the record type, its metadata or its state data is
                 invalid.
         """
-        self._parse_datetime(self._required_string(record, "timestamp"))
+        self.__parse_datetime(self.__required_string(record, "timestamp"))
         record_type = record.get("type")
 
         if is_message_record(record):
@@ -244,8 +337,8 @@ class SessionValidator:
             message_from_record(record)
             return
         if record_type == "command":
-            self._required_string(record, "raw_input")
-            self._required_string(record, "name")
+            self.__required_string(record, "raw_input")
+            self.__required_string(record, "name")
             args = record.get("args")
             if not isinstance(args, list) or not all(
                 isinstance(arg, str) for arg in args
@@ -260,10 +353,10 @@ class SessionValidator:
         if record_type == "state_changed":
             # validated here so every line is checked; the final value came
             # from the winning record already, resolved once in `read`
-            self._state_from_record(record)
+            self.__state_from_record(record)
             return
         if record_type == "file_state_changed":
-            file_path = self._absolute_path(record, "file_path")
+            file_path = self.__absolute_path(record, "file_path")
             mtime = record.get("mtime")
             if not isinstance(mtime, (int, float)):
                 raise ValueError("file state mtime is missing or invalid")
@@ -272,7 +365,7 @@ class SessionValidator:
         raise ValueError(f"Unknown session record type: {record_type!r}")
 
     @staticmethod
-    def _parse_line(line: str, line_number: int) -> dict[str, Any]:
+    def __parse_line(line: str, line_number: int) -> dict[str, Any]:
         """Parse one JSONL object and retain its file line in errors.
 
         Args:
@@ -294,7 +387,7 @@ class SessionValidator:
         return record
 
     @staticmethod
-    def _parse_datetime(value: str) -> datetime:
+    def __parse_datetime(value: str) -> datetime:
         """Parse an aware ISO-8601 timestamp from a session record.
 
         Args:
@@ -315,7 +408,7 @@ class SessionValidator:
         return parsed
 
     @staticmethod
-    def _required_string(record: dict[str, Any], field: str) -> str:
+    def __required_string(record: dict[str, Any], field: str) -> str:
         """Return one required string record field.
 
         Args:
@@ -334,7 +427,7 @@ class SessionValidator:
         return value
 
     @classmethod
-    def _absolute_path(cls, record: dict[str, Any], field: str) -> Path:
+    def __absolute_path(cls, record: dict[str, Any], field: str) -> Path:
         """Return one required absolute path record field.
 
         Args:
@@ -347,13 +440,13 @@ class SessionValidator:
         Raises:
             ValueError: when the field is absent, invalid or relative.
         """
-        path = Path(cls._required_string(record, field))
+        path = Path(cls.__required_string(record, field))
         if not path.is_absolute():
             raise ValueError(f"{field} must be absolute")
         return path
 
     @staticmethod
-    def _required_mapping(record: dict[str, Any], field: str) -> dict[str, Any]:
+    def __required_mapping(record: dict[str, Any], field: str) -> dict[str, Any]:
         """Return one required mapping record field.
 
         Args:

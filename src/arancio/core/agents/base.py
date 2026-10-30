@@ -198,9 +198,9 @@ class Agent:
 
     def _refresh_tools(self) -> None:
         """Rebuild the active tools from the permission manager's grants."""
-        self._tool_manager.refresh_tools(self._permission_manager.allowed_categories)
+        self._tool_manager.refresh(self._permission_manager.allowed_categories)
 
-    def add_permission(
+    def add(
         self,
         category: PermissionCategory,
         level: PermissionLevel = PermissionLevel.ASK,
@@ -212,40 +212,36 @@ class Agent:
             level: the permission level. Defaults to
                 :attr:`PermissionLevel.ASK`.
         """
-        self._permission_manager.add_permission(category, level)
+        self._permission_manager.add(category, level)
         self._refresh_tools()
 
-    def remove_permission(self, category: PermissionCategory) -> None:
+    def remove(self, category: PermissionCategory) -> None:
         """Revoke a category's grant and rebuild the tool catalog.
 
         Args:
             category: the category whose grant is removed.
         """
-        self._permission_manager.remove_permission(category)
+        self._permission_manager.remove(category)
         self._refresh_tools()
 
-    def set_permission_level(
-        self, category: PermissionCategory, level: PermissionLevel
-    ) -> None:
+    def set_level(self, category: PermissionCategory, level: PermissionLevel) -> None:
         """Change a category's permission level and rebuild the tool catalog.
 
         Args:
             category: the category whose grant to update.
             level: the new permission level.
         """
-        self._permission_manager.set_permission_level(category, level)
+        self._permission_manager.set_level(category, level)
         self._refresh_tools()
 
-    def set_permissions(
-        self, permissions: dict[PermissionCategory, PermissionLevel]
-    ) -> None:
+    def set(self, permissions: dict[PermissionCategory, PermissionLevel]) -> None:
         """Replace all permission grants and rebuild the tool catalog.
 
         Args:
             permissions: the new category-to-level grants, replacing the
                 current ones wholesale.
         """
-        self._permission_manager.set_permissions(permissions)
+        self._permission_manager.set(permissions)
         self._refresh_tools()
 
     def clear_history(self) -> None:
@@ -383,7 +379,7 @@ class Agent:
             initial ``message`` is appended to history but never yielded,
             since the caller already holds it.
         """
-        yield from self._hook_manager.run_hook(Hook.AGENT_START, message=message)
+        yield from self._hook_manager.run(Hook.AGENT_START, message=message)
         self.add_message_to_history(message)
         for extra in prelude or []:
             yield from self._emit(extra)
@@ -405,10 +401,10 @@ class Agent:
 
             # try sending request to the client, if something goes wrong, retry
             try:
-                yield from self._hook_manager.run_hook(Hook.TURN_START, turn=turn)
+                yield from self._hook_manager.run(Hook.TURN_START, turn=turn)
 
                 system_prompt = self._system_prompt_builder.build()
-                yield from self._hook_manager.run_hook(
+                yield from self._hook_manager.run(
                     Hook.SYSTEM_PROMPT_BUILD, system_prompt=system_prompt
                 )
                 # a handler may have replaced the prompt in the shared context
@@ -418,7 +414,7 @@ class Agent:
                     system_prompt=system_prompt,
                     tools=self._tool_manager.tool_schemas,
                 )
-                yield from self._hook_manager.run_hook(
+                yield from self._hook_manager.run(
                     Hook.BEFORE_MODEL_REQUEST, request=request
                 )
 
@@ -432,14 +428,14 @@ class Agent:
                         received_finalized = True
                         if isinstance(response_message, ToolCallMessage):
                             tool_calls.append(response_message)
-                        yield from self._hook_manager.run_hook(
+                        yield from self._hook_manager.run(
                             Hook.MESSAGE_RECEIVED, response_message=response_message
                         )
                         yield from self._emit(response_message)
                 finally:
                     stream.close()
 
-                yield from self._hook_manager.run_hook(
+                yield from self._hook_manager.run(
                     Hook.AFTER_MODEL_RESPONSE, request=request, tool_calls=tool_calls
                 )
 
@@ -450,14 +446,14 @@ class Agent:
 
                 # natural stop: text-only reply
                 if not tool_calls:
-                    yield from self._hook_manager.run_hook(
+                    yield from self._hook_manager.run(
                         Hook.AGENT_END, message_history=self._message_history
                     )
                     return
 
                 # call the tools if tools are requested
                 for call in tool_calls:
-                    category = self._tool_manager.get_tool_category(call.name)
+                    category = self._tool_manager.get_category(call.name)
                     decision, hook_messages = yield from (
                         self._permission_manager.validate(call, category)
                     )
@@ -477,7 +473,7 @@ class Agent:
                 # dispatched for every failed turn, retried or not; the
                 # source="agent" dispatch below additionally fires only when
                 # the run is about to end
-                yield from self._hook_manager.run_hook(
+                yield from self._hook_manager.run(
                     Hook.ERROR, source="model", error=e, request=request
                 )
                 # always surface the error to the consumer for visibility, but
@@ -488,7 +484,7 @@ class Agent:
                 # tool phase, such as a wrong permission answer
                 yield ErrorMessage(content=f"Error while executing user request: {e}")
                 if received_finalized:
-                    yield from self._hook_manager.run_hook(
+                    yield from self._hook_manager.run(
                         Hook.ERROR, source="agent", error=e
                     )
                     return
@@ -496,7 +492,7 @@ class Agent:
                 consecutive_errors += 1
                 if consecutive_errors >= self._max_retries:
                     yield ErrorMessage(content="Max retries exceeded")
-                    yield from self._hook_manager.run_hook(
+                    yield from self._hook_manager.run(
                         Hook.ERROR, source="agent", error=e
                     )
                     return
@@ -508,9 +504,9 @@ class Agent:
             finally:
                 # closing a run must clean up without yielding
                 closing = isinstance(sys.exception(), GeneratorExit)
-                hook_messages = self._hook_manager.run_hook(Hook.TURN_END, turn=turn)
+                hook_messages = self._hook_manager.run(Hook.TURN_END, turn=turn)
                 if not closing:
                     yield from hook_messages
 
-        yield from self._hook_manager.run_hook(Hook.ERROR, source="agent", error=None)
+        yield from self._hook_manager.run(Hook.ERROR, source="agent", error=None)
         yield ErrorMessage(content="Max turns exceeded")

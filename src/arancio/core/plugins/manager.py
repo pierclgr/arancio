@@ -63,7 +63,7 @@ class PluginManager:
         """
         return f"{type(self).__name__}({self._root})"
 
-    def load_plugins(self) -> list[Message]:
+    def load(self) -> list[Message]:
         """Import entry files, construct plugins and attach their declarations.
 
         Metadata errors skip only their class. Import failures discard that
@@ -200,7 +200,7 @@ class PluginManager:
             hook: the event to attach the method to.
         """
         self._hook_manager.register(
-            hook, partial(self._guard_plugin_hook, plugin, method, hook)
+            hook, partial(self.__guard_hook, plugin, method, hook)
         )
 
     def __register_tool(
@@ -228,7 +228,7 @@ class PluginManager:
                     )
                 )
         try:
-            self._tool_manager.register_tool_definition(
+            self._tool_manager.register_definition(
                 ToolDefinition(
                     name=tool_class.__name__,
                     category=category,
@@ -239,7 +239,7 @@ class PluginManager:
             return ErrorMessage(content=f"{plugin.location}: {exc} Tool ignored.")
         return None
 
-    def _guard_plugin_hook(
+    def __guard_hook(
         self, plugin: Plugin, method: Callable, hook: Hook, context: dict[str, Any]
     ) -> Message | None:
         """Run a bound method, reporting and disabling it after its first failure.

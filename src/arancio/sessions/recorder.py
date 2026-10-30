@@ -1,15 +1,19 @@
-"""Write side of a chat session: turning facts into durable events."""
+"""Build and persist session records through Storage, without live Core state."""
 
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from arancio.core.messages.base import ErrorMessage, Message
-from arancio.core.messages.tool import ToolCallMessage, ToolErrorMessage
-from arancio.core.tools.session import ToolSession
+from arancio.core.messages.tool import (
+    ToolCallMessage,
+    ToolErrorMessage,
+    ToolResultMessage,
+)
+from arancio.sessions.base import Session
 from arancio.sessions.checksum import SessionChecksum
 from arancio.sessions.codec import (
     is_message_record,
@@ -17,69 +21,40 @@ from arancio.sessions.codec import (
     message_to_record,
 )
 from arancio.sessions.constants import SESSION_FORMAT_VERSION
-from arancio.sessions.session import Session
 from arancio.storage.manager import StorageManager
-
-if TYPE_CHECKING:
-    from arancio.sessions.manager import SessionManager
 
 
 class SessionRecorder:
-    """Apply what the app did to a session and persist it.
-
-    Owns the whole write path: building each event record, applying the state change
-    it describes, appending it to the session and flushing it to the JSONL log, with
-    the retry bookkeeping a failed write needs, and keeping the registry true
-    afterwards. It asks its :class:`SessionManager` which chat is open rather than
-    taking one per call, so a caller only passes what it wants written.
+    """Own record creation, pending writes, recovery and checksum refresh.
 
     Attributes:
-        _storage_manager: the file-only storage service writing the session log.
-        _session_manager: the manager owning the open chat and the session registry.
-        _tool_session: the shared read guard whose state the session persists.
+        __storage_manager: the file I/O service writing logs.
+        __get_current: the manager's private active-session callback.
+        __after_write: the manager's private successful-write callback.
+        __checksum: the helper hashing logs through the same Storage service.
     """
 
     def __init__(
         self,
         storage_manager: StorageManager,
-        session_manager: SessionManager,
-        tool_session: ToolSession,
+        get_current: Callable[[], Session],
+        after_write: Callable[[Session], None],
     ) -> None:
-        """Initialize the recorder with the managers it works through.
-
-        The manager is still being built when it hands itself over, so the
-        reference is only stored here and first read on the earliest write.
+        """Store dependencies without reading a partly constructed manager.
 
         Args:
-            storage_manager: the file-only storage service for the arancio directory.
-            session_manager: the manager owning the open chat and the session registry.
-            tool_session: the read guard the file tools record into, whose state a
-                resumed chat needs restored.
+            storage_manager: the generic file I/O service.
+            get_current: the callback returning the managed active session.
+            after_write: the callback publishing durable session metadata.
         """
-        self._storage_manager: StorageManager = storage_manager
-        self._session_manager: SessionManager = session_manager
-        self._tool_session: ToolSession = tool_session
-
-    def _session(self) -> Session:
-        """Return the chat every write goes into.
-
-        Returns:
-            The manager's open session.
-        """
-        return self._session_manager.current
+        self.__storage_manager = storage_manager
+        self.__get_current = get_current
+        self.__after_write = after_write
+        self.__checksum = SessionChecksum(storage_manager)
 
     def created(self) -> None:
-        """Add the creation header that opens a session log, without saving it.
-
-        The header is the one record that is not flushed when it is built: an
-        untouched session must leave no file behind. It stays unsaved until the
-        first write that has something to save, which :meth:`flush` then writes
-        ahead of it, in order.
-
-        The header also records the session's fork provenance, ``None``
-        unless the session was created by ``SessionManager.fork``.
-        """
-        session = self._session()
+        """Queue the opening header without creating a conversation log."""
+        session = self.__get_current()
         session.add_event(
             {
                 "type": "session_created",
@@ -94,129 +69,99 @@ class SessionRecorder:
             }
         )
 
-    def message(self, message: Message, visible: bool = True) -> ErrorMessage | None:
-        """Record one finalized message, skipping what is not meant to be saved.
+    def message(
+        self,
+        message: Message,
+        *,
+        file_states: Mapping[str, float],
+        visible: bool = True,
+    ) -> ErrorMessage | None:
+        """Queue one supported message and changed read states, then flush.
 
-        The codec has no record for a streaming chunk and returns ``None`` for one,
-        so a caller can hand over everything it produces unfiltered. Every other
-        message becomes a message record carrying its own routing flags, errors
-        included: the session replays what the user saw and what the model saw. Any
-        file read the guard picked up meanwhile is persisted with it.
+        Chunks are skipped. Unsupported message types raise ValueError through
+        the codec. Message and read-state records remain queued on save failure.
 
         Args:
-            message: the message to persist.
-            visible: whether the record belongs in the replayed UI log. A caller
-                passes ``False`` for a message the user was never shown.
+            message: the normalized message to save.
+            file_states: the supplied absolute-path-to-mtime snapshot.
+            visible: whether this message belongs in visible replay.
 
         Returns:
-            The temporary persistence error notice, or ``None`` when the message was
-            saved or is not meant to be.
+            A temporary save notice, or None when saved or skipped.
         """
         record = message_to_record(message, visible)
         if record is None:
             return None
-        error = self.event(record)
-        return error or self._sync_file_states()
+        self.__get_current().add_event(record)
+        self.__sync_file_states(file_states)
+        return self.flush()
 
-    def _sync_file_states(self) -> ErrorMessage | None:
-        """Record every read the guard holds that the session has not saved yet.
-
-        The file tools record into the shared guard as they run, so comparing it
-        with what the session already stored is enough to persist the read-first
-        state without core announcing it.
-
-        Returns:
-            The first persistence error notice, or ``None`` when every new read
-            was saved or none was pending.
-        """
-        session = self._session()
-        error: ErrorMessage | None = None
-        for path, mtime in self._tool_session.snapshot().items():
-            if session.file_states.get(path) == mtime:
-                continue
-            error = error or self.file_state(path, mtime)
-        return error
-
-    def record_stream(self, messages: Iterator[Message]) -> Iterator[Message]:
-        """Record each message as it passes, injecting any persistence failure.
-
-        Every message is yielded through unchanged, so the caller keeps the whole
-        stream and decides on its own what to render.
+    def __sync_file_states(self, snapshot: Mapping[str, float]) -> None:
+        """Queue changed supplied reads without accessing a live Core guard.
 
         Args:
-            messages: the message stream to record as it is consumed.
-
-        Yields:
-            Each message in order, each followed by an :class:`ErrorMessage` when
-            saving that message failed.
+            snapshot: the independent path-to-mtime mapping supplied by the caller.
         """
-        for message in messages:
-            yield message
-            error = self.message(message)
-            if error:
-                yield error
+        session = self.__get_current()
+        for path, mtime in snapshot.items():
+            if session.file_states.get(path) == mtime:
+                continue
+            session.add_event(
+                {
+                    "type": "file_state_changed",
+                    "timestamp": self.__utc_timestamp(),
+                    "file_path": path,
+                    "mtime": mtime,
+                }
+            )
+            session.file_states[path] = mtime
 
-    def state_changed(self) -> ErrorMessage | None:
-        """Record the session's current configuration, working directory and name.
+    def queue_state(self) -> None:
+        """Queue the complete active state without flushing it.
 
-        The caller is responsible for updating those fields on the session before
-        calling this; the recorder only builds the record and persists it. All
-        three are always recorded together, so the log carries one atomic record
-        of "the state at this point" rather than several independently-timed
-        ones.
-
-        Returns:
-            The temporary persistence error notice, or ``None`` on success.
+        Forking uses this after copied history so old source state records cannot
+        replace the child's name on reload. An unused fork still writes nothing.
         """
-        session = self._session()
-        return self.event(
+        session = self.__get_current()
+        session.add_event(
             {
                 "type": "state_changed",
-                "timestamp": self._utc_timestamp(),
+                "timestamp": self.__utc_timestamp(),
                 "configuration": session.configuration.to_dict(),
                 "working_directory": str(session.working_directory),
                 "name": session.explicit_name,
             }
         )
 
-    def file_state(self, path: str, mtime: float) -> ErrorMessage | None:
-        """Record one file-read safety state without exposing it to the model.
+    def state_changed(self) -> ErrorMessage | None:
+        """Queue the complete current state and attempt persistence.
 
-        Args:
-            path: the canonical absolute file path.
-            mtime: the file modification time observed after a successful tool call.
+        The manager has already changed the managed fields. A failed save leaves
+        those fields and their queued record available for retry.
 
         Returns:
-            The temporary persistence error notice, or ``None`` on success.
+            A temporary save notice, or None on success.
         """
-        session = self._session()
-        session.file_states[path] = mtime
-        return self.event(
-            {
-                "type": "file_state_changed",
-                "timestamp": self._utc_timestamp(),
-                "file_path": path,
-                "mtime": mtime,
-            }
-        )
+        self.queue_state()
+        return self.flush()
 
     def command(
         self, raw_input: str, name: str, args: list[str]
     ) -> ErrorMessage | None:
-        """Record one successfully validated local command invocation.
+        """Record the original typed command and copied parsed arguments.
 
         Args:
-            raw_input: the exact prompt text submitted by the user.
-            name: the parsed slash-command name or shell-command marker.
-            args: the parsed command arguments.
+            raw_input: the exact input supplied by the user.
+            name: the parsed command name or shell marker.
+            args: the parsed argument list.
 
         Returns:
-            The temporary persistence error notice, or ``None`` on success.
+            A temporary save notice, or None on success.
         """
-        return self.event(
+        return self.__event(
             {
                 "type": "command",
-                "timestamp": self._utc_timestamp(),
+                "timestamp": self.__utc_timestamp(),
                 "raw_input": raw_input,
                 "name": name,
                 "args": args,
@@ -226,17 +171,15 @@ class SessionRecorder:
         )
 
     def close_interrupted_tool_calls(self) -> ErrorMessage | None:
-        """Close model-history tool calls that have no durable paired result.
+        """Queue all missing tool outcomes before attempting their repair write.
 
-        A session that stopped mid-call leaves the model a request with no
-        answer; each one gets a synthetic tool error so the model knows the
-        outcome is unknown rather than seeing a dangling call.
+        No tool is executed. Every unmatched model-history call receives the
+        existing synthetic error explaining that its previous outcome is unknown.
 
         Returns:
-            The first persistence error notice, or ``None`` when every synthetic
-            result was saved or none was needed.
+            A temporary repair-save notice, or None when saved or unnecessary.
         """
-        session = self._session()
+        session = self.__get_current()
         calls: dict[str, ToolCallMessage] = {}
         answered: set[str] = set()
         for event in session.events:
@@ -246,59 +189,53 @@ class SessionRecorder:
             message = message_from_record(record)
             if isinstance(message, ToolCallMessage):
                 calls[message.id] = message
-            elif isinstance(message, ToolErrorMessage):
-                answered.add(message.id)
-            elif record.get("type") == "tool_result":
+            elif isinstance(message, ToolResultMessage):
                 answered.add(message.id)
 
-        error: ErrorMessage | None = None
+        repaired = False
         for call_id in calls:
             if call_id in answered:
                 continue
-            error = error or self.message(
-                ToolErrorMessage(
-                    content=(
-                        "No result was saved for this tool call before the session "
-                        "stopped. The operation may or may not have completed."
-                    ),
-                    id=call_id,
-                )
+            error = ToolErrorMessage(
+                content=(
+                    "No result was saved for this tool call before the session "
+                    "stopped. The operation may or may not have completed."
+                ),
+                id=call_id,
             )
-        return error
+            session.add_event(message_to_record(error))
+            repaired = True
+        if repaired:
+            return self.flush()
+        return None
 
-    def event(self, record: dict[str, Any]) -> ErrorMessage | None:
-        """Add one raw event to the open chat and try to persist it.
+    def __event(self, record: dict[str, Any]) -> ErrorMessage | None:
+        """Queue one owned record and attempt persistence.
 
         Args:
-            record: the JSON-compatible event to add.
+            record: the JSON-compatible record to append.
 
         Returns:
-            The temporary persistence error notice, or ``None`` on success.
+            A temporary save notice, or None on success.
         """
-        self._session().add_event(record)
+        self.__get_current().add_event(record)
         return self.flush()
 
     def message_into(
         self, session: Session, message: Message, visible: bool = True
     ) -> ErrorMessage | None:
-        """Record one finalized message into a session other than the open one.
+        """Record a fork confirmation without changing the active session.
 
-        :meth:`message` always writes into whatever chat
-        :attr:`SessionManager.current` reports; this is the one deliberate
-        exception, used only when forking, where the same confirmation
-        belongs in both the source session's log and the new fork's. It
-        skips the file-state sync :meth:`message` does, since that concerns
-        the *open* chat's tool reads, not a session that is no longer
-        current.
+        This deliberate write does not synchronize file-read state. Checksum
+        failures propagate after the log write, as in an ordinary flush.
 
         Args:
-            session: the session to append the record to and flush.
-            message: the message to persist.
-            visible: whether the record belongs in the replayed UI log.
+            session: the source or child receiving the confirmation.
+            message: the finalized message to save.
+            visible: whether it belongs in visible replay.
 
         Returns:
-            The temporary persistence error notice, or ``None`` when the
-            message was saved or is not meant to be.
+            A temporary save notice, or None when saved or skipped.
         """
         record = message_to_record(message, visible)
         if record is None:
@@ -307,26 +244,24 @@ class SessionRecorder:
         return self.flush(session)
 
     def flush(self, session: Session | None = None) -> ErrorMessage | None:
-        """Persist every unsaved event from a session in order.
+        """Persist queued records in order and certify a clean log.
 
-        Every ordinary write reaches this method through :meth:`event`, for the
-        open chat, so it is the one place the manager's registry is synced once
-        a write lands. A fully successful flush also refreshes the log's
-        checksum, certifying the clean state the next registry scan verifies.
-        ``session`` is only ever passed explicitly by :meth:`message_into`, for
-        a session that is not the open one.
+        Header-only new conversations stay in memory. Log failures return a save
+        notice; checksum failures propagate. The manager is notified only after
+        the checksum write succeeds.
 
         Args:
-            session: the session to flush, or ``None`` for the open chat.
+            session: an explicit fork source, or None for the active session.
 
         Returns:
-            The temporary persistence error notice, or ``None`` when all events are
-            saved.
+            A temporary save notice, or None when complete or unused.
         """
-        session = session or self._session()
+        session = session if session is not None else self.__get_current()
+        if not session.created_on_disk and len(session.events) == 1:
+            return None
         try:
             if session.recovery_offset is not None:
-                self._storage_manager.truncate_file(
+                self.__storage_manager.truncate_file(
                     session.path, session.recovery_offset
                 )
                 session.recovery_offset = None
@@ -334,64 +269,67 @@ class SessionRecorder:
             for index, event in enumerate(session.events):
                 if event.saved:
                     continue
-                offset = self._storage_manager.file_size(session.path)
+                first_write = not session.created_on_disk and index == 0
+                offset = (
+                    0
+                    if first_write
+                    else self.__storage_manager.get_file_size(session.path)
+                )
                 line = json.dumps(
                     event.record, ensure_ascii=False, separators=(",", ":")
                 )
                 try:
-                    if not session.created_on_disk and index == 0:
-                        self._storage_manager.create_file(session.path, line)
+                    if first_write:
+                        self.__storage_manager.create_file(session.path, line)
                     else:
-                        self._storage_manager.append_line(session.path, line)
+                        self.__storage_manager.append_line(session.path, line)
                 except OSError as exc:
-                    if isinstance(exc, FileExistsError):
-                        return self._save_error(exc)
-                    self._handle_write_failure(session, index, offset)
-                    return self._save_error(exc)
+                    if not isinstance(exc, FileExistsError):
+                        self.__handle_write_failure(session, index, offset)
+                    return self.__save_error(exc)
                 event.saved = True
                 session.created_on_disk = True
         except (OSError, TypeError, ValueError) as exc:
-            return self._save_error(exc)
+            return self.__save_error(exc)
 
         if session.created_on_disk:
-            SessionChecksum.write(session.path)
-        self._session_manager.after_write(session)
+            self.__checksum.write(session.path)
+            self.__after_write(session)
         return None
 
-    def _handle_write_failure(self, session: Session, index: int, offset: int) -> None:
-        """Keep an event retryable or discard an incomplete first session file.
+    def __handle_write_failure(self, session: Session, index: int, offset: int) -> None:
+        """Retain append recovery state or remove an incomplete new file.
 
         Args:
             session: the session whose write failed.
-            index: the position of the failed event in the session's events.
-            offset: the file size observed before the failed write.
+            index: the failed event's position.
+            offset: the byte count before the write.
         """
         if not session.created_on_disk and index == 0:
             try:
-                self._storage_manager.remove_file(session.path)
+                self.__storage_manager.remove_file(session.path)
             except OSError:
                 pass
             return
         session.recovery_offset = offset
 
     @staticmethod
-    def _save_error(exc: Exception) -> ErrorMessage:
-        """Return the notice a caller can render for a failed write.
+    def __save_error(exc: Exception) -> ErrorMessage:
+        """Build a notice that is never passed back through the failed recorder.
 
         Args:
-            exc: the filesystem or serialization failure.
+            exc: the storage or serialization failure.
 
         Returns:
-            A renderable notice that is itself never persisted: the session is
-            what failed.
+            The temporary user-facing save notice.
         """
         return ErrorMessage(content=f"Could not save session: {exc}")
 
     @staticmethod
-    def _utc_timestamp() -> str:
-        """Return the current UTC timestamp in JSON-friendly ISO-8601 form.
+    def __utc_timestamp() -> str:
+        """Return the current UTC timestamp for a record.
 
         Returns:
-            The current UTC time as an ISO-8601 string ending in ``Z``.
+            An aware ISO timestamp ending in Z.
         """
         return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

@@ -70,7 +70,7 @@ class PermissionManager:
         )
         return f"{type(self).__name__}({grants})"
 
-    def add_permission(
+    def add(
         self,
         category: PermissionCategory,
         level: PermissionLevel = PermissionLevel.ASK,
@@ -92,7 +92,7 @@ class PermissionManager:
             raise ValueError(f"Permission already granted for category {category}.")
         self._permissions[category] = level
 
-    def remove_permission(self, category: PermissionCategory) -> None:
+    def remove(self, category: PermissionCategory) -> None:
         """Revoke the grant for the given category.
 
         Args:
@@ -106,9 +106,7 @@ class PermissionManager:
             raise ValueError(f"No permission granted for category {category}.")
         self._permissions[category] = PermissionLevel.NONE
 
-    def set_permission_level(
-        self, category: PermissionCategory, level: PermissionLevel
-    ) -> None:
+    def set_level(self, category: PermissionCategory, level: PermissionLevel) -> None:
         """Change the permission level for the given category.
 
         Args:
@@ -117,9 +115,7 @@ class PermissionManager:
         """
         self._permissions[category] = level
 
-    def set_permissions(
-        self, permissions: dict[PermissionCategory, PermissionLevel]
-    ) -> None:
+    def set(self, permissions: dict[PermissionCategory, PermissionLevel]) -> None:
         """Replace all grants with the given category-to-level mapping.
 
         Args:
@@ -171,10 +167,10 @@ class PermissionManager:
         Yields:
             The permission request of an ``ask`` grant.
         """
-        messages = self._hook_manager.run_hook(Hook.BEFORE_PERMISSION_CHECK, call=call)
+        messages = self._hook_manager.run(Hook.BEFORE_PERMISSION_CHECK, call=call)
         decision = yield from self._resolve(call, category)
         messages.extend(
-            self._hook_manager.run_hook(
+            self._hook_manager.run(
                 Hook.AFTER_PERMISSION_CHECK, call=call, decision=decision
             )
         )

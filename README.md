@@ -45,7 +45,7 @@ src/arancio/
   ui/           Textual application, controller adapter, and widgets
   commands/     Slash-command implementations
   prompt/       Prompt parsing and user-action execution
-  sessions/     Session creation, persistence, validation, and resume support
+  sessions/     Session facade, detached state, recording, validation, and replay
   settings/     Settings snapshots, validation and persistence through Storage
   storage/      Generic filesystem operations under the application data root
 harness/        Source system prompt and tool descriptions/schemas

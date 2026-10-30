@@ -25,10 +25,9 @@ def main() -> None:
     (which forwards it to its executor's own tool instances), so one handler registered
     anywhere in that graph sees every dispatch from every component. The plugin manager
     loads straight after, so the plugins are attached to that same hook manager before
-    anything can dispatch, and before ``settings_manager.load_settings()`` loads the
-    permission settings. Its messages are shown alongside the settings ones. The session
-    manager comes after the settings are loaded, because the session it opens snapshots
-    them.
+    anything can dispatch, and before ``settings_manager.load()`` loads the permission
+    settings. Its messages are shown alongside the settings ones. The session manager
+    comes after the settings are loaded, because the session it opens snapshots them.
     """
     storage_manager = StorageManager()
     storage_manager.bind_litellm_login_dir()
@@ -36,7 +35,7 @@ def main() -> None:
     controller = UIController()
     hook_manager = HookManager()
     plugin_manager = PluginManager(hook_manager=hook_manager)
-    plugin_messages = plugin_manager.load_plugins()
+    plugin_messages = plugin_manager.load()
     client = LiteLLMClient(stream=True, controller=controller)
     summary_client = LiteLLMClient(stream=False, controller=controller)
     # the summary client never thinks (setters take None; the constructor ignores it)
@@ -60,7 +59,7 @@ def main() -> None:
         summary_client=summary_client,
         agent=agent,
     )
-    settings, settings_messages = settings_manager.load_settings()
+    settings, settings_messages = settings_manager.load()
     startup_messages = plugin_messages + settings_messages
 
     session_manager = SessionManager(

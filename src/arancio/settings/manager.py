@@ -18,8 +18,8 @@ from arancio.core.clients.constants import (
 from arancio.core.messages.base import ErrorMessage, Message, WarningMessage
 from arancio.core.permissions.constants import DEFAULT_PERMISSION_LEVELS
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
+from arancio.settings.base import Settings
 from arancio.settings.constants import ARANCIO_SETTINGS_FILENAME
-from arancio.settings.settings import Settings
 from arancio.settings.validator import SettingsValidator
 from arancio.storage.manager import StorageManager
 
@@ -36,7 +36,7 @@ class SettingsManager:
         __categories: category identities registered before construction.
         __validator: shared validation for file loading and explicit edits.
         __settings: the active conversation values.
-        __global_settings: the defaults selected by load or a successful save.
+        __global: the defaults selected by load or a successful save.
     """
 
     def __init__(
@@ -52,10 +52,10 @@ class SettingsManager:
         """
         self.__storage_manager = storage_manager
         self.__categories: tuple[PermissionCategory, ...] = tuple(PermissionCategory)
-        self.__global_settings: Settings = self.__default_settings()
-        self.__settings: Settings = self.__copy_settings(self.__global_settings)
+        self.__global: Settings = self.__default_settings()
+        self.__settings: Settings = self.__copy(self.__global)
         self.__validator = SettingsValidator(
-            self.__global_settings.to_dict(), supported_providers
+            self.__global.to_dict(), supported_providers
         )
 
     @property
@@ -66,7 +66,7 @@ class SettingsManager:
             A snapshot whose fields and permission dictionary can be changed
             without changing manager-owned values.
         """
-        return self.__copy_settings(self.__settings)
+        return self.__copy(self.__settings)
 
     @property
     def global_settings(self) -> Settings:
@@ -75,9 +75,9 @@ class SettingsManager:
         Returns:
             An independent snapshot of the global-default values.
         """
-        return self.__copy_settings(self.__global_settings)
+        return self.__copy(self.__global)
 
-    def load_settings(self) -> tuple[Settings, list[Message]]:
+    def load(self) -> tuple[Settings, list[Message]]:
         """Load settings through Storage and return file and field diagnostics.
 
         A missing file is created from code defaults. Empty, malformed or
@@ -122,8 +122,8 @@ class SettingsManager:
 
         checked, field_messages = self.__validator.validate(data)
         defaults.from_dict(checked, self.__categories)
-        active = self.__copy_settings(defaults)
-        self.__global_settings = defaults
+        active = self.__copy(defaults)
+        self.__global = defaults
         self.__settings = active
         return self.settings, file_messages + field_messages
 
@@ -157,7 +157,7 @@ class SettingsManager:
         else:
             data[field] = value
 
-        candidate = self.__prepare_settings(data)
+        candidate = self.__prepare(data)
         if field == "model_name":
             candidate.model_id
         self.__settings = candidate
@@ -183,26 +183,26 @@ class SettingsManager:
             permissions: the complete restored permission map for known categories.
         """
         values = self.__permission_values(permissions)
-        data = self.__global_settings.to_dict()
+        data = self.__global.to_dict()
         data.update(
             provider=provider,
             model_name=model_name,
             thinking_effort=thinking_effort,
             permissions=values,
         )
-        self.__settings = self.__prepare_settings(data)
+        self.__settings = self.__prepare(data)
 
-    def reset_to_global_settings(self) -> None:
+    def reset_global(self) -> None:
         """Replace active values with global defaults without file I/O."""
-        self.__settings = self.__copy_settings(self.__global_settings)
+        self.__settings = self.__copy(self.__global)
 
-    def reset_to_default_settings(self) -> None:
+    def reset_default(self) -> None:
         """Write code defaults, then replace both active and global settings.
 
         Write failures propagate and leave both in-memory snapshots unchanged.
         """
         candidate = self.__default_settings()
-        self.save_settings(candidate)
+        self.save(candidate)
         self.__settings = candidate
 
     def save_field(
@@ -226,12 +226,12 @@ class SettingsManager:
         if field != "permissions" and category is not None:
             raise ValueError(f"Category is only valid for permissions: {category!r}.")
 
-        candidate = self.__copy_settings(self.__global_settings)
+        candidate = self.__copy(self.__global)
         if field == "permissions":
             candidate.permissions[category] = self.__settings.permissions[category]
         else:
             setattr(candidate, field, getattr(self.__settings, field))
-        self.save_settings(candidate)
+        self.save(candidate)
 
     def __default_settings(self) -> Settings:
         """Build settings from code defaults and the known categories.
@@ -254,7 +254,7 @@ class SettingsManager:
             turn_wait_time_multiplier=AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
         )
 
-    def __copy_settings(self, settings: Settings) -> Settings:
+    def __copy(self, settings: Settings) -> Settings:
         """Copy checked values into a new Settings object.
 
         Args:
@@ -267,7 +267,7 @@ class SettingsManager:
         copied.from_dict(settings.to_dict(), self.__categories)
         return copied
 
-    def __prepare_settings(self, data: Mapping[str, Any]) -> Settings:
+    def __prepare(self, data: Mapping[str, Any]) -> Settings:
         """Strictly validate values before populating an unpublished object.
 
         Invalid or incomplete candidates raise ValueError.
@@ -311,7 +311,7 @@ class SettingsManager:
             values[category.name.lower()] = level.value
         return values
 
-    def save_settings(self, candidate: Settings) -> None:
+    def save(self, candidate: Settings) -> None:
         """Write a detached candidate before publishing it as global defaults.
 
         Write failures propagate without publishing the candidate.
@@ -319,7 +319,7 @@ class SettingsManager:
         Args:
             candidate: the checked settings values to persist.
         """
-        saved = self.__copy_settings(candidate)
+        saved = self.__copy(candidate)
         text = yaml.safe_dump(saved.to_dict(), sort_keys=False)
         self.__storage_manager.write_file(ARANCIO_SETTINGS_FILENAME, text)
-        self.__global_settings = saved
+        self.__global = saved

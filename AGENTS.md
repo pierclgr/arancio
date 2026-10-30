@@ -35,7 +35,7 @@ At runtime tools do **not** read their prompts from the repo. They read from the
 working directory `~/.arancio/` (shared paths are in `core/constants.py`, with
 component-specific paths in each component's `constants.py`).
 Storage uses `ARANCIO_DEFAULT_DIR` as its root;
-startup and Sessions caller migration is deferred; Settings now uses Storage's text API:
+startup caller migration is deferred; Settings and Sessions now use Storage's APIs:
 
 - `~/.arancio/harness/tools/<snake_tool_name>/{description.md,input_schema.yml}` — each
   tool's description and JSON input schema, loaded from disk by `Tool.__init__`.
@@ -79,7 +79,7 @@ redirect these on the *importing* module or pass explicit temporary paths:
 | Constant, as imported | Read by | What an unpatched test does |
 | --- | --- | --- |
 | `core.plugins.manager.PLUGINS_PATH` | `PluginManager.__init__` | imports and runs the user's real plugins |
-| `sessions.manager` `root` default | `SessionManager.__init__` | scans and writes the user's real session history |
+| `storage.manager.ARANCIO_DEFAULT_DIR` | `StorageManager.__init__` | anchors relative settings/session paths to the real data directory |
 
 Storage tests should repoint `storage.manager.ARANCIO_DEFAULT_DIR` and use temporary
 source/target paths. Plugin loading remains a separate I/O boundary, outside Storage.
@@ -92,10 +92,10 @@ with its own builder/parser trio, not touching the core loop.
 
 **Wiring** (`ui/__main__.py:main`) — the existing entry point is legacy caller code
 awaiting its architecture migration. It still calls Storage's removed login helper,
-supplies SettingsManager's removed client/agent arguments and expects `load_settings()` to
+supplies SettingsManager's removed client/agent arguments and expects `load()` to
 apply settings to Core. Commands still mutate returned settings and call the removed
-`apply()`; Sessions still calls `apply_session_configuration()`. These callers
-are deliberately not adapted in the Settings step, so the full app is not wired yet.
+`apply()`. They also use Sessions' removed live-state/recorder APIs and old data-module
+imports. These callers remain deferred, so the full app is not wired yet.
 
 The next startup migration must discover plugins before constructing SettingsManager
 and supply its supported provider names. Loading returns a detached Settings
@@ -182,7 +182,7 @@ are loaded from the harness dir (see runtime section); descriptions are dynamic-
 `ToolSession` records which files were read so write/edit tools can refuse blind
 overwrites of unread or externally-modified files. Tools receive it as `tool_session`
 and store it as `_tool_session`. The same instance survives the tool rebuilds performed
-by `ToolManager.refresh_tools` whenever permissions change. Families: `files/` (read, write, edit),
+by `ToolManager.refresh` whenever permissions change. Families: `files/` (read, write, edit),
 `commands/` (shell), `web/` (search, fetch — fetch takes an
 injected summary client).
 
@@ -199,7 +199,7 @@ dict keyed by uppercased name so lookup stays case-insensitive; `get(name)`/
 and `add_tool(tool_cls)` grows its mutable `.tools` set (not names → still refactor-safe).
 `PermissionLevel` is NONE, ASK or AUTO. The grants dict always covers every *currently
 registered* category — a category not granted is present at `NONE`, never absent — which
-is why `PluginManager.load_plugins()` (see **Plugins**) has to run, and does run, before any
+is why `PluginManager.load()` (see **Plugins**) has to run, and does run, before any
 `PermissionManager`/`SettingsManager` is built. Settings snapshots the known categories
 from the registry at construction; categories discovered afterward are not
 added to its snapshots.
@@ -225,13 +225,13 @@ every dispatch point: `startup`/`shutdown`, `agent_start`/`agent_end`, `turn_sta
 (`core/hooks/manager.py`) owns its own registrations — there is no global singleton, so
 two managers never share handlers. `register(hook, handler)` appends a handler for a hook;
 registering the same callable twice adds two invocations. Every handler takes **one**
-argument: the manager's public `context` dict. `run_hook(hook, **event)` first writes the
+argument: the manager's public `context` dict. `run(hook, **event)` first writes the
 event's own data into `context` under those keys (object identity kept), then calls every
 handler registered for that hook synchronously, on the caller's thread, in registration
 order, passing the **same** `context` object to each — never a copy. So a handler changes
 a value by assigning a key (`context["system_prompt"] = ...`), and the next handler and
 the caller both see it. Event keys are **not** erased after dispatch: they stay until a
-later `run_hook` overwrites them, so a handler should read only the keys its own hook sets
+later `run` overwrites them, so a handler should read only the keys its own hook sets
 (a `turn_start` handler still finds the last tool call's `result`). Besides the event
 keys, core fills the permanent keys **by itself**, with no outside wiring: each core
 component adds itself to the context of the hook manager it is built with —
@@ -242,8 +242,8 @@ core objects with one shared hook manager gets a full context, whatever frontend
 any) drives them. If two objects of the same kind share one hook manager, the last one
 built owns the key. Returned `Message` objects are collected into a list in dispatch order; other return
 values are ignored. An exception raised by an ordinary handler propagates immediately,
-so handlers after it do not run. Dispatch iterates a snapshot of the handler list taken when `run_hook` starts, so
-a handler that registers another handler mid-dispatch only affects the next call to `run_hook`.
+so handlers after it do not run. Dispatch iterates a snapshot of the handler list taken when `run` starts, so
+a handler that registers another handler mid-dispatch only affects the next call to `run`.
 A hook with no registered handlers returns an empty list. Both `core/hooks/__init__.py` and every
 sibling `core` package's `__init__.py` are empty; a caller imports `Hook` from
 `core.hooks.base` and `HookManager` from `core.hooks.manager` directly, the same as any
@@ -339,7 +339,7 @@ wants every failure registers once for `error` and reads `source`; one that only
 tool failures filters on `context["source"] == "tool"`. The names in parentheses in the
 list above are the event keys each dispatch writes into `context`.
 
-**Plugins** (`core/plugins/`) — `PluginManager.load_plugins()` imports `plugin.py` from
+**Plugins** (`core/plugins/`) — `PluginManager.load()` imports `plugin.py` from
 immediate folders under `~/.arancio/plugins/`, sorted by folder name. Hidden and
 underscore-prefixed folders and folders without that entry file are skipped. The root
 is the module constant `manager.PLUGINS_PATH`, read by `PluginManager.__init__`, and
@@ -390,9 +390,9 @@ mixing helpers from different folders. `PLUGIN_PACKAGE_ROOT` lives in
 plugins. An unexpected import failure discards all declarations and queued diagnostics
 added during that import, removes newly cached plugin modules (including helpers), and
 reports the failure; unrelated entries still load. Cached entry modules and constructed
-instances are reused on subsequent `load_plugins()` calls. This is startup loading, not live reload.
+instances are reused on subsequent `load()` calls. This is startup loading, not live reload.
 
-`PluginManager.load_plugins() -> list[Message]` drains the temporary decorator diagnostic buffer
+`PluginManager.load() -> list[Message]` drains the temporary decorator diagnostic buffer
 and returns startup errors and warnings through the normal UI path. It runs before
 permission and settings initialization, so plugin tool categories exist when default
 grants and the tool catalog are built. Instances receive no injected metadata, paths
@@ -447,7 +447,9 @@ is rendered on the main thread via `call_from_thread`. Assistant and reasoning c
 stream into one `MarkdownStream` widget per span, and the finalized echo of an
 already-streamed span is suppressed so text is not shown twice.
 
-**Prompt & commands** (`prompt/`, `commands/`) — `PromptManager.resolve_prompt` classifies
+**Prompt & commands** (`prompt/`, `commands/`) — legacy callers pending Application
+migration; their recorder/runtime calls described below no longer match Sessions.
+`PromptManager.resolve_prompt` classifies
 input: `!<shell command>`/`!!<shell command>` → `ShellCommandAction`,
 `/<name> <args>` → `CommandAction`, anything else → `PromptAction`. Every action carries
 the exact text the user typed as a **required** `raw_input`; `ui/app.py` rejects empty
@@ -505,18 +507,18 @@ manager snapshots registered categories and copies the supplied provider metadat
 Plugins must be loaded first so their categories are included.
 
 `settings` and `global_settings` always return detached snapshots, including separate
-permission dictionaries. `set_field(field, value)`, `restore_active` and `reset_to_global_settings`
+permission dictionaries. `set_field(field, value)`, `restore_active` and `reset_global`
 change active values only and return None. `set_field` accepts any settings field, validates
 before publication and merges permission changes; model selection requires a usable
 model ID, effort changes require a configured model, and provider selection may precede
 model selection. Application will read `settings` afterward and apply it to Core.
 
-`save_settings(settings)` promotes the supplied snapshot; `save_field(field, category)`
+`save(settings)` promotes the supplied snapshot; `save_field(field, category)`
 promotes only the selected field or permission category. Writes happen before publishing
 global defaults, and failures propagate.
-`reset_to_default_settings()` creates code defaults inside SettingsManager, writes
+`reset_default()` creates code defaults inside SettingsManager, writes
 them, then replaces both active and global snapshots. A failed write leaves both in-memory
-snapshots unchanged. It returns None. `reset_to_global_settings()` performs no file I/O.
+snapshots unchanged. It returns None. `reset_global()` performs no file I/O.
 `restore_active()` accepts four plain values (provider, model name, thinking effort and
 complete permissions) and overlays them on global defaults without saving.
 
@@ -542,7 +544,7 @@ SettingsManager calls Storage's `read_text` and `write_file` with
 `ARANCIO_SETTINGS_FILENAME = "settings.yml"`; Storage adds its root. A missing file is
 created from code defaults and reported. Empty, malformed or non-mapping YAML remains
 untouched while fallback values are used in memory. Other I/O and UTF-8 decoding failures
-propagate. `load_settings()` initializes both snapshots and returns a detached snapshot plus
+propagate. `load()` initializes both snapshots and returns a detached snapshot plus
 file/field notices, without applying values to Core.
 
 SettingsManager uses PyYAML safe conversion directly and preserves mapping order when
@@ -553,7 +555,7 @@ dumping settings.
 sizes, discovery, writes, directory moves and symlinks. Private `__root`, `__resolve_path`
 and static `__validate_directory` use double-leading underscores. `READ_CHUNK_SIZE` lives
 in `storage/constants.py` and bounds byte reads at 64 KiB. Consumers must close
-an abandoned byte iterator. Every write, including `make_dir`, returns None;
+an abandoned byte iterator. Every write, including `create_directory`, returns None;
 failures propagate as exceptions. File-size queries and file removal raise when the
 file is missing.
 
@@ -568,230 +570,101 @@ FileNotFoundError and non-directories with NotADirectoryError before writes.
 **Caller migration is deferred.** Startup still references the removed
 `bind_litellm_login_dir` and the old SettingsManager constructor. Commands must move
 from direct mutation and `apply()` to setters, explicit saves and snapshot reads.
-Sessions must replace `apply_session_configuration` with value-only `restore_active`.
-SessionRegistry still consumes `make_dir`'s old return value, and SessionChecksum still
-uses direct I/O. No compatibility wrappers or tests are added in this step.
+Sessions now returns configuration data without applying it; Application must use
+value-only `restore_active`. SessionRegistry and SessionChecksum now use the current
+Storage API. No compatibility wrappers or tests are added in these steps.
 
-**Sessions** (`sessions/`) — `SessionManager` decides *which* chat is active and owns the
-read side; `SessionRecorder` (`sessions/recorder.py`) owns the **write** side; `StorageManager`
-does only file I/O. **A session always exists; its log does not.**
-`SessionManager.__init__` ends with `create()`, so `current` is a `Session` from
-construction on and no consumer handles its absence. What is deferred is persistence:
-`SessionRecorder.created()` only *adds* the `session_created` header to `session.events`,
-leaving it unsaved, and `flush()` — which walks every unsaved event in order and already
-uses `create_file` for the first one — carries it to disk under the first write that has
-something to save. An untouched chat therefore leaves no file.
+**Sessions** (sessions/) — SessionManager is the only public service. Its constructor
+requires StorageManager and an already-loaded SessionConfiguration. New conversations
+start in `Path.cwd()`; forks retain their source's working directory. Session logs live
+under Storage's root in `sessions/constants.py:ARANCIO_SESSIONS_DIR`.
 
-Which commands must never supply that first write is named once, as
-`commands/registry.py:SESSION_DISCARDING_COMMANDS` — a frozenset of the classes that
-end or switch the active chat: `ExitCommand` (`/exit`, `/quit`), `ClearCommand`
-(`/clear`, `/new`), `ForkCommand` and `ResumeCommand`. It is keyed by **class**, so
-aliases come along for free, and it drives two rules in `ActionExecutor`: *when* the
-typed line is recorded — before the command runs, since the chat it belongs to is about
-to be replaced — and *whether* anything is written at all. The second rule is the single
-predicate `_writes_nothing(command)`, the only place the executor reads
-`created_on_disk`, and it covers every write the executor makes for such a command: the
-typed line (`_record_command`), the result message (`/fork`'s confirmation, `/resume`'s
-"multiple matches", "already current" and directory-fallback notices) and the error from
-a command that raised or whose arguments did not bind (`/resume <unknown>`). All three
-are still shown; they are only not saved. Once the chat has a log, the same command is
-recorded like any other, so a `/quit` mid-chat still shows up in the replayed log. The
-result-message check runs *after* the command, so `/fork`'s confirmation is weighed
-against the fork, not the session it came from. `ForkCommand` is the one command that
-writes on its own, and its `session_recorder.flush()` is likewise conditional on the
-**source** being `created_on_disk`: forking an unsaved chat switches to the fork without
-writing either of them. Two holes are deliberate: an unknown command (`/quti`) and a
-malformed prompt still write their error and so create the log — they are real mistakes
-the session keeps, and neither resolves to a command the set could recognize. Nothing
-in `App._run_agent` orders itself
-around this any more: it resolves the action and executes it, and its `except` branch (a
-malformed prompt) writes the `ErrorMessage` through `session_recorder.message` directly,
-which persists the header along with it. `App` doesn't
-hold its own `settings_manager` reference (checked: it's
-passed straight into the `ActionExecutor` it builds and only used inline once at `__init__`),
-which is why the recording lives on `ActionExecutor` rather than `App`. The chain is
-`ActionExecutor` → `SessionRecorder` → `SessionManager`:
-the recorder holds the manager and asks it which chat is open, so a caller passes only what it
-wants written (`session_recorder.message(msg)`, not `record_message(session, msg)`). `SessionManager`
-has **no** `record_*` methods; it exposes three seams the recorder uses — the
-`session_recorder` property, `current` (the open chat) and `after_write(session)` (registry sync).
-`ActionExecutor` reaches the recorder as `session_manager.session_recorder` at each point of
-use, and holds the manager itself because `/clear` receives it through
-`INJECTABLE_COMMAND_PARAMETERS`.
+The grouped data models live in sessions/base.py: Session, SessionEvent,
+SessionConfiguration, SessionState, SessionRegistryEntry and SessionScan. SessionManager
+owns the mutable Session and events. current_state() returns a detached SessionState
+without events or recovery offsets; configuration permissions and file-state mappings
+are copied. find() returns copied entry data and replay methods reconstruct independent
+Messages, including nested content, arguments and reasoning payloads. Copies retain
+permission-category identities. Known categories are captured once at manager construction
+and supplied to validation; Sessions never loads plugins or creates categories.
+The `model_history` and `visible_messages` properties rebuild independent messages on
+each access.
 
-The recorder builds each event record, applies the state change it describes, appends it to
-the session and flushes it, including the recovery-offset retry after a failed write.
-**`flush()` is the single funnel** — every write reaches it through `event()`, the creation
-header being the one record added outside it, which then rides along with the first real
-write — so it is the
-one place that calls `SessionManager.after_write`, and only on success. That keeps the
-registry true without any caller remembering to sync it, and keeps `_register_durable_session`
-and `_update_registry_entry` private to the manager. Both are idempotent, so running them on
-every successful write is cheaper than tracking which write needs which. `event()` always
-flushes whichever chat `session_manager.current` reports; `flush()` itself takes an optional
-`session` (defaulting to the current one) so `ForkCommand` — the one command that writes on
-its own — can reach `SessionRecorder.message_into(session, ...)` to persist the same message
-into a session that is **not** current (the source, once `create()` has already switched
-`current` to the new fork). It is the one deliberate exception to "the recorder always asks
-which chat is open," and it skips the file-state sync `message()` does,
-since that concerns the open chat's tool reads, not a session that just stopped being current.
+create() returns the managed Session and selects a new identity and unsaved header.
+The constructor creates an opening conversation, so an active session always exists. A new header-only
+session stays unsaved even when flush() is requested. Its first recordable message,
+command or state change writes the header first, exclusively, followed by queued events.
+Discovery may create the sessions directory, but an unused conversation creates no log.
+The nullable explicit_name is distinct from name's ID fallback.
 
-The recorder is built as
-`SessionRecorder(storage_manager, self, self._tool_session)` inside
-`SessionManager.__init__`, receiving a half-built manager: it only stores the reference,
-and first reads it on the earliest write. `create()` and `load()` must therefore set `self._current` **before** calling
-the recorder — they do. The recorder also
-builds the two records nobody asks for explicitly: `created` stamps the `session_created`
-header that opens a log, unsaved (the schema version lives in `sessions/constants.py` as
-`SESSION_FORMAT_VERSION`, since the recorder writes it and the manager validates it on read),
-and `close_interrupted_tool_calls` gives a loaded session's unanswered tool calls a synthetic
-tool error. **No class other than the recorder builds a session record or writes the log** —
-`grep '"type":' sessions/manager.py` should stay empty.
-`SessionRecorder.message` is the gate, and it skips exactly one thing: a message the
-codec has no record for. `message_to_record` returns `None` for a `ChunkMessage` — a
-fragment saved once it is finalized — so the knowledge of what the schema can hold lives
-with the schema. That check is load-bearing rather than defensive: a chunk inherits from
-its finalized parent, so without it the `isinstance` chain below would match
-`AssistantChunkMessage` as an `AssistantMessage` and save every stream fragment as a
-complete reply. Everything else is written, **errors included** —
-the session replays what the user saw and what the model saw, so a mistyped command whose
-only output was an error still leaves a trace. An error saves as an `error` record and
-comes back `visible` but out of model history, following its own flags. The single
-exception never reaches the gate: `SessionRecorder._save_error` builds the "Could not save
-session" notice, and the recorder never hands it to its own `message()` — the write is
-what failed. Every write also syncs the file-read state: `_sync_file_states` compares the
-shared `ToolSession` with what the session already saved and writes a `file_state_changed`
-record for each new read, so core never has to announce one. `SessionManager` receives
-that same `ToolSession`, hands it to the recorder, clears it when a chat is replaced and
-restores its saved file state when a chat is resumed. Finalized messages store model-facing
-`content`, user-facing `display_text`, the `in_history` flag and the `visible` value the
-caller asked for; only streaming chunks are not saved.
-Loading rebuilds the agent history from `in_history` entries and the UI log from `visible`
-entries; `model_history` and `visible_messages` are each **one walk** over the events, and
-`visible_messages` rebuilds a command's typed line from its `command` record, since a
-command has no message record of its own. A saved tool call with no paired
-result receives a synthetic model-facing tool error during restoration so the model knows its
-outcome is unknown. Every session starts with a versioned creation record carrying its initial
-name, configuration and working directory, and later `state_changed` and `file_state_changed`
-records update its state.
+Application records through record_message(message, file_states=..., visible=True) and
+record_command(raw_input, name, args). These methods return ErrorMessage | None for log
+save failures. The file-read argument is a copied path-to-mtime mapping, never ToolSession.
+The recorder queues the message before changed file states and retains both on failure.
+Chunks are skipped before matching finalized message types. Unsupported messages,
+including WarningMessage, raise ValueError; no new saved record types were added.
+Transient permission and login control data must stay outside recording.
 
-Session names store only an explicit choice: `Session.explicit_name` defaults to `None`,
-while the `name` property returns the ID when unset. Assigning `session.name` updates the
-explicit value; assigning `None` clears it. Creation and state records keep the required
-`"name"` field as `null` or a string, never materializing the fallback. Scans and registry
-entries preserve that nullable value; registry entries expose the same `name` fallback
-for search and display. No migration of older logs is performed.
+update_state(**changes) accepts configuration, working_directory and explicit_name.
+Omitted fields remain unchanged; explicit_name=None clears the name, while None is
+invalid for the other fields. Empty changes perform no write. The validator checks every
+key/value and copies replacements before the manager applies them through a generic
+loop. Unknown or non-editable fields raise ValueError before mutation or I/O. The
+recorder then writes one complete configuration/directory/name snapshot. A failed write
+retains the in-memory change and pending event rather than rolling either back.
 
-The session's name, command-controlled provider, model, thinking effort, complete permission map
-and working directory are restored without overwriting global `settings.yml` defaults.
-`session_recorder.state_changed()` takes no arguments: it only reads the session's *current*
-`configuration`/`working_directory`/`name` and persists them together as one `state_changed`
-record — **mutating those fields is not the recorder's job**. Each command that changes one of
-them mutates the session itself, then calls
-`StateChangeCommand._persist_state_change(session_manager, confirmation)`
-(`commands/state_change.py`), which calls `state_changed()` and returns either `confirmation`
-or the resulting `ErrorMessage`: `CdCommand` sets `session.working_directory`
-to the app's new (already-resolved) directory; `ModelCommand`, `ProviderCommand`, `EffortCommand`
-and the two mutating branches of `PermissionsCommand` reach the sibling helper
-`StateChangeCommand._apply_configuration`, which sets `session.configuration =
-SessionConfiguration.from_settings(settings_manager.settings)` after they applied and persisted
-the settings change; `RenameCommand` sets `session.name`. Those six are exactly the commands
-subclassing `StateChangeCommand` rather than `Command` directly — `/clear` and `/resume`
-replace the whole session through `discard_and_create`/`restore_runtime` and never write a
-`state_changed` record, so they stay on `Command`. All three fields are re-sent together
-regardless of which one changed, so the log carries one atomic record of "the state at this
-point" rather than several independently-timed event types. Each of these commands is injected
-`session_manager` (`prompt/actions/constants.py`) for exactly this; the executor itself has no
-session-effect mapping — `ActionExecutor` only records the command's own confirmation text and
-its `command` line, nothing about session state. `_persist_state_change` returning the
-`ErrorMessage` in place of `confirmation` is why a failed write still reaches the user, from the
-command itself rather than a side-channel. Because the persisted record is a complete snapshot,
-the bottom-most one already *is* the session's current state on its own, so reading it back
-never needs to replay a record-by-record mutation:
-`SessionValidator._state_from_record` converts a `session_created`/`state_changed` record into
-`(configuration, working_directory, name)` once, and both readers of that final state build on
-it — `_scan_state` (replacing the old
-header-only `_read_header`) walks every line of a log checking only `type`, keeping the last
-`state_changed` (or the header) without validating any non-winning record's shape, so
-`SessionRegistry` (built once per process at startup) reflects every session's true last-known
-name, configuration and working directory, not its stale creation-time header; `read` still
-walks the whole log regardless, since message history requires it, but now derives the final
-`Session.configuration`/`working_directory`/`name` from `_state_from_record` once rather than
-via `_apply_record` mutating them on every `state_changed` occurrence it passes — `_apply_record`'s
-`state_changed` branch still validates every record's shape (so "every line is validated" still
-holds for a full `read`), it just no longer supplies the final value. `/provider`, `/model`,
-`/effort` and `/permissions` update both their session snapshot and the corresponding global
-default field; `/rename` (`commands/rename.py`) has no global counterpart to update — a session's
-name is session-only state, unlike its configuration. `_update_registry_entry`
-(`manager.py`) syncs a renamed active session's own registry entry immediately, the same way it
-already keeps `working_directory`/`configuration` current, so a same-process `/resume` search
-finds it under its new name without waiting for a restart to re-scan the registry.
-`/clear` (aliased as `/new`) discards the old session's unsaved in-memory
-events, restores global settings, resets file-read safety state and starts a new session
-under the current CWD. Because it replaces the open chat, the executor writes its command
-line *before* running it, and keys that on `SESSION_DISCARDING_COMMANDS` rather than the
-typed name, so every alias is covered — and so is `ExitCommand`, which replaces nothing,
-making pre-recording harmless: the line lands in the same still-current chat it would have
-anyway.
+SessionRecorder is internal. It receives callbacks accessing the manager's private
+__current property and __after_write method; callers cannot obtain the recorder or
+registry from the manager. Only the recorder constructs records and writes logs.
+flush() uses create_file for the creation record without first querying a missing
+file's size. Later appends capture file_size, retain a recovery_offset after failure,
+and truncate that unconfirmed tail before retry. Creation failures attempt partial-file
+cleanup, but filename collisions are never overwritten or removed. Events are marked
+saved only after each synced Storage write returns successfully.
 
-`/resume <id-or-name>` is `restore_runtime`'s first caller. `SessionRegistry.find`
-(`registry.py`) resolves the query: an exact ID match wins outright and is returned alone
-even when it's ambiguous (a colliding ID marks both copies `damaged`, so that ambiguity
-surfaces the same way a multi-name match does); otherwise every entry whose name contains
-the query case-insensitively. Zero matches is an error, more than one is reported as a
-listing rather than guessed at. A single match resumes across directories: `ResumeCommand`
-calls `restore_runtime` for the session's history/configuration, then unconditionally calls
-`App.set_working_directory` with the directory `restore_runtime` returns (the session's own,
-or the launch directory as a fallback when the saved one no longer exists on disk) — even
-when it's already the current directory, so nothing downstream has to special-case a no-op
-move. `set_working_directory` mirrors that move to the process via `os.chdir`, same as
-`/cd`. `ResumeCommand` then clears and repopulates
-the log (`App.populate_log`, factored out of `on_mount` for this reuse), and refreshes the
-toolbar's model/effort display, returning `None` on success — the repopulated log is the
-confirmation, the same way `/clear`'s effect is only ever seen, never announced in-band.
+SessionChecksum is an instance helper using the supplied StorageManager for byte
+iteration and sidecar text I/O. Chunk size belongs to Storage. It closes the byte
+iterator and keeps the same SHA-256 hexadecimal sidecar format. A clean flush refreshes
+the checksum before its completion callback updates registry metadata. Checksum errors
+propagate as exceptions; save notices are not recursively recorded.
 
-`/fork` (`commands/fork.py`) is `create()`'s second caller after plain session creation:
-`create()` gained `explicit_name`/`forked_from` parameters so it stays the one place a session's
-identity and header are built, but it only builds an empty session — `ForkCommand` itself decides
-what a fork carries over, the same way `ClearCommand` (not `discard_and_create`) decides to reset
-the agent and UI. `ForkCommand` calls `create()` with the source session's `working_directory`, a
-deep-copied `configuration`, its `explicit_name` and `forked_from=source.id`, then copies every
-event but the header from `source.events` onto the new session and its `file_states`, and flushes
-once through `session_manager.session_recorder`. The new header's `forked_from` is `None` on every
-non-forked session (`SessionValidator.read` reads it directly off the header, bypassing
-`_state_from_record` since it isn't part of a `state_changed` snapshot). Unlike `/clear`, nothing
-in memory is discarded — agent history and the `ToolSession` guard survive untouched, since
-forking duplicates the conversation's persisted identity rather than
-starting a new one. Unlike `/resume`, there is no `clear_log`/`populate_log`/toolbar refresh,
-since nothing rendered changes. `ForkCommand` is in `SESSION_DISCARDING_COMMANDS` for the
-same reason as the others: it too replaces `session_manager.current`.
+SessionRegistry rebuilds its private entries deterministically from logs, calling
+create_directory for side effects before find_files. Exact IDs win over case-insensitive name
+substrings; all matches are returned. Duplicate IDs remain listed as damaged and cannot
+be selected. SessionScan is the validator's temporary metadata/status result;
+SessionRegistryEntry adds filename identity and log path for searching.
 
-A named source that is not itself already a fork (`forked_from is None`) is renamed to
-`{base_name}:main` before the switch, so its lineage stays visible; the new child is always
-named `{base_name}:fork_<YYYYMMDDHHMMSS>`. `base_name` strips any trailing `:main` or
-`:fork_<14 digits>` off the source's current name first, so re-forking a fork chains off the
-original name instead of nesting suffixes, and `SessionRegistry.find`'s existing substring
-match on `entry.name` already resolves a query for the shared base to both sessions — no
-change needed there. An unnamed source is untouched, and the confirmation keeps using ids
-instead of names, exactly as before this convention existed. The rename, when it happens, is
-persisted via the ordinary `session_recorder.state_changed()` while `source` is still current
-— a named session is always already `created_on_disk` by construction (naming only ever
-happens through `/rename`, which flushes immediately, or through a previous fork, which
-flushes its child right away too), so this is never a session's first write. The events
-copied onto the fork are snapshotted **before** that rename, so the rename's own
-`state_changed` record stays source-only and never shows up in the fork's replayed history.
-The confirmation itself is recorded into both logs: the executor's generic post-command write
-puts it into the fork (current by the time the executor gets to it), and `ForkCommand` puts
-the same text into `source` directly via `session_recorder.message_into` (see **Sessions**
-above), under the same `if source.created_on_disk:` guard that already decides whether the
-fork gets a log at all.
+Scanning reads all JSONL lines to locate the last state record, validates that state,
+and compares the checksum; it is not a header-only operation. Full loading validates
+every record, aware timestamps, absolute stored paths, configuration and filename ID.
+Invalid JSON/schema prevents selection. A successful full read refreshes the checksum,
+including missing or stale sidecars, then selects the session. All unmatched
+model-history tool calls receive the existing synthetic ToolErrorMessage; no tool is
+executed. Repair records are queued together before flushing. load() returns detached
+state and a possible repair-save notice; validation/checksum failures remain exceptions.
 
-Session events are kept in memory with a runtime-only `saved` flag. Failed writes leave events
-unsaved and remember the starting byte offset; a later save truncates the unconfirmed tail and
-retries it. If the process exits or `/clear` discards the session first, a partial JSONL line
-remains and the next scan marks that session `damaged`, with a `damage_reason`; damaged entries
-remain discoverable but cannot be restored. Successful Read/Edit/Write results record canonical
-path/mtime state so a resumed session restores its read-first guard only for unchanged files.
+fork() now owns session-only work previously performed by ForkCommand. It captures
+source events before a source-only rename, copies records except the old header, copies
+configuration/file states, and creates a new header with forked_from=source.id.
+Named sources preserve the :main/:fork_<timestamp> convention; unnamed sessions remain
+unnamed. A child state record follows copied state snapshots so their old names cannot
+replace its fork name on reload. Saved sources receive the same display-only confirmation
+as the child, exactly once per log; unused sources force neither log to be created.
+fork() returns detached child state, the AssistantMessage confirmation and log-save
+notices. The future caller displays that Message without saving it again. Failed saved
+source writes remain referenced for manager.flush() retries. Cross-log rollback is not
+promised.
+
+**Runtime and caller migration remain deferred.** Sessions no longer imports live Agent,
+SettingsManager, ToolSession or UI services; it never applies settings, resets Core
+history/guards, checks restored file freshness, picks a directory fallback, or changes
+the process directory. Application will apply returned data and request corrected state
+through update_state(). There are no current/registry/session_recorder properties,
+restore_runtime/discard_and_create/restore_file_states helpers, or record_stream wrapper.
+Existing startup, UI, executor and commands still use those removed APIs and the old
+sessions/session.py import. They are intentionally not adapted in this step. No
+compatibility wrappers were added. `tests/test_session_creation.py` checks that normal
+sessions use the current process working directory.
 
 ## Conventions
 
@@ -803,6 +676,11 @@ path/mtime state so a resumed session restores its read-first guard only for unc
 - **Settings internals**: double-leading underscores for private fields and methods;
   shared constants belong in `settings/constants.py`; validator-only rules are private
   class fields. Only SettingsManager constructs Settings.
+- **Sessions internals**: double-leading underscores for private fields and methods;
+  grouped data types live in `sessions/base.py`. External callers use SessionManager;
+  `create()` returns the managed session, while state and search results are detached.
+  Storage owns persistent file I/O; Application owns runtime
+  mutation. Partial update keys are validated before any managed state changes.
 - **Storage internals**: double-leading underscores for private fields and methods;
   constants belong in `storage/constants.py`. Callers own paths and serialization.
 - **New provider / tool / command**: follow the existing seams — subclass the relevant
@@ -838,10 +716,10 @@ Only `pytest` is available — no `pytest-mock`, `pytest-asyncio` or coverage pl
 - **Never let a test reach the real home directory.** See the table under *Runtime
   working directory*. When tests are restored, rebuild the isolation fixtures. A test
   constructing `StorageManager` must repoint `storage.manager.ARANCIO_DEFAULT_DIR`;
-  `SessionManager` must receive `root=tmp_path`, and generic directory move/link calls
-  must also use explicit temporary source and target paths.
-- **`shared_session` is a process-wide singleton.** An autouse fixture clears it around
-  every test; a test asserting on it in isolation should inject its own `ToolSession()`.
+  tests must change the process working directory to a temporary directory when creating
+  sessions, and generic directory move/link calls must use temporary paths.
+- **File-read state**: construct an explicit ToolSession for Core. Sessions receives
+  copied snapshots and returns saved data; it never receives or clears the live guard.
 - **Docstrings are enforced on `tests/` too.** A one-line docstring is enough for a test
   function — a fixture parameter needs no `Args:` entry. Two `DOC` rules bite: `DOC501`
   wants a `Raises:` for a literal `raise ValueError(...)`, while `DOC502` **rejects** one

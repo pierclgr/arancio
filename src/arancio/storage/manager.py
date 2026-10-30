@@ -41,7 +41,7 @@ class StorageManager:
         """
         return self.__root
 
-    def make_dir(self, path: str | Path) -> None:
+    def create_directory(self, path: str | Path) -> None:
         """Create a directory and its missing parents.
 
         Args:
@@ -104,7 +104,7 @@ class StorageManager:
                     return
                 yield chunk
 
-    def file_size(self, path: str | Path) -> int:
+    def get_file_size(self, path: str | Path) -> int:
         """Return the current byte length of a file.
 
         Args:
@@ -123,7 +123,7 @@ class StorageManager:
             line: text without a trailing newline.
         """
         resolved_path: Path = self.__resolve_path(path)
-        self.make_dir(resolved_path.parent)
+        self.create_directory(resolved_path.parent)
         with resolved_path.open("ab") as file:
             file.write(line.encode("utf-8") + b"\n")
             file.flush()
@@ -137,7 +137,7 @@ class StorageManager:
             line: optional text without a trailing newline.
         """
         resolved_path: Path = self.__resolve_path(path)
-        self.make_dir(resolved_path.parent)
+        self.create_directory(resolved_path.parent)
         with resolved_path.open("xb") as file:
             if line is not None:
                 file.write(line.encode("utf-8") + b"\n")
@@ -172,7 +172,7 @@ class StorageManager:
             content: the complete UTF-8 text content to write.
         """
         resolved_path: Path = self.__resolve_path(path)
-        self.make_dir(resolved_path.parent)
+        self.create_directory(resolved_path.parent)
         resolved_path.write_text(content, encoding="utf-8")
 
     def move_directory(self, source: str | Path, target: str | Path) -> None:
@@ -188,7 +188,7 @@ class StorageManager:
         source_path: Path = self.__resolve_path(source)
         target_path: Path = self.__resolve_path(target)
         self.__validate_directory(source_path)
-        self.make_dir(target_path)
+        self.create_directory(target_path)
 
         for entry in source_path.iterdir():
             shutil.move(str(entry), str(target_path / entry.name))
@@ -212,7 +212,7 @@ class StorageManager:
         if source_path.is_symlink() and source_path.resolve() == target_path.resolve():
             return
 
-        self.make_dir(source_path.parent)
+        self.create_directory(source_path.parent)
         source_path.symlink_to(target_path, target_is_directory=True)
 
     def __resolve_path(self, path: str | Path) -> Path:

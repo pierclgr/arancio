@@ -29,7 +29,7 @@ class ToolManager:
 
     The catalog maps each tool name to its :class:`ToolDefinition`. The built-in
     tools register at construction; plugin tools register through
-    :meth:`register_tool_definition`. :meth:`refresh_tools` builds instances only for
+    :meth:`register_definition`. :meth:`refresh` builds instances only for
     the allowed categories, so a tool whose category is not granted is never
     instantiated.
     Permission checks stay outside this class: the agent calls :meth:`run_tool_call`
@@ -58,7 +58,7 @@ class ToolManager:
             hook_manager: the hook manager injected into every tool this
                 manager builds.
             tool_session: the file-read state injected into every tool this manager
-                builds; the same instance survives every :meth:`refresh_tools`.
+                builds; the same instance survives every :meth:`refresh`.
         """
         self._definitions: dict[str, ToolDefinition] = {}
         self._tools: dict[str, Tool] = {}
@@ -88,7 +88,7 @@ class ToolManager:
             ),
         ]
         for definition in builtin_definitions:
-            self.register_tool_definition(definition)
+            self.register_definition(definition)
 
     def __repr__(self) -> str:
         """Return a developer-friendly representation of the active tools.
@@ -98,10 +98,10 @@ class ToolManager:
         """
         return f"{type(self).__name__}(tools={list(self._tools.values())!r})"
 
-    def register_tool_definition(self, definition: ToolDefinition) -> None:
+    def register_definition(self, definition: ToolDefinition) -> None:
         """Add a tool definition to the catalog.
 
-        The tool is built on the next :meth:`refresh_tools` that allows its category.
+        The tool is built on the next :meth:`refresh` that allows its category.
 
         Args:
             definition: the definition to add.
@@ -114,7 +114,7 @@ class ToolManager:
             raise ValueError(f"Tool {definition.name!r} is already registered.")
         self._definitions[definition.name] = definition
 
-    def get_tool_category(self, name: str) -> PermissionCategory | None:
+    def get_category(self, name: str) -> PermissionCategory | None:
         """Return the permission category of a registered tool.
 
         Args:
@@ -127,7 +127,7 @@ class ToolManager:
         definition = self._definitions.get(name)
         return definition.category if definition is not None else None
 
-    def refresh_tools(self, categories: Collection[PermissionCategory]) -> None:
+    def refresh(self, categories: Collection[PermissionCategory]) -> None:
         """Rebuild the active tools for the allowed categories.
 
         Every allowed tool gets a new instance. The injected session is kept,

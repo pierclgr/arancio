@@ -1,41 +1,29 @@
-"""In-memory discovery index for persisted sessions.
+"""In-memory discovery index rebuilt from saved session logs.
 
-The scan stays cheap: the validator inspects only a log's header and its checksum, so no
-session is fully parsed until it is actually loaded.
+Scanning reads every JSONL record to locate the final state, validates that state, and
+checks the log checksum. Full record validation is deferred until loading.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
+
+from arancio.sessions.base import Session, SessionRegistryEntry
 
 if TYPE_CHECKING:
-    from arancio.sessions.session import SessionConfiguration
     from arancio.sessions.validator import SessionValidator
     from arancio.storage.manager import StorageManager
 
 
-@dataclass
-class SessionRegistryEntry:
-    """One discovered session file and its restoration status."""
-
-    id: str
-    working_directory: Path | None
-    configuration: SessionConfiguration | None
-    log_path: Path
-    status: Literal["healthy", "unverified", "damaged"]
-    explicit_name: str | None = None
-    damage_reason: str | None = None
-
-    @property
-    def name(self) -> str:
-        """Return the explicit name, or the ID when no name is set."""
-        return self.id if self.explicit_name is None else self.explicit_name
-
-
 class SessionRegistry:
-    """Index discovered session files without persisting a second registry file."""
+    """Index saved sessions without persisting a separate registry.
+
+    Attributes:
+        __storage_manager: the service discovering session logs.
+        __validator: the scanner recovering metadata and integrity status.
+        __entries: the owned entries in deterministic discovery order.
+    """
 
     def __init__(
         self,
@@ -43,74 +31,69 @@ class SessionRegistry:
         sessions_dir: Path,
         validator: SessionValidator,
     ) -> None:
-        """Initialize the registry by discovering every session file.
+        """Discover the supplied session directory.
 
         Args:
-            storage_manager: the file-only storage service scanning the log files.
-            sessions_dir: the directory tree containing the session logs.
-            validator: checks each discovered log's header and checksum.
+            storage_manager: the generic file I/O service.
+            sessions_dir: the explicit directory containing session logs.
+            validator: the scanner used for each discovered file.
         """
-        self._storage_manager = storage_manager
-        self._validator = validator
-        self.entries: list[SessionRegistryEntry] = []
+        self.__storage_manager = storage_manager
+        self.__validator = validator
+        self.__entries: list[SessionRegistryEntry] = []
         self.build(sessions_dir)
 
-    def build(self, sessions_dir: Path) -> SessionRegistry:
-        """Discover every session file and populate the index.
-
-        Damaged files are listed rather than hidden, and an ID that maps to more
-        than one file damages both copies because neither can be trusted to be
-        the real chat.
+    def build(self, sessions_dir: Path) -> None:
+        """Replace the index with a deterministic scan, marking duplicate IDs.
 
         Args:
-            sessions_dir: the directory tree containing the session logs.
-
-        Returns:
-            This registry, holding every discovered entry.
+            sessions_dir: the directory tree containing session logs.
         """
-        entries = [
-            self._entry_for_path(path)
-            for path in self._storage_manager.find_files(
-                self._storage_manager.make_dir(sessions_dir), "*.jsonl"
-            )
-        ]
-        by_id: dict[str, list[SessionRegistryEntry]] = {}
-        for entry in entries:
-            by_id.setdefault(entry.id, []).append(entry)
-        for duplicates in by_id.values():
-            if len(duplicates) < 2:
+        self.__storage_manager.create_directory(sessions_dir)
+        entries: list[SessionRegistryEntry] = []
+        first_by_id: dict[str, SessionRegistryEntry] = {}
+        duplicate_ids: set[str] = set()
+        # scan each log and compare its id with the first entry seen
+        for path in self.__storage_manager.find_files(sessions_dir, "*.jsonl"):
+            entry = self.__create_entry(path)
+            entries.append(entry)
+            first = first_by_id.get(entry.id)
+            if first is None:
+                first_by_id[entry.id] = entry
                 continue
-            for entry in duplicates:
-                other = next(item for item in duplicates if item is not entry)
-                entry.status = "damaged"
-                entry.damage_reason = f"Duplicate session ID found at {other.log_path}"
-        self.entries = entries
-        return self
+            # keep the first entry's reason pointing to the first duplicate
+            if entry.id not in duplicate_ids:
+                first.status = "damaged"
+                first.damage_reason = f"Duplicate session ID found at {entry.log_path}"
+                duplicate_ids.add(entry.id)
+            entry.status = "damaged"
+            entry.damage_reason = f"Duplicate session ID found at {first.log_path}"
+        self.__entries = entries
 
     def contains(self, session_id: str) -> bool:
-        """Return whether any discovered session uses an ID.
+        """Return whether the index contains an identity.
 
         Args:
-            session_id: the ID to look up.
+            session_id: the identity to look up.
 
         Returns:
-            True when at least one entry has the requested ID.
+            True when at least one discovered entry has this identity.
         """
-        return any(entry.id == session_id for entry in self.entries)
+        return any(entry.id == session_id for entry in self.__entries)
 
     def get(self, session_id: str) -> SessionRegistryEntry:
-        """Return one unambiguous session entry by ID.
+        """Return one unambiguous entry for internal loading.
 
         Args:
-            session_id: the requested session ID.
+            session_id: the requested saved-session identity.
 
         Returns:
-            The matching registry entry.
+            The matching internal registry entry.
 
         Raises:
-            ValueError: when the ID is absent or maps to more than one file.
+            ValueError: when no entry exists or the identity is duplicated.
         """
-        matches = [entry for entry in self.entries if entry.id == session_id]
+        matches = [entry for entry in self.__entries if entry.id == session_id]
         if not matches:
             raise ValueError(f"Session not found: {session_id}")
         if len(matches) > 1:
@@ -118,39 +101,60 @@ class SessionRegistry:
         return matches[0]
 
     def find(self, query: str) -> list[SessionRegistryEntry]:
-        """Resolve a ``/resume`` query: an exact ID match, else a name substring.
+        """Find exact identity matches, otherwise case-insensitive name matches.
 
-        An exact ID match wins outright and is returned alone, even when more
-        than one file shares that ID (a duplicate marks both entries
-        ``damaged``, see :meth:`build`) — that ambiguity surfaces to the
-        caller the same way a multi-name match does, rather than needing
-        separate handling. Otherwise every entry whose name contains ``query``
-        case-insensitively is returned, healthy or not: an unloadable match is
-        left to fail clearly when actually loaded, not filtered out here.
+        Duplicate exact IDs remain separate results. The manager copies entries
+        before returning them outside Sessions.
 
         Args:
-            query: a session ID or a fragment of its name.
+            query: an identity or name substring.
 
         Returns:
-            The exact ID match alone when one exists, else every name
-            substring match, in registry order. Empty when nothing matches.
+            All matches in registry order, including damaged entries.
         """
-        exact = [entry for entry in self.entries if entry.id == query]
+        exact = [entry for entry in self.__entries if entry.id == query]
         if exact:
             return exact
         needle = query.lower()
-        return [entry for entry in self.entries if needle in entry.name.lower()]
+        return [entry for entry in self.__entries if needle in entry.name.lower()]
 
-    def _entry_for_path(self, path: Path) -> SessionRegistryEntry:
-        """Build one registry entry from a session file's scan result.
+    def update(self, session: Session) -> None:
+        """Publish independent metadata after a durable write or valid load.
 
         Args:
-            path: the discovered JSONL session path.
+            session: the managed session whose metadata is now durable.
+        """
+        if not session.created_on_disk:
+            return
+        for entry in self.__entries:
+            if entry.log_path == session.path:
+                entry.working_directory = session.working_directory
+                entry.configuration = session.configuration.copy()
+                entry.explicit_name = session.explicit_name
+                entry.status = "healthy"
+                entry.damage_reason = None
+                return
+        self.__entries.append(
+            SessionRegistryEntry(
+                id=session.id,
+                working_directory=session.working_directory,
+                configuration=session.configuration.copy(),
+                log_path=session.path,
+                status="healthy",
+                explicit_name=session.explicit_name,
+            )
+        )
+
+    def __create_entry(self, path: Path) -> SessionRegistryEntry:
+        """Build an entry from the filename and validator's scan result.
+
+        Args:
+            path: the discovered JSONL path.
 
         Returns:
-            The entry holding the log's metadata and checksum-based status.
+            The recovered metadata and discovery status.
         """
-        scan = self._validator.scan(path)
+        scan = self.__validator.scan(path)
         return SessionRegistryEntry(
             id=path.stem,
             explicit_name=scan.explicit_name,

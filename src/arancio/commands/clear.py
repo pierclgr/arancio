@@ -36,7 +36,7 @@ class ClearCommand(Command):
             settings_manager: the active settings manager.
             session_manager: the active session manager.
         """
-        settings_manager.reset_to_global_settings()
+        settings_manager.reset_global()
         session_manager.discard_and_create(
             working_directory=application.working_directory,
             configuration=SessionConfiguration.from_settings(settings_manager.settings),
