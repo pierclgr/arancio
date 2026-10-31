@@ -1,51 +1,31 @@
-"""Change working directory command."""
+"""Input adapter for the cd command."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from arancio.commands.state_change import StateChangeCommand
-from arancio.core.messages.base import ErrorMessage
+from arancio.commands.base import Command
 
 if TYPE_CHECKING:
-    from arancio.sessions.manager import SessionManager
-    from arancio.ui.app import App
+    from arancio.application.base import Application
+    from arancio.core.messages.base import ErrorMessage
 
 
-class CdCommand(StateChangeCommand):
-    """Command that moves the working directory."""
+class CdCommand(Command):
+    """Change the working directory."""
 
     name = "cd"
     description = "Change the working directory."
 
     @classmethod
-    def execute(
-        cls, path: str, application: App, session_manager: SessionManager
-    ) -> str | ErrorMessage:
-        """Move the working directory to ``path`` and record it on the session.
-
-        Resolution and validation are left to
-        :meth:`~arancio.ui.app.App.set_working_directory`, which raises
-        ``ValueError`` when the target does not exist or is not a directory;
-        the executor turns that into an error message rather than crashing.
+    def execute(cls, path: str, application: Application) -> str | ErrorMessage:
+        """Delegate the parsed invocation to Application.
 
         Args:
-            path: the target directory, bound to the prompt's first word. A
-                relative path is resolved against the working directory
-                currently set; an absolute path is taken as-is. ``~`` is
-                expanded.
-            application: the running app whose working directory is moved.
-            session_manager: the active session manager, whose current
-                session's working directory is updated to match and whose
-                recorder persists the change.
+            path: the parsed command argument.
+            application: the operation facade supplied by the executor.
 
         Returns:
-            Confirmation text naming the new working directory, or the
-            persistence error notice when saving the change failed.
+            The Application operation's confirmation, state or notices.
         """
-        application.set_working_directory(path)
-        session = session_manager.current
-        session.working_directory = application.working_directory
-        return cls._persist_state_change(
-            session_manager, f"Working directory set to {application.working_directory}"
-        )
+        return application.change_directory(path)

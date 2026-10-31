@@ -1,4 +1,4 @@
-"""Exit command."""
+"""Input adapter for the exit command."""
 
 from __future__ import annotations
 
@@ -7,21 +7,20 @@ from typing import TYPE_CHECKING
 from arancio.commands.base import Command
 
 if TYPE_CHECKING:
-    from arancio.ui.app import App
+    from arancio.application.base import Application
 
 
 class ExitCommand(Command):
-    """Command that quits the application."""
+    """Quit the application."""
 
     name = "exit"
     description = "Quit the application."
 
     @classmethod
-    def execute(cls, application: App, **kwargs) -> None:
-        """Quit the application.
+    def execute(cls, application: Application) -> None:
+        """Delegate the parsed invocation to Application.
 
         Args:
-            application: the running app to quit.
-            **kwargs: absorbs any argument this command does not need.
+            application: the operation facade supplied by the executor.
         """
         application.exit()

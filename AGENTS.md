@@ -90,19 +90,19 @@ Layered and provider-agnostic. The recurring pattern is a `base.py` abstract cla
 provider file (e.g. `litellm.py`); adding a provider means a new `Client` subclass
 with its own builder/parser trio, not touching the core loop.
 
-**Wiring** (`ui/__main__.py:main`) — the existing entry point is legacy caller code
-awaiting its architecture migration. It still calls Storage's removed login helper,
-supplies SettingsManager's removed client/agent arguments and expects `load()` to
-apply settings to Core. Commands still mutate returned settings and call the removed
-`apply()`. They also use Sessions' removed live-state/recorder APIs and old data-module
-imports. These callers remain deferred, so the full app is not wired yet.
+**Wiring** — Application.build(controller) in application/base.py constructs
+the backend graph. It uses the current StorageManager(), prepares explicit
+LiteLLM login paths, creates shared HookManager/ToolSession/clients/ToolManager, loads
+plugins, loads Settings, then constructs PermissionManager, Agent, Sessions, direct tools
+and Application. Plugins load before category/grant snapshots. Both clients receive
+controller.show_login as their one-way login callback; summary thinking stays disabled.
 
-The next startup migration must discover plugins before constructing SettingsManager
-and supply its supported provider names. Loading returns a detached Settings
-snapshot and notices; Application will apply model/thinking values, Agent loop limits
-and permissions to Core. Build the initial session after loading so its header uses the
-selected values. Startup notices are displayed without entering history or creating a
-session log. Application will own later apply/save/session coordination.
+Application and ApplicationStatus live in application/base.py. Application applies the
+loaded settings before execution and owns later apply/save/session coordination.
+UIController in ui/controllers/base.py is an abstract contract only. The Textual App,
+legacy ui/controller.py UIController, widgets
+and ui/__main__.py are unchanged and still use removed APIs/modules. The old entry point
+does not call Application.build yet; frontend integration remains deferred.
 
 **Messages** (`core/messages/`) — the lingua franca between clients, agent and UI. Every
 message carries `content` (fed to the model) and `display_text` (shown in the UI), plus
@@ -249,40 +249,30 @@ sibling `core` package's `__init__.py` are empty; a caller imports `Hook` from
 `core.hooks.base` and `HookManager` from `core.hooks.manager` directly, the same as any
 other two-file `base.py`/`manager.py` package (`core/permissions/`, `core/controllers/`).
 
-Threading follows the same explicit-constructor-injection pattern as
-`tool_session`, since two callers must be able to hold independent hook managers, stored as
-`self._hook_manager`. Every constructor that takes `hook_manager` (`Agent`,
-`PermissionManager`, `ToolManager`, `Tool`/`FetchWebTool`, `ActionExecutor`) requires
-it, with no `None` default: production code (`ui/__main__.py`) never has a reason to omit
-it for any of them, so requiring it catches a caller that forgot to thread the shared
-instance through, rather than silently falling back to a private no-op manager.
-`ui/__main__.py:main` builds **one** `HookManager()` alongside `controller` and passes the
-same instance into `ToolManager`, `PermissionManager`, `Agent` and `App` (which forwards it
-to the `ActionExecutor` it builds and keeps it for application lifecycle hooks);
-`ToolManager.create_tools` re-threads it into every tool
-it builds, so one handler registered anywhere in that graph sees every dispatch from every
-component — including the `!`/`!!` shell path and `@mention` reads, which run through
-`ActionExecutor`'s own `ReadFileTool`/`ShellCommandTool` instances (built once in its
-`__init__`, not as module-import-time class attributes, precisely so the shared instance can
-reach them).
-`Client`/`LiteLLMClient` never receive one: `before_model_request` /
-`after_model_response` / the model-sourced `error` are dispatched by `Agent.__call__`
-around its calls to `self._client.build_request`/`send_request`, not by the client itself —
-placing them inside `LiteLLMClient` would never fire for `ScriptedClient`, which overrides
-`send_request` outright and never calls into `LiteLLMClient` code. The same reasoning means
-`FetchWebTool._call`'s own internal summarization request (it calls
-`self._client.build_request`/`send_request` directly, outside any `Agent` loop) is
-invisible to those hooks too — only the `before_tool_call`/`after_tool_call`/`error`
-wrapped around the whole `FetchWebTool.call` see it.
+Startup shares one HookManager and one ToolSession across the backend. ToolManager
+receives both and the summary client; PluginManager receives HookManager and ToolManager,
+then registers hooks/tool definitions before Settings and PermissionManager are built.
+Agent receives Client, PermissionManager, ToolManager and HookManager. Application owns
+STARTUP/SHUTDOWN dispatch rather than its frontend.
+
+ActionExecutor receives direct ReadFileTool/ShellCommandTool instances built by Bootstrap
+with the same HookManager and ToolSession. Explicit mentions and !/!! remain available
+even when their catalog category is not instantiated. Permission changes rebuild catalog
+tools without resetting the shared read guard.
+
+Clients receive no HookManager or Core Controller. Agent dispatches before_model_request,
+after_model_response and model/agent errors around its client calls. FetchWebTool's direct
+summary request is outside the Agent model hooks, while its login callback still reaches
+the supplied abstract UIController.show_login. Core imports no Application class.
 
 Dispatch sites, by hook:
-- `App.on_mount`: `startup` (no event keys), once the app's log is mounted and
-  before any user prompt. The shared context already contains the core objects.
+- `Application.start`: `startup` (no event keys), once when the caller requests
+  startup output, before any user prompt. The shared context already contains the core objects.
   Returned messages join the settings and plugin-load startup messages in the UI;
   they are not added to agent history or saved to a session.
-- `App.on_unmount`: `shutdown` (no event keys), once during final application
-  teardown before exit. It runs for `/exit`, `/quit`, Ctrl+C and direct app exit.
-  This hook is for cleanup; the widgets have been unmounted, so returned messages
+- `Application.shutdown`: `shutdown` (no event keys), once after cancellation
+  and a safe execution-closure request. The future frontend must call it during final
+  teardown, including `/exit`, `/quit` and Ctrl+C. Returned cleanup messages
   are not displayed or saved. Application hooks do not create a session log.
 - `Agent.__call__`: `agent_start` (`message`) — first statement, before the message is
   even recorded to history, and before the turn loop's own error handling exists: a
@@ -428,77 +418,88 @@ schema, without changing the class's raw schema. `PluginToolResultParser` keeps
 JSON-compatible dictionaries as raw content and displays readable JSON; other results
 and exceptions retain base behavior.
 
-**Controller port** (`core/controllers/`) — the core↔UI seam (ports & adapters). Core
-sends a `ControllerRequest` (e.g. `PermissionRequest`) and gets a
-`ControllerResponse` (e.g. `PermissionResponse` carrying a `Decision`), dispatched by
-`isinstance`. `ui/controller.py:UIController` is the Textual adapter: it blocks the
-**worker** thread on a `threading.Event` until the user answers a `QuestionScreen`, never
-the UI thread. Its `app` is genuinely `None` until wiring finishes — the app needs the
-agent, which needs the permission manager, which needs the controller — so every dispatch
-goes through `require_app()`, which raises rather than letting each call site assume the
-attachment happened. `LiteLLMClient` **requires** its controller: both production clients
-get one, and the login notice has nowhere to go without it. `ChatGPTLoginRequest` is
-one-way: the frontend shows the login instructions while the worker waits for the
-provider's authorization polling. Plugin failures use the normal message stream.
+**Frontend contract** (ui/controllers/base.py) — abstract ask, cancel_questions,
+show_login, reset_conversation and exit methods, without widgets or a concrete adapter.
+Core yields PermissionRequest and accepts a matching PermissionResponse from Application's
+driver. yes allows, no/None denies, and other text denies with its note. Every response
+carries the request ID. LoginNotice reaches show_login directly through client callbacks
+and is never recorded. Cancellation releases a pending ask with None.
+
+The legacy ui/controller.py still imports Core's removed controller modules. It will
+implement this Application contract in the frontend step; no temporary Core adapter or
+no-op frontend was added.
 
 
-**UI** (`ui/app.py`) — Textual app. A worker thread runs the agent/executor; each message
+**UI** (`ui/app.py`) — legacy Textual frontend awaiting Application integration.
+Its rendering remains unchanged. A worker thread runs the old agent/executor path; each message
 is rendered on the main thread via `call_from_thread`. Assistant and reasoning chunks
 stream into one `MarkdownStream` widget per span, and the finalized echo of an
 already-streamed span is suppressed so text is not shown twice.
 
-**Prompt & commands** (`prompt/`, `commands/`) — legacy callers pending Application
-migration; their recorder/runtime calls described below no longer match Sessions.
-`PromptManager.resolve_prompt` classifies
-input: `!<shell command>`/`!!<shell command>` → `ShellCommandAction`,
-`/<name> <args>` → `CommandAction`, anything else → `PromptAction`. Every action carries
-the exact text the user typed as a **required** `raw_input`; `ui/app.py` rejects empty
-input before building one, so nothing downstream has to reconstruct an approximation of
-the typed line. Once either shell
-pattern matches, the entire remainder is passed unchanged to `ShellCommandTool`; slash
-commands and `@` mentions inside it are not parsed. Both forms yield the same synthetic
-tool call/result pair without consulting EXECUTE permissions or requiring a configured
-model. `!` appends both messages to agent history for the next model prompt, while `!!`
-appends neither. The stored `!` pair is preceded by a history-only `UserMessage` stating
-`User explicitly ran the following command:`, preventing the model from treating the synthetic tool
-call as its own request.
-`ActionExecutor` runs a command locally (looked up in `commands/registry.py:COMMAND_REGISTRY`)
-or sends the prompt to the agent; both yield the same `Message` stream so the UI renders
-them identically. **The executor holds no recording logic of its own**: it has no `record_*`
-or wrapper methods, and every write is a direct
-`self._session_manager.session_recorder.<method>(...)` call — the recorder is reached through the
-manager at the point of use, never cached. `_execute_prompt` records the user message it
-just built, then wraps `agent(...)` in `session_recorder.record_stream` and yields the
-whole stream. What to skip lives in `SessionRecorder.message`, and every recorder write
-returns an `ErrorMessage | None` rather than an error string, so the executor has nothing
-left to wrap. The executor has no session-effect mapping of its own: which command changes
-what session state is each command's own knowledge, not the executor's (see **Sessions**
-below for `/cd`, `/provider`, `/model`, `/effort` and `/permissions`). Two asymmetries: the
-initial user message is recorded before the loop rather than from it, since it must replay
-on restore but `ui/app.py:145` already mounted the typed text, so yielding it would render
-it twice; and the `!` attribution line is recorded with `visible=False`, the one write that
-asks to stay out of the replayed log while staying in model history.
+**Application** (application/) — the public coordinator above Core, Settings and
+Sessions. It holds those services privately and exposes operations, Messages and immutable
+ApplicationStatus(model_id, thinking_effort, working_directory). status returns None for
+model_id until provider/model are configured. The constructor applies loaded settings and
+builds its executor from injected direct tools; it constructs no frontend.
 
-A command's plain-string result is wrapped into an `AssistantMessage` by
-the executor. A slash command subclasses `Command`, sets `name`/`description`,
-implements a typed `execute(...)`; `run` receives the raw prompt words plus the
-injectable objects, binds the words in order to `execute`'s parameters and coerces them to
-their annotations — the executor never reads `execute`'s signature. Words beyond the
-declared parameters are dropped, unless the command sets `joins_arguments = True`
-(default `False`): then its last parameter receives every remaining word joined with a
-space, which is how `/rename my new name` gets the whole name and `/resume my new name`
-searches for all of it. A command that changes the active session's *saved* state subclasses
-`StateChangeCommand` (`commands/state_change.py`) instead — an abstract layer between the
-two that carries the two helpers such a command needs (see **Sessions** below); the
-executor and the registry only ever type on `Command`, so nothing else changes.
-A parameter named after one of
-`prompt/actions/constants.py:INJECTABLE_COMMAND_PARAMETERS` (currently `application`,
-`settings_manager`, `agent`, `session_manager`) is supplied by the executor itself instead of being bound to a prompt
-word — this is how a command performs an action against the running app or mutates
-settings (e.g. `/model`), rather than the app doing it on the command's behalf. Both
-command errors (`_execute_command`) and an unconfigured model on a plain prompt
-(`_execute_prompt`, via `Settings.model_id`) are caught by the executor and turned into an
-`ErrorMessage` rather than raising out to the UI.
+update_settings(**changes) handles provider, model_name, thinking_effort and permissions
+in that dependency order, regardless of keyword order. Unknown names are rejected before
+any mutation. Empty updates and empty permission mappings perform no writes. Each field
+uses SettingsManager.set_field, applies the checked snapshot to clients/Agent, saves only
+that field (or supplied permission categories), then records the session configuration.
+A later failure retains earlier completed changes; there is no cross-layer transaction.
+Permissions merge into existing grants; permission_levels() is the copied read-only view.
+Existing single-field/all-category text stays the same and mixed updates use Markdown
+line breaks. Core configuration uses Agent.set, max_turns/max_retries, retry_delay and
+retry_delay_multiplier, preserving history and the shared read guard.
+
+Application owns directory resolution, validation and os.chdir. It updates runtime state
+only after a successful directory move, then records that value. rename changes only
+explicit_name. new_session resets active Settings to global defaults, applies them, clears
+history/guard, creates an unsaved Session, ignores its live return value and requests an
+empty display. resume searches through SessionManager, loads and repairs, restores the
+four conversation settings without saving globals, restores model history and only
+existing/unchanged file mtimes, applies the saved directory or pre-resume fallback and
+requests visible replay. If repair checksum writing fails after selection, it completes
+runtime restoration and returns the save notice. Fork passes through Sessions' exact
+(state, confirmation, notices) tuple and does not clear history, guard or settings.
+
+start returns plugin/settings notices followed by STARTUP hook messages once; none enter
+history or persistence. shutdown marks closed, releases questions, requests execution
+closure and dispatches SHUTDOWN once. It cannot interrupt blocking work. Only the owner
+thread closes Core; foreign threads set a closure request observed by the driver.
+Mutation while Core is active raises RuntimeError. Consumers stopping submit early must
+close its iterator on the consuming thread. No worker thread or user-facing cancel action
+is added here.
+
+**Prompt & commands** (prompt/, commands/) — PromptManager now returns typed Action data
+directly; ActionFactory and its intermediate keyword dictionary are removed. raw_input
+stays required. Shell prefixes, non-POSIX quotes, joined command arguments, mention
+rewriting, registry aliases, defaults and extra-word behavior are unchanged.
+
+ActionExecutor.execute(text) parses and routes input on the calling thread. It converts
+only parser ValueError to Invalid prompt: ..., records ordinary input/command errors,
+and drives Agent with send(answer) rather than wrapping it in record_stream. It yields
+each Core Message before recording it with a fresh ToolSession snapshot. Save notices
+are shown separately and never sent to Core or recursively persisted. The initial user
+message is recorded before Core because Agent does not yield it. Mentions still run as
+the prelude; ! keeps the hidden attribution and exchange in history, while !! excludes
+them. Both explicit paths bypass permission checks and share the same read guard.
+
+Commands receive only application and delegate to its operations. The injectable-name
+constant lives on Command in commands/base.py, removing the commands-to-prompt import cycle.
+StateChangeCommand and prompt/actions/constants.py are removed. Provider, model, effort
+and permission writes use update_settings. The permission adapter finds names through
+permission_levels; it alone interprets all/null. Commands import no UI or live backend
+managers. HelloWorld and all command names/descriptions/aliases remain unchanged.
+
+SESSION_DISCARDING_COMMANDS still controls source attribution: those command lines are
+recorded before switching, only if the source has a log. Other successful command lines
+are recorded after their operation. String results become in_history=False
+AssistantMessages and are saved once; returned Messages are display-only. Fork tuples
+yield the confirmation and each save notice without saving either again. Unknown or
+malformed input still creates an error record, while a recognized discarding command
+leaves an unused source unwritten.
 
 **Settings & storage** (`settings/`, `storage/`) — SettingsManager is the only Settings
 entry point. Its constructor requires StorageManager and `supported_providers`, without
@@ -511,7 +512,7 @@ permission dictionaries. `set_field(field, value)`, `restore_active` and `reset_
 change active values only and return None. `set_field` accepts any settings field, validates
 before publication and merges permission changes; model selection requires a usable
 model ID, effort changes require a configured model, and provider selection may precede
-model selection. Application will read `settings` afterward and apply it to Core.
+model selection. Application reads `settings` afterward and applies it to Core.
 
 `save(settings)` promotes the supplied snapshot; `save_field(field, category)`
 promotes only the selected field or permission category. Writes happen before publishing
@@ -567,12 +568,11 @@ link resolving to target is a no-op; other occupied sources raise FileExistsErro
 The shared validator rejects symlinks with ValueError, missing paths with
 FileNotFoundError and non-directories with NotADirectoryError before writes.
 
-**Caller migration is deferred.** Startup still references the removed
-`bind_litellm_login_dir` and the old SettingsManager constructor. Commands must move
-from direct mutation and `apply()` to setters, explicit saves and snapshot reads.
-Sessions now returns configuration data without applying it; Application must use
-value-only `restore_active`. SessionRegistry and SessionChecksum now use the current
-Storage API. No compatibility wrappers or tests are added in these steps.
+**Backend caller migration is implemented.** Application now uses Settings' set_field,
+save_field, reset_global and restore_active, plus Sessions' recording and snapshot APIs.
+Bootstrap uses Storage's generic login-directory operations. Only the old UI and its
+entry point still reference removed wiring and backend APIs. No compatibility wrappers
+were added; tests remain deferred in this Application step.
 
 **Sessions** (sessions/) — SessionManager is the only public service. Its constructor
 requires StorageManager and an already-loaded SessionConfiguration. New conversations
@@ -655,15 +655,14 @@ notices. The future caller displays that Message without saving it again. Failed
 source writes remain referenced for manager.flush() retries. Cross-log rollback is not
 promised.
 
-**Runtime and caller migration remain deferred.** Sessions no longer imports live Agent,
+**Runtime coordination now belongs to Application.** Sessions imports no live Agent,
 SettingsManager, ToolSession or UI services; it never applies settings, resets Core
 history/guards, checks restored file freshness, picks a directory fallback, or changes
-the process directory. Application will apply returned data and request corrected state
+the process directory. Application applies returned data and requests corrected state
 through update_state(). There are no current/registry/session_recorder properties,
 restore_runtime/discard_and_create/restore_file_states helpers, or record_stream wrapper.
-Existing startup, UI, executor and commands still use those removed APIs and the old
-sessions/session.py import. They are intentionally not adapted in this step. No
-compatibility wrappers were added. `tests/test_session_creation.py` checks that normal
+Application, executor and commands now use the public manager and base.py data imports.
+Only the legacy UI/startup remain deferred. No compatibility wrappers were added. `tests/test_session_creation.py` checks that normal
 sessions use the current process working directory.
 
 ## Conventions
@@ -673,6 +672,10 @@ sessions use the current process working directory.
 - **Comments**: start lowercase, no trailing period; only comment non-obvious slices.
 - **Files**: `snake_case.py`; Markdown `UPPER_SNAKE_CASE.md`. Source in `src/`, tests in `tests/`.
 - **Exceptions**: prefer built-ins (`ValueError`, `TypeError`, …); do not define custom exception classes.
+- **Application internals**: Application and ApplicationStatus live in application/base.py;
+  private members use double-leading underscores. One update_settings API covers the four
+  conversation fields. Concrete frontends remain outside this layer; commands receive
+  only Application and persistent I/O stays behind the existing manager boundaries.
 - **Settings internals**: double-leading underscores for private fields and methods;
   shared constants belong in `settings/constants.py`; validator-only rules are private
   class fields. Only SettingsManager constructs Settings.
@@ -685,9 +688,7 @@ sessions use the current process working directory.
   constants belong in `storage/constants.py`. Callers own paths and serialization.
 - **New provider / tool / command**: follow the existing seams — subclass the relevant
   `base.py`, and for a tool also add its `harness/tools/<snake_name>/` prompt pair; for a
-  command register it in `commands/registry.py`, and subclass
-  `commands/state_change.py:StateChangeCommand` instead when it changes the session's saved
-  configuration, working directory or name. A command that ends or switches the active
+  command register it in `commands/registry.py` and delegate its effect to Application. A command that ends or switches the active
   session also goes into `commands/registry.py:SESSION_DISCARDING_COMMANDS`.
 - **New plugin**: import `plugin`, `hook` and `tool` from `core/plugins/decorators.py`.
   Mark a plain class with `@plugin(...)` in `plugin.py`; define `@hook(...)` methods,

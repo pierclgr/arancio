@@ -4,36 +4,25 @@ import inspect
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
-from arancio.prompt.actions.constants import INJECTABLE_COMMAND_PARAMETERS
-
 
 class Command(ABC):
-    """Base class for slash commands parsed from the prompt.
+    """Bind typed words and run a command with Application as its only service.
 
-    Subclasses set :attr:`name` and :attr:`description` and implement
-    :meth:`execute` with its own named parameters. A command declares a
-    parameter named ``application``, ``settings_manager`` and/or ``agent`` to
-    have :class:`arancio.prompt.actions.executor.ActionExecutor` supply the
-    running application, the settings manager and/or the agent; a command that
-    needs none of them declares a ``**kwargs`` catch-all to absorb them (and
-    any other argument it doesn't care about) instead of listing them
-    explicitly. The concrete
-    :meth:`run` receives the raw prompt words plus the injectable objects,
-    binds the words to :meth:`execute`'s parameters and coerces them to their
-    types via :meth:`_validate_args` (rejecting a missing mandatory argument or
-    a value that cannot be coerced), then forwards them all to :meth:`execute`.
+    Concrete commands adapt input to Application operations. Defaults, extra-word
+    behavior and joined arguments retain their existing rules. This module has no
+    dependency on prompt routing, UI or live backend managers.
 
     Attributes:
-        name: the command name typed after the leading slash.
-        description: a short natural-language summary of the command.
-        joins_arguments: when true, the prompt words beyond the command's
-            parameters are joined with a space into its last parameter instead
-            of being dropped.
+        name: the registry name typed after the slash.
+        description: the short command description.
+        joins_arguments: whether trailing words form the last prompt argument.
+        INJECTABLE_COMMAND_PARAMETERS: names supplied by the executor.
     """
 
     name: ClassVar[str]
     description: ClassVar[str]
     joins_arguments: ClassVar[bool] = False
+    INJECTABLE_COMMAND_PARAMETERS: ClassVar[frozenset[str]] = frozenset({"application"})
 
     @classmethod
     def run(cls, args: list[str], **kwargs) -> Any:
@@ -41,17 +30,17 @@ class Command(ABC):
 
         Args:
             args: the raw prompt words.
-            **kwargs: the injectable objects (``application``, ``agent``, …),
+            **kwargs: the Application facade,
                 keyed by their parameter names.
 
         Returns:
             Whatever :meth:`execute` returns.
         """
-        arguments = cls._validate_args(args, **kwargs)
+        arguments = cls.__validate_args(args, **kwargs)
         return cls.execute(**arguments)
 
     @classmethod
-    def _validate_args(cls, args: list[str], **kwargs) -> dict[str, Any]:
+    def __validate_args(cls, args: list[str], **kwargs) -> dict[str, Any]:
         """Bind the prompt words to :meth:`execute`'s parameters and coerce them.
 
         Each word is matched, in order, to the next prompt parameter
@@ -68,7 +57,7 @@ class Command(ABC):
 
         Args:
             args: the raw prompt words.
-            **kwargs: the injectable objects, keyed by their parameter names.
+            **kwargs: the Application facade, keyed as application.
 
         Returns:
             The keyword arguments to pass to :meth:`execute`.
@@ -80,7 +69,7 @@ class Command(ABC):
         prompt_parameter_names = [
             parameter_name
             for parameter_name, parameter in signature.parameters.items()
-            if parameter_name not in INJECTABLE_COMMAND_PARAMETERS
+            if parameter_name not in cls.INJECTABLE_COMMAND_PARAMETERS
             and parameter.kind
             in (
                 inspect.Parameter.POSITIONAL_OR_KEYWORD,

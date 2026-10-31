@@ -182,7 +182,7 @@ class App(TextualApp):
             # resolve the prompt into action arguments, build the action, then run
             # it: slash and shell commands are handled locally, while a prompt
             # goes to the model. all yield a message stream rendered the same way
-            resolved_arguments = PromptManager.resolve_prompt(text)
+            resolved_arguments = PromptManager.resolve(text)
             action = ActionFactory.create_action(raw_input=text, **resolved_arguments)
             for message in self._action_executor.execute(action):
                 self.call_from_thread(self._handle_message, message)

@@ -1,4 +1,4 @@
-"""Executor running the action built from the prompt manager's arguments."""
+"""Typed-input routing, explicit tools and the answer-carrying Core driver."""
 
 from __future__ import annotations
 
@@ -7,141 +7,160 @@ import platform
 import shlex
 import uuid
 from collections.abc import Iterator
+from inspect import GEN_RUNNING, getgeneratorstate
 from pathlib import Path
-from typing import TYPE_CHECKING, Type
+from threading import get_ident
+from typing import TYPE_CHECKING
 
 from arancio.commands.base import Command
-from arancio.commands.registry import (
-    COMMAND_REGISTRY,
-    SESSION_DISCARDING_COMMANDS,
-)
+from arancio.commands.fork import ForkCommand
+from arancio.commands.registry import COMMAND_REGISTRY, SESSION_DISCARDING_COMMANDS
 from arancio.core.agents.base import Agent
-from arancio.core.hooks.manager import HookManager
+from arancio.core.events import (
+    Decision,
+    Execution,
+    PermissionRequest,
+    PermissionResponse,
+)
 from arancio.core.messages.assistant import AssistantMessage
 from arancio.core.messages.base import ErrorMessage, Message
 from arancio.core.messages.tool import ToolCallMessage
 from arancio.core.messages.user import UserMessage
 from arancio.core.tools.commands.shell import ShellCommandTool
 from arancio.core.tools.files.read import ReadFileTool
-from arancio.prompt.actions.constants import INJECTABLE_COMMAND_PARAMETERS
-from arancio.prompt.actions.types import (
-    Action,
-    CommandAction,
-    PromptAction,
-    ShellCommandAction,
-)
+from arancio.core.tools.session import ToolSession
+from arancio.prompt.actions.types import CommandAction, PromptAction, ShellCommandAction
+from arancio.prompt.manager import PromptManager
 from arancio.sessions.manager import SessionManager
 from arancio.settings.manager import SettingsManager
+from arancio.ui.controllers.base import UIController
 
 if TYPE_CHECKING:
-    from arancio.ui.app import App
+    from arancio.application.base import Application
 
 
 class ActionExecutor:
-    """Carries out an action built from the prompt manager's arguments.
+    """Parse input, run adapters and drive Core without a concrete frontend.
 
-    A :class:`arancio.prompt.actions.types.ShellCommandAction` runs locally
-    through ``ShellCommandTool``. Its explicit prefix bypasses the normal
-    tool-permission gate. A :class:`arancio.prompt.actions.types.CommandAction`
-    is resolved against
-    :data:`arancio.commands.registry.COMMAND_REGISTRY`: its raw prompt words are
-    handed to the command, which binds them to its parameters, and run locally. A
-    :class:`arancio.prompt.actions.types.PromptAction` is sent to the model
-    through the agent. Both produce the same message stream so callers render
-    them the same way.
+    Attributes:
+        __application: the facade supplied to commands.
+        __agent: the Core execution and history owner.
+        __settings_manager: the active configuration used for model checks.
+        __session_manager: the public persistence facade.
+        __tool_session: the read guard supplying recording snapshots.
+        __frontend_controller: the abstract permission-question interface.
+        __read_file_tool: the injected direct tool for file mentions.
+        __shell_command_tool: the injected direct tool for shell/directory input.
+        __execution: the currently driven Core generator.
+        __owner_thread_id: the thread driving that generator.
+        __close_requested: whether shutdown has requested an end to execution.
     """
 
     def __init__(
         self,
+        *,
+        application: Application,
         agent: Agent,
-        application: App,
         settings_manager: SettingsManager,
         session_manager: SessionManager,
-        hook_manager: HookManager,
+        tool_session: ToolSession,
+        frontend_controller: UIController,
+        read_file_tool: ReadFileTool,
+        shell_command_tool: ShellCommandTool,
     ) -> None:
-        """Store the objects used to carry out actions.
+        """Store the shared graph and direct tools without constructing UI objects.
 
         Args:
-            agent: the agent whose run loop handles a prompt action.
-            application: the running app a command acts on.
-            settings_manager: the settings manager a command can use to apply
-                and persist settings changes.
-            session_manager: the manager owning the active chat; every write
-                goes through its ``session_recorder``, and ``/clear`` receives the
-                manager itself.
-            hook_manager: the hook manager injected into this executor's own
-                ``ReadFileTool``/``ShellCommandTool`` instances (used for the
-                ``!``/``!!`` shell path and ``@mention`` reads), the same
-                shared instance threaded into the rest of the agent stack, so
-                a handler registered anywhere sees these calls too.
+            application: the facade passed to commands.
+            agent: the Core generator and history owner.
+            settings_manager: the active model configuration.
+            session_manager: the recording facade.
+            tool_session: the file-read guard shared with all tools.
+            frontend_controller: the abstract frontend question contract.
+            read_file_tool: the tool used for explicit file mentions.
+            shell_command_tool: the tool used for shell input and directories.
         """
-        self._agent: Agent = agent
-        self._application: App = application
-        self._settings_manager: SettingsManager = settings_manager
-        self._session_manager: SessionManager = session_manager
-        # instance attributes, built once here (not module-import-time class
-        # attributes), so the app's shared hook manager can reach them
-        self._read_file_tool: ReadFileTool = ReadFileTool(hook_manager=hook_manager)
-        self._shell_command_tool: ShellCommandTool = ShellCommandTool(
-            hook_manager=hook_manager
-        )
+        self.__application: Application = application
+        self.__agent: Agent = agent
+        self.__settings_manager: SettingsManager = settings_manager
+        self.__session_manager: SessionManager = session_manager
+        self.__tool_session: ToolSession = tool_session
+        self.__frontend_controller: UIController = frontend_controller
+        self.__read_file_tool: ReadFileTool = read_file_tool
+        self.__shell_command_tool: ShellCommandTool = shell_command_tool
+        self.__execution: Execution | None = None
+        self.__owner_thread_id: int | None = None
+        self.__close_requested: bool = False
 
-    def _writes_nothing(self, command: Type[Command] | None) -> bool:
-        """Report whether this command must leave the log untouched.
+    @property
+    def is_running(self) -> bool:
+        """Return whether this executor owns an active Core execution."""
+        return self.__execution is not None
 
-        A command that ends or switches the chat adds nothing to the one it was
-        typed into, so it is never the write that brings that chat's log into
-        existence: typing ``/quit``, ``/clear``, ``/fork`` or ``/resume`` into a
-        fresh app leaves nothing behind, matching ctrl+c, which quits without
-        running an action at all. Once the log exists, the same command is
-        recorded like any other, so the replayed log keeps the line.
+    def close(self) -> None:
+        """Request closure and close suspended Core only on its owning thread.
 
-        Args:
-            command: the resolved command class, or ``None`` when the typed name
-                matches no command.
-
-        Returns:
-            Whether every write this command would produce must be skipped.
+        A different thread, or a callback during running Core code, only sets the
+        request flag. The driver closes Core when control next returns to it.
         """
-        return (
-            command in SESSION_DISCARDING_COMMANDS
-            and not self._session_manager.current.created_on_disk
-        )
+        self.__close_requested = True
+        if (
+            self.__execution is not None
+            and self.__owner_thread_id == get_ident()
+            and getgeneratorstate(self.__execution) != GEN_RUNNING
+        ):
+            self.__execution.close()
 
-    def execute(self, action: Action) -> Iterator[Message]:
-        """Execute the action, producing its output messages.
+    def execute(self, prompt: str) -> Iterator[Message]:
+        """Parse and route one input line on the consuming thread.
 
         Args:
-            action: the action to execute.
+            prompt: the original input text.
 
-        Returns:
-            An iterator over the messages the action produces.
+        Yields:
+            Display messages and temporary persistence notices in order.
 
         Raises:
-            ValueError: when the action is of an unknown type.
+            ValueError: when the parser returns an unsupported Action type.
         """
+        if self.__close_requested:
+            return
+        try:
+            action = PromptManager.resolve(prompt)
+        except ValueError as exc:
+            yield from self.__yield_error(f"Invalid prompt: {exc}")
+            return
         if isinstance(action, ShellCommandAction):
-            return self._execute_shell_command(action)
-        if isinstance(action, CommandAction):
-            return self._execute_command(action)
+            yield from self.__execute_shell_command(action)
+        elif isinstance(action, CommandAction):
+            yield from self.__execute_command(action)
         elif isinstance(action, PromptAction):
-            return self._execute_prompt(action)
+            yield from self.__execute_prompt(action)
         else:
             raise ValueError(f"Unknown action type: {type(action)}")
 
-    def _execute_shell_command(self, action: ShellCommandAction) -> Iterator[Message]:
-        """Run a user-provided command through ``ShellCommandTool``.
-
-        The user's explicit shell prefix is sufficient consent, so this path
-        bypasses ``PermissionManager`` and does not require a configured model.
-        Both forms yield the same paired messages; only ``!`` appends them to
-        agent history, preceded by a user-attribution message.
+    def __writes_nothing(self, command: type[Command] | None) -> bool:
+        """Keep session-discarding commands from creating an unused chat log.
 
         Args:
-            action: the shell command action to execute.
+            command: the resolved command class, or None for an unknown command.
+
+        Returns:
+            Whether writes for this command must be skipped in the current chat.
+        """
+        return (
+            command in SESSION_DISCARDING_COMMANDS
+            and not self.__session_manager.current_state().created_on_disk
+        )
+
+    def __execute_shell_command(self, action: ShellCommandAction) -> Iterator[Message]:
+        """Run explicit shell input outside the normal permission gate.
+
+        Args:
+            action: the parsed shell invocation and its model-history policy.
 
         Yields:
-            A synthetic tool call followed by its paired result or error.
+            The call, hook messages, result and save notices in existing order.
         """
         call_id = f"shell_{uuid.uuid4().hex}"
         arguments = {"command": action.command}
@@ -152,195 +171,243 @@ class ActionExecutor:
             arguments=arguments,
             in_history=action.add_to_history,
         )
-        command_error = self._session_manager.session_recorder.command(
-            raw_input=action.raw_input,
-            name="shell",
-            args=[action.command],
-        )
+        try:
+            command_error = self.__session_manager.record_command(
+                raw_input=action.raw_input, name="shell", args=[action.command]
+            )
+        except OSError as exc:
+            command_error = ErrorMessage(content=f"Could not save session: {exc}")
         attribution_error = None
         if action.add_to_history:
             attribution = UserMessage(
                 content="User explicitly ran the following command:"
             )
-            self._agent.add_message_to_history(attribution)
-            self._agent.add_message_to_history(call)
-            # the user never saw this line: it exists so the model does not
-            # read the synthetic call as its own decision
-            attribution_error = self._session_manager.session_recorder.message(
-                attribution, visible=False
-            )
-        call_error = self._session_manager.session_recorder.message(call)
+            self.__agent.add_message_to_history(attribution)
+            self.__agent.add_message_to_history(call)
+            attribution_error = self.__record_message(attribution, visible=False)
+        call_error = self.__record_message(call)
         yield call
-        yield from self._yield_notices(command_error, attribution_error, call_error)
+        yield from self.__yield_notices(command_error, attribution_error, call_error)
 
-        result, hook_messages = self._shell_command_tool.call(
+        result, hook_messages = self.__shell_command_tool.call(
             call_id=call_id, **arguments
         )
-        yield from self._session_manager.session_recorder.record_stream(
-            iter(hook_messages)
-        )
+        for message in hook_messages:
+            yield message
+            yield from self.__yield_notices(self.__record_message(message))
         result.in_history = action.add_to_history
         if action.add_to_history:
-            self._agent.add_message_to_history(result)
-        result_error = self._session_manager.session_recorder.message(result)
+            self.__agent.add_message_to_history(result)
+        result_error = self.__record_message(result)
         yield result
-        yield from self._yield_notices(result_error)
+        yield from self.__yield_notices(result_error)
 
-    @staticmethod
-    def _yield_notices(*notices: ErrorMessage | None) -> Iterator[Message]:
-        """Yield each persistence notice a recorder write actually produced.
+    def __execute_command(self, action: CommandAction) -> Iterator[Message]:
+        """Run a command directly with Application as its only injected service.
+
+        Strings are saved once. Returned Messages and the existing fork tuple
+        already describe recorded output or save notices and are only displayed.
 
         Args:
-            notices: the results of recorder writes, ``None`` when the write
-                landed on disk.
+            action: the parsed command invocation.
 
         Yields:
-            Every notice that is not ``None``, in the order given.
-        """
-        for notice in notices:
-            if notice:
-                yield notice
-
-    def _yield_error(
-        self, content: str, command: Type[Command] | None = None
-    ) -> Iterator[Message]:
-        """Record an error the executor itself reports, then yield it.
-
-        Args:
-            content: the error text shown to the user and saved in the session.
-            command: the command the error belongs to, when it came from one, so
-                a session-discarding command does not save it into a chat that
-                has no log.
-
-        Yields:
-            The error, followed by the persistence notice when saving it failed.
-        """
-        error = ErrorMessage(content=content)
-        save_error = (
-            None
-            if self._writes_nothing(command)
-            else self._session_manager.session_recorder.message(error)
-        )
-        yield error
-        yield from self._yield_notices(save_error)
-
-    def _record_command(
-        self, action: CommandAction, command: Type[Command]
-    ) -> ErrorMessage | None:
-        """Record the typed command line, unless the command writes nothing.
-
-        Args:
-            action: the command action to record.
-            command: the resolved command class the action runs.
-
-        Returns:
-            The temporary persistence error notice, or ``None`` when the
-            write succeeded or the line was deliberately not written.
-        """
-        if self._writes_nothing(command):
-            return None
-        return self._session_manager.session_recorder.command(
-            raw_input=action.raw_input, name=action.name, args=action.args
-        )
-
-    def _execute_command(self, action: CommandAction) -> Iterator[Message]:
-        """Run the command with the action's words and the injectable objects.
-
-        ``command.run`` executes via ``application.call_from_thread`` because
-        this executor runs on the agent's worker thread, and a command can
-        mutate Textual widgets (e.g. ``ResumeCommand`` repopulating the log),
-        which requires the app's event-loop thread.
-
-        A plain-string result is wrapped into an :class:`AssistantMessage` so
-        the executor always yields messages, regardless of the action type.
-
-        Args:
-            action: the command action to run.
-
-        Yields:
-            The command's result message, or an :class:`ErrorMessage` when the
-            command is unknown or its arguments do not match its signature.
+            Command output and temporary notices in existing attribution order.
         """
         command = COMMAND_REGISTRY.get(action.name)
         if command is None:
-            yield from self._yield_error(f"Command not found: {action.name}")
+            yield from self.__yield_error(f"Command not found: {action.name}")
             return
-
-        # each injectable parameter name maps to a same-named private attribute
-        # on the executor (``application`` -> ``self._application``, etc.)
-        injectable = {
-            name: getattr(self, f"_{name}") for name in INJECTABLE_COMMAND_PARAMETERS
-        }
         discards_session = command in SESSION_DISCARDING_COMMANDS
         command_error = (
-            self._record_command(action, command) if discards_session else None
+            self.__record_command(action, command) if discards_session else None
         )
         try:
-            result = self._application.call_from_thread(
-                command.run, action.args, **injectable
-            )
+            result = command.run(action.args, application=self.__application)
         except Exception as exc:
-            yield from self._yield_error(
-                f"Error while executing command {action.name}: {exc}", command
-            )
-            yield from self._yield_notices(command_error)
+            if command is ForkCommand and isinstance(exc, OSError):
+                # the checksum write failed; never record through that same path
+                yield ErrorMessage(content=f"Could not save session: {exc}")
+            else:
+                yield from self.__yield_error(
+                    f"Error while executing command {action.name}: {exc}", command
+                )
+            yield from self.__yield_notices(command_error)
             return
 
         if not discards_session:
-            command_error = self._record_command(action, command)
-
+            command_error = self.__record_command(action, command)
         if result is None:
-            yield from self._yield_notices(command_error)
+            yield from self.__yield_notices(command_error)
             return
-        message = (
-            AssistantMessage(content=result) if isinstance(result, str) else result
-        )
-        if isinstance(message, AssistantMessage):
-            message.in_history = False
-            # asked after the command ran, so a fork's confirmation is weighed
-            # against the fork itself, not the session it came from
-            result_error = (
-                None
-                if self._writes_nothing(command)
-                else self._session_manager.session_recorder.message(message)
-            )
-        else:
-            result_error = None
-        yield message
-        yield from self._yield_notices(command_error, result_error)
+        if isinstance(result, tuple):
+            _, confirmation, notices = result
+            yield confirmation
+            yield from self.__yield_notices(command_error, *notices)
+            return
+        if isinstance(result, Message):
+            yield result
+            yield from self.__yield_notices(command_error)
+            return
 
-    def _execute_prompt(self, action: PromptAction) -> Iterator[Message]:
-        """Send the action's text to the model through the agent.
+        message = AssistantMessage(content=result, in_history=False)
+        result_error = (
+            None if self.__writes_nothing(command) else self.__record_message(message)
+        )
+        yield message
+        yield from self.__yield_notices(command_error, result_error)
+
+    def __execute_prompt(self, action: PromptAction) -> Iterator[Message]:
+        """Record the user prompt and drive Core with its mention prelude.
 
         Args:
-            action: the prompt action to send.
+            action: the rewritten model prompt and its original input.
 
         Yields:
-            A synthesized ReadFileTool (file mention) or ShellCommandTool
-            (directory mention, listed with ``ls -la``) call/result pair
-            per resolved @mention, in prompt order, then the agent's
-            message stream for the prompt, or an :class:`ErrorMessage` when
-            no provider or model name is configured yet.
+            Model/prelude messages and save notices, or an unconfigured-model error.
         """
         try:
-            self._settings_manager.settings.model_id
+            self.__settings_manager.settings.model_id
         except ValueError as exc:
-            yield from self._yield_error(f"Error sending message: {exc}")
+            yield from self.__yield_error(f"Error sending message: {exc}")
             return
-        prelude = self._resolve_mentions(action.mentions)
-        message = UserMessage(
-            content=action.prompt,
-            display_text=action.raw_input,
+        prelude = self.__resolve_mentions(action.mentions)
+        message = UserMessage(content=action.prompt, display_text=action.raw_input)
+        yield from self.__yield_notices(self.__record_message(message))
+        yield from self.__handle_agent(self.__agent(message, prelude=prelude))
+
+    def __handle_agent(self, execution: Execution) -> Iterator[Message]:
+        """Advance Core with matching answers and close it on the consuming thread.
+
+        Args:
+            execution: the Core generator created for this prompt.
+
+        Yields:
+            Each Message followed by its optional save notice.
+
+        Raises:
+            RuntimeError: when another Core execution is already active.
+        """
+        if self.__execution is not None:
+            execution.close()
+            raise RuntimeError("Core execution is active.")
+        self.__execution = execution
+        self.__owner_thread_id = get_ident()
+        answer = None
+        try:
+            while not self.__close_requested:
+                try:
+                    event = self.__execution.send(answer)
+                except StopIteration:
+                    return
+                answer = None
+                if self.__close_requested:
+                    return
+                if isinstance(event, PermissionRequest):
+                    answer = self.__ask_permission(event)
+                else:
+                    yield event
+                    yield from self.__yield_notices(self.__record_message(event))
+        finally:
+            try:
+                self.__execution.close()
+            finally:
+                self.__execution = None
+                self.__owner_thread_id = None
+
+    def __ask_permission(self, request: PermissionRequest) -> PermissionResponse:
+        """Map the frontend answer using the current question and decision rules.
+
+        Args:
+            request: the Core request whose identity the response must match.
+
+        Returns:
+            ALLOW for yes, DENY for no/None, or DENY with the free-text note.
+        """
+        answer = self.__frontend_controller.ask(
+            f"Allow {request.call.name} with arguments {request.call.arguments}?",
+            ["yes", "no"],
         )
-        # the agent appends this to model history but never yields it back, so
-        # the caller that built it is the one that records it
-        save_error = self._session_manager.session_recorder.message(message)
-        yield from self._yield_notices(save_error)
-        yield from self._session_manager.session_recorder.record_stream(
-            self._agent(message, prelude=prelude)
+        return PermissionResponse(
+            request_id=request.id,
+            decision=Decision.ALLOW if answer == "yes" else Decision.DENY,
+            message=answer if answer not in ("yes", "no", None) else None,
         )
 
-    def _resolve_mentions(self, mentions: list[Path]) -> list[Message]:
+    def __record_message(
+        self, message: Message, visible: bool = True
+    ) -> ErrorMessage | None:
+        """Record through Sessions with a fresh read-state snapshot.
+
+        Args:
+            message: the message to record.
+            visible: whether it belongs in visible replay.
+
+        Returns:
+            A log/checksum-save notice, or None when saved or skipped.
+        """
+        try:
+            return self.__session_manager.record_message(
+                message, file_states=self.__tool_session.snapshot(), visible=visible
+            )
+        except OSError as exc:
+            return ErrorMessage(content=f"Could not save session: {exc}")
+
+    def __record_command(
+        self, action: CommandAction, command: type[Command]
+    ) -> ErrorMessage | None:
+        """Record an invocation in the correct source session when it has a log.
+
+        Args:
+            action: the parsed command line.
+            command: the resolved class determining discard policy.
+
+        Returns:
+            A temporary save notice, or None when saved or deliberately skipped.
+        """
+        if self.__writes_nothing(command):
+            return None
+        try:
+            return self.__session_manager.record_command(
+                raw_input=action.raw_input, name=action.name, args=action.args
+            )
+        except OSError as exc:
+            return ErrorMessage(content=f"Could not save session: {exc}")
+
+    def __yield_error(
+        self, content: str, command: type[Command] | None = None
+    ) -> Iterator[Message]:
+        """Report an ordinary error and retain its existing recording policy.
+
+        Args:
+            content: the current user-facing error text.
+            command: the resolved command, when it determines discard policy.
+
+        Yields:
+            The error followed by a save notice when recording it failed.
+        """
+        error = ErrorMessage(content=content)
+        save_error = (
+            None if self.__writes_nothing(command) else self.__record_message(error)
+        )
+        yield error
+        yield from self.__yield_notices(save_error)
+
+    @staticmethod
+    def __yield_notices(*notices: ErrorMessage | None) -> Iterator[Message]:
+        """Display save notices without recording them or answering Core with them.
+
+        Args:
+            notices: save results, with None representing success or a skipped write.
+
+        Yields:
+            Each notice in the supplied order.
+        """
+        for notice in notices:
+            if notice is not None:
+                yield notice
+
+    def __resolve_mentions(self, mentions: list[Path]) -> list[Message]:
         """Synthesize a tool call/result pair for each resolved @mention.
 
         Bypasses :class:`arancio.core.permissions.manager.PermissionManager`
@@ -377,13 +444,13 @@ class ActionExecutor:
                 else:
                     command = f"ls -la -- {shlex.quote(str(target))}"
                 arguments = {"command": command}
-                result, hook_messages = self._shell_command_tool.call(
+                result, hook_messages = self.__shell_command_tool.call(
                     call_id=call_id, **arguments
                 )
             else:
                 name = "ReadFileTool"
                 arguments = {"file_path": str(target)}
-                result, hook_messages = self._read_file_tool.call(
+                result, hook_messages = self.__read_file_tool.call(
                     call_id=call_id, **arguments
                 )
             messages.append(

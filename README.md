@@ -41,9 +41,10 @@ Configure provider credentials as required by LiteLLM before sending a prompt. A
 
 ```text
 src/arancio/
+  application/  Backend operations, lifecycle, status, and startup
   core/         Agent loop, messages, clients, tools, permissions, and parsers
-  ui/           Textual application, controller adapter, and widgets
-  commands/     Slash-command implementations
+  ui/           Frontend controller contract, Textual adapter, and widgets
+  commands/     Input adapters for Application operations
   prompt/       Prompt parsing and user-action execution
   sessions/     Session facade, detached state, recording, validation, and replay
   settings/     Settings snapshots, validation and persistence through Storage
@@ -54,6 +55,9 @@ hooks/          Git hooks for linting, formatting, docstrings, and tests
 ```
 
 At runtime, the tool harness and system prompt are loaded from `~/.arancio/harness/`. The repository's `harness/` directory is the source copy used by tests and for populating that runtime location.
+
+The backend architecture refactor is implemented through Application. Textual and
+the existing UI entry point still await frontend integration with that API.
 
 ## Development
 

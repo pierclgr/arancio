@@ -30,8 +30,6 @@ def main() -> None:
     comes after the settings are loaded, because the session it opens snapshots them.
     """
     storage_manager = StorageManager()
-    storage_manager.bind_litellm_login_dir()
-
     controller = UIController()
     hook_manager = HookManager()
     plugin_manager = PluginManager(hook_manager=hook_manager)

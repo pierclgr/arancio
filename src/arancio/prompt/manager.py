@@ -1,9 +1,14 @@
-"""Prompt manager turning a raw prompt into action arguments."""
+"""Prompt parsing that directly constructs typed Action data."""
 
 import shlex
 from pathlib import Path
-from typing import Any
 
+from arancio.prompt.actions.types import (
+    Action,
+    CommandAction,
+    PromptAction,
+    ShellCommandAction,
+)
 from arancio.prompt.patterns import (
     COMMAND_PATTERN,
     HIDDEN_SHELL_COMMAND_PATTERN,
@@ -13,49 +18,25 @@ from arancio.prompt.patterns import (
 
 
 class PromptManager:
-    """Resolves a raw prompt into the keyword arguments for its action.
+    """Resolve input directly to Actions, preserving prefixes and mention rules.
 
-    A prompt starting with ``!`` or ``!!`` produces a shell command action
-    whose command is the entire remaining text, without slash-command parsing
-    or mention resolution. ``!`` stores the tool exchange in model history;
-    ``!!`` excludes it.
-
-    A prompt starting with ``/`` is parsed as ``/<name> <args...>``: the first word is
-    the command name and the remaining words are its arguments, split on whitespace
-    except inside quotes, so ``/cd "my folder"`` passes one argument. This produces the
-    ``command_name``/``command_args`` keyword arguments for a
-    :class:`arancio.prompt.actions.types.CommandAction`; ``@`` mentions in the
-    remainder are left untouched, never mention-resolved.
-
-    Any other prompt is scanned for ``@path``/``@"path with spaces"`` mentions: a
-    mention whose path resolves to an existing file or directory (relative paths
-    against the process working directory, absolute paths as-is) is rewritten to
-    its resolved absolute path; a mention that does not resolve to either is left
-    unchanged. This produces the ``prompt`` (rewritten) and ``mentions`` (resolved
-    absolute paths, in appearance order) keyword arguments for a
-    :class:`arancio.prompt.actions.types.PromptAction`.
-    :class:`arancio.prompt.actions.executor.ActionExecutor` builds and runs the
-    action from these arguments, reading a file mention with ``ReadFileTool`` and
-    listing a directory mention's contents with ``ShellCommandTool``.
+    Shell prefixes keep their entire remainder, commands retain non-POSIX quote
+    handling, and ordinary prompts resolve existing file/directory mentions. Every
+    Action retains the original raw_input for display and command recording.
     """
 
     @classmethod
-    def resolve_prompt(cls, prompt: str) -> dict[str, Any]:
-        """Resolve the prompt into the keyword arguments for its action.
+    def resolve(cls, prompt: str) -> Action:
+        """Build the Action matching one original input line.
 
         Args:
-            prompt: the raw user prompt.
+            prompt: the original input text.
 
         Returns:
-            The ``shell_command``/``add_to_history`` keyword arguments for a
-            shell action, the ``command_name``/``command_args`` arguments for
-            a slash command, or the ``prompt``/``mentions`` arguments for a
-            model prompt.
+            A shell, command or model-prompt Action with raw_input preserved.
 
         Raises:
-            ValueError: when a shell prefix has no command or a slash command
-                contains an unclosed quote. ``App._run_agent`` renders this as
-                an error message.
+            ValueError: when a shell command is empty or command quotes are unbalanced.
         """
         for pattern, add_to_history in (
             (HIDDEN_SHELL_COMMAND_PATTERN, False),
@@ -66,22 +47,25 @@ class PromptManager:
                 shell_command = shell_match.group(1)
                 if not shell_command.strip():
                     raise ValueError("shell command is empty")
-                return {
-                    "shell_command": shell_command,
-                    "add_to_history": add_to_history,
-                }
+                return ShellCommandAction(
+                    command=shell_command,
+                    add_to_history=add_to_history,
+                    raw_input=prompt,
+                )
 
         match = COMMAND_PATTERN.match(prompt)
         if match is None:
-            rewritten_prompt, mentions = cls._resolve_mentions(prompt)
-            return {"prompt": rewritten_prompt, "mentions": mentions}
+            rewritten_prompt, mentions = cls.__resolve_mentions(prompt)
+            return PromptAction(
+                prompt=rewritten_prompt, raw_input=prompt, mentions=mentions
+            )
 
         command_name = match.group(1)
-        command_args = cls._split_command_args(match.group(2) or "")
-        return {"command_name": command_name, "command_args": command_args}
+        command_args = cls.__split_command_args(match.group(2) or "")
+        return CommandAction(name=command_name, args=command_args, raw_input=prompt)
 
     @staticmethod
-    def _split_command_args(raw: str) -> list[str]:
+    def __split_command_args(raw: str) -> list[str]:
         r"""Split a command's argument text into words, honouring quotes.
 
         Splitting is non-POSIX so a backslash stays literal and a Windows path
@@ -116,7 +100,7 @@ class PromptManager:
         ]
 
     @staticmethod
-    def _resolve_mentions(prompt: str) -> tuple[str, list[Path]]:
+    def __resolve_mentions(prompt: str) -> tuple[str, list[Path]]:
         """Rewrite resolving @mentions to their absolute path and collect the targets.
 
         Args:
