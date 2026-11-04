@@ -1,6 +1,6 @@
 """Permission grants and the resolution of each tool call against them."""
 
-from collections.abc import Generator
+from collections.abc import Generator, Set
 
 from arancio.core.events import (
     CoreAnswer,
@@ -125,7 +125,7 @@ class PermissionManager:
         self._permissions = permissions
 
     @property
-    def allowed_categories(self) -> set[PermissionCategory]:
+    def allowed_categories(self) -> Set[PermissionCategory]:
         """Return the categories whose tools may be built.
 
         Returns:

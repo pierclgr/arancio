@@ -99,10 +99,9 @@ controller.show_login as their one-way login callback; summary thinking stays di
 
 Application and ApplicationStatus live in application/base.py. Application applies the
 loaded settings before execution and owns later apply/save/session coordination.
-UIController in ui/controllers/base.py is an abstract contract only. The Textual App,
-legacy ui/controller.py UIController, widgets
-and ui/__main__.py are unchanged and still use removed APIs/modules. The old entry point
-does not call Application.build yet; frontend integration remains deferred.
+UIController in ui/controllers/base.py is the abstract frontend contract.
+TUIController (ui/controllers/tui.py) implements it for the Textual TUIApp, and
+ui/__main__.py connects the two to Application.build(controller) (see **UI** below).
 
 **Messages** (`core/messages/`) — the lingua franca between clients, agent and UI. Every
 message carries `content` (fed to the model) and `display_text` (shown in the UI), plus
@@ -271,8 +270,8 @@ Dispatch sites, by hook:
   Returned messages join the settings and plugin-load startup messages in the UI;
   they are not added to agent history or saved to a session.
 - `Application.shutdown`: `shutdown` (no event keys), once after cancellation
-  and a safe execution-closure request. The future frontend must call it during final
-  teardown, including `/exit`, `/quit` and Ctrl+C. Returned cleanup messages
+  and a safe execution-closure request. The Textual `TUIApp` calls it from `on_unmount`,
+  so `/exit`, `/quit` and Ctrl+C all reach it. Returned cleanup messages
   are not displayed or saved. Application hooks do not create a session log.
 - `Agent.__call__`: `agent_start` (`message`) — first statement, before the message is
   even recorded to history, and before the turn loop's own error handling exists: a
@@ -418,23 +417,45 @@ schema, without changing the class's raw schema. `PluginToolResultParser` keeps
 JSON-compatible dictionaries as raw content and displays readable JSON; other results
 and exceptions retain base behavior.
 
-**Frontend contract** (ui/controllers/base.py) — abstract ask, cancel_questions,
-show_login, reset_conversation and exit methods, without widgets or a concrete adapter.
+**Frontend contract** (ui/controllers/base.py) — abstract `UIController` with ask,
+cancel_questions, show_login, reset_conversation and exit methods, without widgets.
 Core yields PermissionRequest and accepts a matching PermissionResponse from Application's
 driver. yes allows, no/None denies, and other text denies with its note. Every response
 carries the request ID. LoginNotice reaches show_login directly through client callbacks
 and is never recorded. Cancellation releases a pending ask with None.
 
-The legacy ui/controller.py still imports Core's removed controller modules. It will
-implement this Application contract in the frontend step; no temporary Core adapter or
-no-op frontend was added.
+**TUIController** (`ui/controllers/tui.py`) — the Textual implementation of
+that contract. `app` is attached by the entry point after construction (the TUIApp needs
+the Application, which needs the controller). Application and the clients call it on the
+frontend's worker thread; every call moves to the UI thread through
+`TUIApp.call_from_thread`, and display methods return after the display work is done. `ask`
+blocks the worker (never the UI thread) on a `threading.Event`: it returns the preset,
+the typed text, or None once cancelled. A lock guards the permanent cancelled flag and
+the single pending-answer slot; it is never held while waiting or dispatching. A second
+`ask` while one is pending raises RuntimeError. `cancel_questions` is safe on any thread
+and releases the pending wait; afterwards questions return None, display/exit calls do
+nothing, and a late answer cannot replace the cancellation or answer a later question.
+The cancellation is rechecked on the UI thread before a modal is created. A teardown
+`RuntimeError` from dispatch is suppressed only when the app has stopped.
 
-
-**UI** (`ui/app.py`) — legacy Textual frontend awaiting Application integration.
-Its rendering remains unchanged. A worker thread runs the old agent/executor path; each message
-is rendered on the main thread via `call_from_thread`. Assistant and reasoning chunks
-stream into one `MarkdownStream` widget per span, and the finalized echo of an
-already-streamed span is suppressed so text is not shown twice.
+**UI** (`ui/`) — the Textual frontend. `ui/__main__.py` builds `TUIController`,
+then `Application.build(controller)`, then `TUIApp(application)`, attaches the app to the
+controller and runs with mouse mode on. `TUIApp` (`ui/apps/tui.py`) receives only the
+Application and owns layout/CSS, the prompt, the toolbar, the worker and the lifecycle:
+`on_mount` shows `Application.start()` output, `on_unmount` calls
+`Application.shutdown()`, and the toolbar reads `Application.status()` (never stored
+copies). `on_input_submitted` sets busy before any await, then a thread worker consumes
+`Application.submit(text)`, forwards each message to `MessageLog.append` through
+`call_from_thread` and always closes the iterator on the worker thread in `finally`.
+The worker's UI-call helper checks `is_running` first and suppresses a `RuntimeError`
+only when the app has stopped. The frontend parses no input, saves nothing and maps no
+permission answers. `MessageLog` (`ui/widgets/message_log.py`, a `VerticalScroll`)
+owns rendering and streaming: assistant and reasoning chunks stream into one
+`MarkdownStream` widget per span, the finalized echo of an already-streamed span is
+suppressed once, and `replace` resets the stream, clears the log and replays messages.
+`LoginPanel` (`ui/widgets/login.py`) shows a provider-neutral sign-in notice with the
+CSS classes `login`/`login-code`; `QuestionScreen` (`ui/widgets/question.py`) is the
+modal used by `ask`. TUIApp and the controller hold no Core, Settings or Sessions service.
 
 **Application** (application/) — the public coordinator above Core, Settings and
 Sessions. It holds those services privately and exposes operations, Messages and immutable
@@ -570,9 +591,9 @@ FileNotFoundError and non-directories with NotADirectoryError before writes.
 
 **Backend caller migration is implemented.** Application now uses Settings' set_field,
 save_field, reset_global and restore_active, plus Sessions' recording and snapshot APIs.
-Bootstrap uses Storage's generic login-directory operations. Only the old UI and its
-entry point still reference removed wiring and backend APIs. No compatibility wrappers
-were added; tests remain deferred in this Application step.
+Bootstrap uses Storage's generic login-directory operations. The Textual frontend
+reaches the backend only through Application. No compatibility wrappers were added;
+tests remain deferred.
 
 **Sessions** (sessions/) — SessionManager is the only public service. Its constructor
 requires StorageManager and an already-loaded SessionConfiguration. New conversations
@@ -651,7 +672,7 @@ unnamed. A child state record follows copied state snapshots so their old names 
 replace its fork name on reload. Saved sources receive the same display-only confirmation
 as the child, exactly once per log; unused sources force neither log to be created.
 fork() returns detached child state, the AssistantMessage confirmation and log-save
-notices. The future caller displays that Message without saving it again. Failed saved
+notices. The frontend displays that Message without saving it again. Failed saved
 source writes remain referenced for manager.flush() retries. Cross-log rollback is not
 promised.
 
@@ -662,7 +683,7 @@ the process directory. Application applies returned data and requests corrected 
 through update_state(). There are no current/registry/session_recorder properties,
 restore_runtime/discard_and_create/restore_file_states helpers, or record_stream wrapper.
 Application, executor and commands now use the public manager and base.py data imports.
-Only the legacy UI/startup remain deferred. No compatibility wrappers were added. `tests/test_session_creation.py` checks that normal
+The Textual frontend uses Application only. No compatibility wrappers were added. `tests/test_session_creation.py` checks that normal
 sessions use the current process working directory.
 
 ## Conventions
