@@ -189,9 +189,7 @@ class ActionExecutor:
         yield call
         yield from self.__yield_notices(command_error, attribution_error, call_error)
 
-        result, hook_messages = self.__shell_command_tool.call(
-            call_id=call_id, **arguments
-        )
+        result, hook_messages = self.__shell_command_tool.call(call)
         for message in hook_messages:
             yield message
             yield from self.__yield_notices(self.__record_message(message))
@@ -444,23 +442,19 @@ class ActionExecutor:
                 else:
                     command = f"ls -la -- {shlex.quote(str(target))}"
                 arguments = {"command": command}
-                result, hook_messages = self.__shell_command_tool.call(
-                    call_id=call_id, **arguments
-                )
+                tool = self.__shell_command_tool
             else:
                 name = "ReadFileTool"
                 arguments = {"file_path": str(target)}
-                result, hook_messages = self.__read_file_tool.call(
-                    call_id=call_id, **arguments
-                )
-            messages.append(
-                ToolCallMessage(
-                    content=f"{name}({json.dumps(arguments)})",
-                    id=call_id,
-                    name=name,
-                    arguments=arguments,
-                )
+                tool = self.__read_file_tool
+            call = ToolCallMessage(
+                content=f"{name}({json.dumps(arguments)})",
+                id=call_id,
+                name=name,
+                arguments=arguments,
             )
+            result, hook_messages = tool.call(call)
+            messages.append(call)
             messages.extend(hook_messages)
             messages.append(result)
         return messages

@@ -43,7 +43,7 @@ class PermissionManager:
 
         Args:
             hook_manager: the hook manager :meth:`validate` dispatches
-                through; this manager adds itself to its context as
+                through; this manager provides itself as
                 ``permission_manager``.
             permissions: initial category-to-level grants, covering every
                 category. When omitted (``None``), built-in categories use their
@@ -56,7 +56,7 @@ class PermissionManager:
             }
         self._permissions: dict[PermissionCategory, PermissionLevel] = permissions
         self._hook_manager: HookManager = hook_manager
-        self._hook_manager.context["permission_manager"] = self
+        self._hook_manager.provide(permission_manager=self)
 
     def __repr__(self) -> str:
         """Return a developer-friendly representation of the permission grants.

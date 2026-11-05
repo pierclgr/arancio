@@ -169,4 +169,4 @@ class ToolManager:
         tool = self._tools.get(call.name)
         if tool is None:
             return ToolErrorMessage(content=f"Unknown tool {call.name}", id=call.id), []
-        return tool.call(call_id=call.id, **(call.arguments or {}))
+        return tool.call(call)

@@ -36,7 +36,14 @@ from arancio.core.tools.manager import ToolManager
 
 
 class Agent:
-    """Coding agent driving a multi-turn loop against an LLM client."""
+    """Coding agent driving a multi-turn loop against an LLM client.
+
+    Attributes:
+        system_prompt: rendered text for the current turn, editable during
+            SYSTEM_PROMPT_BUILD before the request is built. Initially empty.
+        turn: current zero-based loop index. Set at each iteration; edits remain
+            visible for that iteration without changing the loop's scheduling.
+    """
 
     def __init__(
         self,
@@ -61,7 +68,7 @@ class Agent:
                 its active tools from the allowed categories.
             hook_manager: the hook manager the loop and system-prompt build
                 dispatch through (see AGENTS.md's Hooks section); the agent
-                adds itself and ``client`` to its context as ``agent`` and
+                provides itself and ``client`` as ``agent`` and
                 ``client``.
             message_history: the model context the agent starts from, copied so
                 the caller keeps no handle on it. Defaults to none, an empty
@@ -76,6 +83,8 @@ class Agent:
             retry_delay_multiplier: factor the retry wait grows by on each
                 consecutive failed-turn retry (exponential backoff).
         """
+        self.system_prompt: str = ""
+        self.turn: int = 0
         self._client: Client = client
         self._max_turns: int | str = max_turns
         self._max_retries: int = max_retries
@@ -86,7 +95,7 @@ class Agent:
         self._permission_manager: PermissionManager = permission_manager
         self._tool_manager: ToolManager = tool_manager
         self._hook_manager: HookManager = hook_manager
-        self._hook_manager.context.update(agent=self, client=client)
+        self._hook_manager.provide(agent=self, client=client)
 
         self._refresh_tools()
 
@@ -395,23 +404,20 @@ class Agent:
             else range(self._max_turns)
         )
         for turn in turns:
+            self.turn = turn
             tool_calls: List[ToolCallMessage] = []
             received_finalized = False
             request = None
 
             # try sending request to the client, if something goes wrong, retry
             try:
-                yield from self._hook_manager.run(Hook.TURN_START, turn=turn)
+                yield from self._hook_manager.run(Hook.TURN_START)
 
-                system_prompt = self._system_prompt_builder.build()
-                yield from self._hook_manager.run(
-                    Hook.SYSTEM_PROMPT_BUILD, system_prompt=system_prompt
-                )
-                # a handler may have replaced the prompt in the shared context
-                system_prompt = self._hook_manager.context["system_prompt"]
+                self.system_prompt = self._system_prompt_builder.build()
+                yield from self._hook_manager.run(Hook.SYSTEM_PROMPT_BUILD)
                 request = self._client.build_request(
                     messages=self._message_history,
-                    system_prompt=system_prompt,
+                    system_prompt=self.system_prompt,
                     tools=self._tool_manager.tool_schemas,
                 )
                 yield from self._hook_manager.run(
@@ -504,7 +510,7 @@ class Agent:
             finally:
                 # closing a run must clean up without yielding
                 closing = isinstance(sys.exception(), GeneratorExit)
-                hook_messages = self._hook_manager.run(Hook.TURN_END, turn=turn)
+                hook_messages = self._hook_manager.run(Hook.TURN_END)
                 if not closing:
                     yield from hook_messages
 

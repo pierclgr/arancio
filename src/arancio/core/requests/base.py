@@ -7,9 +7,9 @@ from arancio.core.messages.base import Message
 from arancio.core.tools.schema import ToolSchema
 
 
-@dataclass(frozen=True)
+@dataclass
 class Request:
-    """Canonical request passed to every client implementation."""
+    """Mutable request shared with hooks before being sent to the client."""
 
     model_id: str
     thinking_effort: str | None = None

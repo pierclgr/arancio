@@ -75,8 +75,9 @@ def hook(event: Hook) -> Callable[[Callable], Callable]:
     """Bind a plain plugin instance method to one hook.
 
     Stack the decorator to bind the same method to several hooks. The method
-    is called with the hook manager's shared context dict as its only
-    argument. A returned message is forwarded through the normal message
+    receives only the services and current event arguments it declares by name.
+    Mutable objects can be edited directly without returning a replacement.
+    A returned message is forwarded through the normal message
     stream; other return values are ignored.
 
     Args:

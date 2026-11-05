@@ -160,9 +160,9 @@ class PermissionOutcome(Enum):
     UNAVAILABLE = "unavailable"
 
 
-@dataclass(frozen=True)
+@dataclass
 class PermissionDecision:
-    """Resolved permission for one tool call, for the caller to act on.
+    """Mutable permission resolution shared with hooks before the caller acts.
 
     Attributes:
         outcome: how the call was resolved.

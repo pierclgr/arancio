@@ -9,7 +9,7 @@ from dynamic_markdown.types.files.base import DynamicMarkdownFile
 from arancio.core.hooks.base import Hook
 from arancio.core.hooks.manager import HookManager
 from arancio.core.messages.base import Message
-from arancio.core.messages.tool import ToolResultMessage
+from arancio.core.messages.tool import ToolCallMessage, ToolResultMessage
 from arancio.core.parsers.tool_result.base import ToolResultParser
 from arancio.core.tools.constants import (
     TOOL_DESCRIPTION_FILENAME,
@@ -118,40 +118,33 @@ class Tool(ABC):
         """
         return type(self).__name__
 
-    def call(self, call_id: str, **kwargs) -> tuple[ToolResultMessage, list[Message]]:
-        """Execute the tool and return its result alongside hook messages.
+    def call(self, call: ToolCallMessage) -> tuple[ToolResultMessage, list[Message]]:
+        """Execute an existing call, sharing its identity with hook handlers.
 
-        Dispatches ``before_tool_call`` before running, ``error`` (with
-        ``source="tool"``) when :meth:`_call` raises, and ``after_tool_call``
-        once the result is built, successful or not. The result returned is
-        read back from the hook context after ``after_tool_call``, so a
-        handler that replaces ``context["result"]`` changes what the caller
-        gets. Only a :meth:`_call`
-        failure is caught here — a hook handler's own exception during any
-        of these three dispatches propagates out of this method instead of
-        becoming a :class:`~arancio.core.messages.tool.ToolErrorMessage`.
+        Handlers edit call.arguments before execution and call.id before result
+        parsing. The tool has already been selected: editing call.name here does
+        not route to another tool. Change the target in model-response hooks,
+        before permission resolution and selection.
+
+        Only _call failures become tool errors. Ordinary hook failures propagate.
+        Returned results keep edits made by after-tool handlers.
 
         Args:
-            call_id: identifier of the tool call this result answers.
-            **kwargs: tool arguments matching ``input_schema``.
+            call: the original model call, or a call created for direct execution.
 
         Returns:
-            The tool result and hook messages in dispatch order.
+            The result and hook messages in dispatch order.
         """
-        messages = self._hook_manager.run(
-            Hook.BEFORE_TOOL_CALL, name=self.name, call_id=call_id, arguments=kwargs
-        )
+        messages = self._hook_manager.run(Hook.BEFORE_TOOL_CALL, call=call)
         try:
-            output = self._call(**kwargs)
+            output = self._call(**call.arguments)
             is_error = False
         except Exception as exc:
             messages.extend(
                 self._hook_manager.run(
                     Hook.ERROR,
                     source="tool",
-                    name=self.name,
-                    call_id=call_id,
-                    arguments=kwargs,
+                    call=call,
                     error=exc,
                 )
             )
@@ -159,21 +152,18 @@ class Tool(ABC):
             is_error = True
 
         result = self._result_parser.parse(
-            call_id=call_id,
+            call_id=call.id,
             output=output,
             is_error=is_error,
         )
         messages.extend(
             self._hook_manager.run(
                 Hook.AFTER_TOOL_CALL,
-                name=self.name,
-                call_id=call_id,
-                arguments=kwargs,
+                call=call,
                 result=result,
             )
         )
-        # a handler may have replaced the result in the shared context
-        return self._hook_manager.context["result"], messages
+        return result, messages
 
     @abstractmethod
     def _call(self, **kwargs) -> Any:

@@ -143,7 +143,7 @@ that built it already holds it.
 
 **Client + request pipeline** (`core/clients/`, `core/builders/`, `core/parsers/`) —
 `Client` declares strategy class attrs `_request_builder` / `_payload_builder` /
-`_response_parser`. Flow: `build_request` → normalized frozen `Request` dataclass
+`_response_parser`. Flow: `build_request` → normalized mutable `Request` dataclass
 (model, thinking, system prompt, tools, messages) → `send_request` builds LiteLLM kwargs
 via the payload builder → `litellm.responses(**kwargs)` → response parser turns provider
 output back into normalized `Message`s (`parse` for a single response, `parse_stream` for
@@ -223,27 +223,76 @@ every dispatch point: `startup`/`shutdown`, `agent_start`/`agent_end`, `turn_sta
 `before_permission_check`/`after_permission_check`, and a single `error`. `HookManager`
 (`core/hooks/manager.py`) owns its own registrations — there is no global singleton, so
 two managers never share handlers. `register(hook, handler)` appends a handler for a hook;
-registering the same callable twice adds two invocations. Every handler takes **one**
-argument: the manager's public `context` dict. `run(hook, **event)` first writes the
-event's own data into `context` under those keys (object identity kept), then calls every
-handler registered for that hook synchronously, on the caller's thread, in registration
-order, passing the **same** `context` object to each — never a copy. So a handler changes
-a value by assigning a key (`context["system_prompt"] = ...`), and the next handler and
-the caller both see it. Event keys are **not** erased after dispatch: they stay until a
-later `run` overwrites them, so a handler should read only the keys its own hook sets
-(a `turn_start` handler still finds the last tool call's `result`). Besides the event
-keys, core fills the permanent keys **by itself**, with no outside wiring: each core
-component adds itself to the context of the hook manager it is built with —
-`HookManager.__init__` starts it as `{"hook_manager": self}`, `PermissionManager` adds
-`permission_manager`, and `Agent` adds `agent` and `client`. The clients never receive
-a hook manager, so the object holding each one registers it. So any code that builds the
-core objects with one shared hook manager gets a full context, whatever frontend (if
-any) drives them. If two objects of the same kind share one hook manager, the last one
-built owns the key. Returned `Message` objects are collected into a list in dispatch order; other return
-values are ignored. An exception raised by an ordinary handler propagates immediately,
-so handlers after it do not run. Dispatch iterates a snapshot of the handler list taken when `run` starts, so
-a handler that registers another handler mid-dispatch only affects the next call to `run`.
-A hook with no registered handlers returns an empty list. Both `core/hooks/__init__.py` and every
+registering the same callable twice adds two invocations. Handlers declare only the
+arguments they need by name, or capture available arguments with `**kwargs`. The manager inspects signatures once at registration and
+injects explicitly named positional-or-keyword and keyword-only parameters, without
+coercion. Defaults apply to unavailable optional parameters; missing required parameters
+fail when called. Positional-only parameters are unsupported. A declared `**kwargs` receives all
+remaining services and current event arguments; `*args` receives no arguments.
+
+`provide(**dependencies)` registers permanent services privately. The manager provides
+`hook_manager`, PermissionManager provides `permission_manager`, and Agent provides
+`agent` and `client`. Later providers replace matching names. `run(hook, **event)`
+combines these services with only the current event arguments (event names take
+precedence); events never persist between dispatches. There is no public context dict.
+Each handler receives the original objects, so attribute and container mutations are
+visible to later handlers and core. Reassigning a local parameter does not replace the
+caller's object.
+
+Prompt and turn state live on the existing Agent. `agent.system_prompt` is a string,
+initialized to empty and rebuilt each turn before `SYSTEM_PROMPT_BUILD`. Assign it
+directly; core reads that same attribute afterward to build the request. This does not
+change the cached builder text or harness file. `agent.turn` is the zero-based loop
+index, set before each `TURN_START`. Edits are visible for the rest of that iteration;
+the next iteration sets its own index, and loop scheduling/max-turn limits are unchanged.
+Neither value is injected separately.
+
+`Request` and `PermissionDecision` are mutable dataclasses. Edit fields on the existing
+injected `request` and `decision` objects, without returning replacements. Tool hooks
+receive the original mutable `call: ToolCallMessage`, with `name`, `id` and `arguments`
+attributes, instead of separate `name`, `call_id` and `arguments` parameters.
+Edit `call.arguments` before execution and `call.id` before result parsing. Tool
+selection already happened by `BEFORE_TOOL_CALL`; to change the target, edit the call
+in a model-response hook before permission resolution and selection. `Tool.name`
+remains the selected tool's class-based identifier. Both direct and model calls pass
+their `ToolCallMessage` to `Tool.call(call)` and share it with hooks. Tool results remain mutable:
+edit `result.content` and `result.display_text` independently.
+`source` stays an informational error-source label.
+No context dictionary, replacement return contract or new wrapper class is required.
+
+```python
+@hook(Hook.SYSTEM_PROMPT_BUILD)
+def customize(self, agent, **kwargs):
+    agent.system_prompt += "\nAdditional instructions."
+
+@hook(Hook.BEFORE_TOOL_CALL)
+def customize_call(self, call, **kwargs):
+    call.arguments["limit"] = 50
+```
+
+Additional event arguments (all hooks also have the permanent services above):
+
+| Hook | Event arguments |
+| --- | --- |
+| startup, shutdown, turn_start, turn_end, system_prompt_build | none |
+| agent_start | message |
+| agent_end | message_history |
+| before_model_request | request |
+| after_model_response | request, tool_calls |
+| message_received | response_message |
+| before_tool_call | call |
+| after_tool_call | call, result |
+| before_permission_check | call |
+| after_permission_check | call, decision |
+| error, source="tool" | source, error, call |
+| error, source="model" | source, error, request (possibly None) |
+| error, source="agent" | source, error (possibly None) |
+
+Returned `Message` objects are collected in dispatch order; other returns are ignored.
+Dispatch is synchronous and iterates a snapshot of registrations. Ordinary handler
+exceptions propagate immediately. Plugin guards preserve method signatures and catch
+invocation failures, reporting and disabling only that method.
+Both `core/hooks/__init__.py` and every
 sibling `core` package's `__init__.py` are empty; a caller imports `Hook` from
 `core.hooks.base` and `HookManager` from `core.hooks.manager` directly, the same as any
 other two-file `base.py`/`manager.py` package (`core/permissions/`, `core/controllers/`).
@@ -266,7 +315,7 @@ the supplied abstract UIController.show_login. Core imports no Application class
 
 Dispatch sites, by hook:
 - `Application.start`: `startup` (no event keys), once when the caller requests
-  startup output, before any user prompt. The shared context already contains the core objects.
+  startup output, before any user prompt. The permanent injectable services already contain the core objects.
   Returned messages join the settings and plugin-load startup messages in the UI;
   they are not added to agent history or saved to a session.
 - `Application.shutdown`: `shutdown` (no event keys), once after cancellation
@@ -276,7 +325,7 @@ Dispatch sites, by hook:
 - `Agent.__call__`: `agent_start` (`message`) — first statement, before the message is
   even recorded to history, and before the turn loop's own error handling exists: a
   handler exception here is not caught, retried or turned into an `ErrorMessage`, unlike
-  every other dispatch below. Then per turn: `turn_start` (`turn`, the loop index, 0-based)
+  every other dispatch below. Then per turn: `turn_start` (index available as `agent.turn`)
   — first line inside that turn's `try`, so a broken handler is retried like any other turn
   failure and still gets a paired `turn_end`; `before_model_request` (`request`) right after
   `build_request` returns; `message_received` (`response_message`) for each finalized
@@ -289,24 +338,22 @@ Dispatch sites, by hook:
   return, or `max_retries` exhausted), and once more with `error=None` when `max_turns` is
   exhausted by loop exhaustion rather than an exception — so exactly one of
   `agent_end`/`source="agent"` fires per completed run, modulo an unguarded `agent_start`
-  failure. `turn_end` (`turn`) fires from a `finally` wrapping the whole turn (one
+  failure. `turn_end` (index available as `agent.turn`) fires from a `finally` wrapping the whole turn (one
   `try`/`except`/`finally`, no extra nesting), exactly once per turn regardless of exit
   path — including, per ordinary Python `finally` semantics, that a `turn_end` handler's
   own exception replaces an in-flight `return` or exception rather than being appended
   after it. Returned messages are yielded except during `GeneratorExit`, when cleanup
   runs without yielding.
-- `Agent.__call__`: `system_prompt_build` (`system_prompt`), immediately after building
+- `Agent.__call__`: `system_prompt_build` (prompt available as `agent.system_prompt`), immediately after building
   the prompt and before `build_request`, inside the same per-turn `try`. The agent then
-  reads `context["system_prompt"]` back and builds the request from that, so a handler
-  that replaces it changes the prompt of the **same** turn. With `result` (see
-  `Tool.call` below), it is one of the two event keys core reads back today.
-- `Tool.call`: `before_tool_call` (`name`, `call_id`, `arguments`) before running;
-  `error` with `source="tool"` (`name`, `call_id`, `arguments`, `error`) when `_call`
-  raises; `after_tool_call` (`name`, `call_id`, `arguments`, `result`) once the result
+  reads `agent.system_prompt` and builds the request from that, so direct edits
+  change the prompt of the **same** turn.
+- `Tool.call`: `before_tool_call` (`call`) before running;
+  `error` with `source="tool"` (`call`, `error`) when `_call`
+  raises; `after_tool_call` (`call`, `result`) once the result
   message is built, unconditionally — both the `source="tool"` `error` and
-  `after_tool_call` fire on a failed call. `call` then returns `context["result"]`, read
-  back after `after_tool_call`, so a handler that replaces it (even with a
-  `ToolErrorMessage`) changes the result the agent and executor receive. Only `_call`'s own exceptions are caught by
+  `after_tool_call` fire on a failed call. `call` then returns the same result object after `after_tool_call`,
+  including any direct edits made by handlers. Only `_call`'s own exceptions are caught by
   `call`'s try/except; a handler exception raised during any of these three dispatches
   propagates out of `call` itself, unlike a tool's own failure. When that happens inside
   `Agent.__call__`'s tool-calling loop, it is caught by the *same* `except Exception as
@@ -323,10 +370,10 @@ Dispatch sites, by hook:
   three early returns.
 
 The three error sources (`tool`/`model`/`agent`) are unified under the single `error` hook
-rather than three separately named ones, distinguished by a `source` key — a handler that
-wants every failure registers once for `error` and reads `source`; one that only cares about
-tool failures filters on `context["source"] == "tool"`. The names in parentheses in the
-list above are the event keys each dispatch writes into `context`.
+rather than three separately named ones, distinguished by an injected `source` argument — a handler that
+wants every failure registers once for `error` and declares `source`; one that only cares about
+tool failures filters on `source == "tool"`. The names in parentheses in the
+list above are the event argument names each dispatch supplies.
 
 **Plugins** (`core/plugins/`) — `PluginManager.load()` imports `plugin.py` from
 immediate folders under `~/.arancio/plugins/`, sorted by folder name. Hidden and
@@ -386,10 +433,10 @@ and returns startup errors and warnings through the normal UI path. It runs befo
 permission and settings initialization, so plugin tool categories exist when default
 grants and the tool catalog are built. Instances receive no injected metadata, paths
 or context attributes. Bundled resources are available through
-`Path(__file__).resolve().parent`; the hook context remains separate from metadata.
+`Path(__file__).resolve().parent`; hook arguments remain separate from metadata.
 
 The manager binds each declared method once after construction. `@hook(Hook.X)` methods
-receive the shared context dictionary. Returned messages enter the normal message
+receive the named services and event arguments they declare. Returned messages enter the normal message
 stream; other return values are ignored. Notices should use `in_history=False` to stay
 outside model history. A failed method returns one `ErrorMessage` and is disabled across
 all its hooks for that instance. The disabled key uses instance identity and the original

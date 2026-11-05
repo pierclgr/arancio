@@ -1,6 +1,7 @@
-"""Synchronous handler registration and dispatch for named hooks."""
+"""Synchronous named-argument injection and dispatch for hooks."""
 
 from collections.abc import Callable
+from inspect import Parameter, signature
 from typing import Any
 
 from arancio.core.hooks.base import Hook
@@ -8,73 +9,66 @@ from arancio.core.messages.base import Message
 
 
 class HookManager:
-    """Register handlers against named hooks and run them synchronously.
+    """Inject named services and event arguments into synchronous handlers.
 
-    Each instance owns its own registrations; there is no global singleton,
-    so two managers never share handlers. Dispatch runs every handler
-    registered for a hook on the caller's thread, in registration order,
-    over a snapshot of the handler list taken when :meth:`run` starts — a
-    handler that registers another handler during dispatch affects only
-    later calls. Every handler receives the same :attr:`context` dict, so a
-    value one handler assigns is seen by the next handler and by the caller.
-    Returned messages are collected; other return values are ignored. An
-    exception raised by a handler propagates immediately, so any handlers
-    after it do not run.
-
-    Dispatched from :class:`~arancio.application.base.Application` for lifecycle hooks,
-    :meth:`~arancio.core.agents.base.Agent.__call__`,
-    :meth:`~arancio.core.tools.base.Tool.call` and
-    :meth:`~arancio.core.permissions.manager.PermissionManager.validate`; see
-    AGENTS.md's Hooks section for the full call-site and keyword-argument
-    contract.
-
-    Attributes:
-        context: the dict every handler receives. It starts with
-            ``hook_manager`` (this manager); the core components built with
-            this manager add themselves to it (``permission_manager``,
-            ``agent``, ``client``), and each
-            :meth:`run` writes its event keys, which stay until a later
-            dispatch overwrites them.
-        _handlers: registered handlers, keyed by hook.
+    Handlers run in registration order over a snapshot. Mutable arguments keep their
+    identity; event arguments never survive their dispatch. Returned messages are
+    collected, other returns ignored, and ordinary handler failures propagate.
     """
 
     def __init__(self) -> None:
-        """Initialize the manager with no handlers and itself in the context."""
-        self.context: dict[str, Any] = {"hook_manager": self}
-        self._handlers: dict[
-            Hook, list[Callable[[dict[str, Any]], Message | None]]
-        ] = {}
+        """Initialize independent registrations and permanent services."""
+        self._dependencies: dict[str, Any] = {"hook_manager": self}
+        self._handlers: dict[Hook, list[tuple[Callable, tuple[str, ...], bool]]] = {}
 
-    def register(
-        self, hook: Hook, handler: Callable[[dict[str, Any]], Message | None]
-    ) -> None:
-        """Register a handler to run whenever the given hook is dispatched.
+    def provide(self, **dependencies: Any) -> None:
+        """Provide permanent services, replacing previous values with the same name.
 
         Args:
-            hook: the hook the handler runs for.
-            handler: the callable to run, called with :attr:`context`.
-                Registering the same callable more than once adds one
-                invocation per registration.
+            **dependencies: services keyed by their injectable parameter names.
         """
-        self._handlers.setdefault(hook, []).append(handler)
+        self._dependencies.update(dependencies)
+
+    def register(self, hook: Hook, handler: Callable) -> None:
+        """Register a handler and inspect its explicitly named parameters once.
+
+        Args:
+            hook: the hook to attach to.
+            handler: callable accepting named arguments. Positional-only parameters
+                are unsupported; **kwargs receives all remaining available arguments.
+                Duplicate registrations each run independently.
+        """
+        parameters = signature(handler).parameters
+        names = tuple(
+            name
+            for name, parameter in parameters.items()
+            if parameter.kind
+            in (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY)
+        )
+        accepts_kwargs = any(
+            parameter.kind is Parameter.VAR_KEYWORD for parameter in parameters.values()
+        )
+        self._handlers.setdefault(hook, []).append((handler, names, accepts_kwargs))
 
     def run(self, hook: Hook, **event: Any) -> list[Message]:
-        """Write the event into the context and run every handler for the hook.
+        """Inject services and current event arguments into registered handlers.
 
         Args:
             hook: the hook to dispatch.
-            **event: the event's own data, written into :attr:`context` under
-                these keys before any handler runs, including object
-                references. A hook with no registered handlers still writes
-                them.
+            **event: arguments for this dispatch only, overriding matching services.
 
         Returns:
-            Handler messages in dispatch order.
+            Returned messages in dispatch order.
         """
-        self.context.update(event)
+        available = {**self._dependencies, **event}
         messages: list[Message] = []
-        for handler in list(self._handlers.get(hook, [])):
-            result = handler(self.context)
+        for handler, names, accepts_kwargs in list(self._handlers.get(hook, [])):
+            arguments = (
+                available
+                if accepts_kwargs
+                else {name: available[name] for name in names if name in available}
+            )
+            result = handler(**arguments)
             if isinstance(result, Message):
                 messages.append(result)
         return messages

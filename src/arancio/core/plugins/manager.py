@@ -3,7 +3,7 @@
 import importlib.util
 import sys
 from collections import Counter
-from functools import partial
+from functools import partial, update_wrapper
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
@@ -199,9 +199,9 @@ class PluginManager:
             method: the method bound to the plugin instance.
             hook: the event to attach the method to.
         """
-        self._hook_manager.register(
-            hook, partial(self.__guard_hook, plugin, method, hook)
-        )
+        guarded = partial(self.__guard_hook, plugin, method, hook)
+        update_wrapper(guarded, method)
+        self._hook_manager.register(hook, guarded)
 
     def __register_tool(
         self, plugin: Plugin, tool_class: type[PluginTool]
@@ -240,7 +240,7 @@ class PluginManager:
         return None
 
     def __guard_hook(
-        self, plugin: Plugin, method: Callable, hook: Hook, context: dict[str, Any]
+        self, plugin: Plugin, method: Callable, hook: Hook, **arguments: Any
     ) -> Message | None:
         """Run a bound method, reporting and disabling it after its first failure.
 
@@ -248,7 +248,7 @@ class PluginManager:
             plugin: the record used to identify the plugin in errors.
             method: the method already bound to the plugin instance.
             hook: the event used to identify a failing dispatch.
-            context: the hook manager's shared context dictionary.
+            **arguments: named arguments injected by the hook manager.
 
         Returns:
             The method's result, or one error when it first fails.
@@ -257,7 +257,7 @@ class PluginManager:
         if key in self._disabled:
             return
         try:
-            return method(context)
+            return method(**arguments)
         except Exception as exc:
             self._disabled.add(key)
             return ErrorMessage(

@@ -19,3 +19,6 @@ playground/
 
 # research bundle
 docs/
+
+# graphify output
+graphify-out/
