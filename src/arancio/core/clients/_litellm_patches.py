@@ -9,6 +9,7 @@ also forwarding a device code to the active client's login callback.
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from uuid import uuid4
 
 import litellm
 from litellm.llms.chatgpt.authenticator import Authenticator
@@ -17,16 +18,21 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
     LiteLLMCompletionStreamingIterator,
 )
 from litellm.types.llms.openai import (
+    BaseLiteLLMOpenAIResponseObject,
     OutputTextDeltaEvent,
     ReasoningSummaryTextDeltaEvent,
     ResponsesAPIStreamEvents,
 )
+from litellm.types.utils import ModelResponse
 
 # marker so the patch is applied at most once per process
 _MIXED_CHUNK_PATCH_FLAG = "_arancio_mixed_chunk_patched"
 
 # marker so the patch is applied at most once per process
 _FIRST_CHUNK_PATCH_FLAG = "_arancio_first_chunk_patched"
+
+# marker so the patch is applied at most once per process
+_SYNC_REASONING_PATCH_FLAG = "_arancio_sync_reasoning_patched"
 
 # marker so the patch is applied at most once per process
 _CHATGPT_DEVICE_CODE_PATCH_FLAG = "_arancio_chatgpt_device_code_patched"
@@ -232,6 +238,73 @@ def _patch_sync_first_chunk_drop() -> None:
     setattr(cls, _FIRST_CHUNK_PATCH_FLAG, True)
 
 
+def _patch_sync_reasoning_completion() -> None:
+    """Close reasoning items missing from LiteLLM's synchronous Responses bridge.
+
+    LiteLLM 1.87.1 retains reasoning in the assembled chat response but only closes its
+    streamed item on the async path (upstream issue #45561). Emit the missing events at
+    synchronous EOF, before the normal tool/message finalizers, using the same helpers
+    as the async path. Cache the assembled response so the original finalizer reuses it
+    rather than rebuilding it.
+
+    Respect upstream's completion flag to avoid duplicate items. Recheck this workaround
+    against the bridge when upgrading LiteLLM; it depends on private fields and event
+    helpers. Native Responses iterators are not patched.
+    """
+    cls = LiteLLMCompletionStreamingIterator
+    if getattr(cls, _SYNC_REASONING_PATCH_FLAG, False):
+        return
+
+    original = cls.common_done_event_logic
+
+    def _patched(
+        self: LiteLLMCompletionStreamingIterator, sync_mode: bool = True
+    ) -> BaseLiteLLMOpenAIResponseObject:
+        """Emit complete synchronous reasoning before ordinary final events.
+
+        Args:
+            self: the chat-to-Responses streaming iterator.
+            sync_mode: whether the caller is the synchronous iterator.
+
+        Returns:
+            The next reasoning completion event or the original finalizer's event.
+        """
+        if sync_mode and not self._reasoning_done_emitted:
+            if self.litellm_model_response is None:
+                self.litellm_model_response = self.create_litellm_model_response()
+            response = self.litellm_model_response
+            if isinstance(response, ModelResponse) and response.choices:
+                reasoning = getattr(
+                    response.choices[0].message, "reasoning_content", None
+                )
+                if reasoning:
+                    item_id = (
+                        self._reasoning_item_id
+                        or self._cached_reasoning_item_id
+                        or f"rs_{uuid4()}"
+                    )
+                    for create_event in (
+                        self.create_reasoning_summary_text_done_event,
+                        self.create_reasoning_summary_part_done_event,
+                        self.create_reasoning_output_item_done_event,
+                    ):
+                        self._sequence_number += 1
+                        self._pending_response_events.append(
+                            create_event(
+                                reasoning_item_id=item_id,
+                                reasoning_content=reasoning,
+                                sequence_number=self._sequence_number,
+                            )
+                        )
+                    self._reasoning_done_emitted = True
+                    self._reasoning_active = False
+                    return self._pending_response_events.pop(0)
+        return original(self, sync_mode=sync_mode)
+
+    cls.common_done_event_logic = _patched
+    setattr(cls, _SYNC_REASONING_PATCH_FLAG, True)
+
+
 def _patch_chatgpt_device_code_notice() -> None:
     """Publish ChatGPT device codes instead of leaving them on worker stdout.
 
@@ -268,4 +341,5 @@ def apply() -> None:
     _ = litellm  # ensure litellm is imported before patching its internals
     _patch_mixed_reasoning_text_chunk()
     _patch_sync_first_chunk_drop()
+    _patch_sync_reasoning_completion()
     _patch_chatgpt_device_code_notice()
