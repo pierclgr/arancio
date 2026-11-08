@@ -33,7 +33,7 @@ class ShellCommandTool(Tool):
 
     @property
     def _shell_label(self) -> str:
-        """Return a human-readable label for the shell in effect on this host.
+        """A human-readable label for the shell in effect on this host.
 
         Returns:
             ``"PowerShell"`` on Windows, or the POSIX shell description

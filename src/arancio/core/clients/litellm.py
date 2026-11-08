@@ -117,7 +117,7 @@ class LiteLLMClient(Client):
 
     @property
     def stream(self) -> bool:
-        """Return whether responses are streamed incrementally.
+        """Whether responses are streamed incrementally.
 
         Returns:
             ``True`` when the client streams responses, ``False`` when it

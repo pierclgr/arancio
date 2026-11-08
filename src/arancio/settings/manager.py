@@ -60,7 +60,7 @@ class SettingsManager:
 
     @property
     def settings(self) -> Settings:
-        """Return a detached copy of the active settings.
+        """A detached copy of the active settings.
 
         Returns:
             A snapshot whose fields and permission dictionary can be changed
@@ -70,7 +70,7 @@ class SettingsManager:
 
     @property
     def global_settings(self) -> Settings:
-        """Return a detached copy of the loaded or successfully saved defaults.
+        """A detached copy of the loaded or successfully saved defaults.
 
         Returns:
             An independent snapshot of the global-default values.

@@ -147,7 +147,7 @@ class ToolManager:
 
     @property
     def tool_schemas(self) -> list[ToolSchema]:
-        """Return the schemas of the active tools.
+        """The schemas of the active tools.
 
         Returns:
             One schema per active tool, in catalog order.

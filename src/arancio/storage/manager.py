@@ -34,7 +34,7 @@ class StorageManager:
 
     @property
     def root(self) -> Path:
-        """Return the absolute base directory used for relative paths.
+        """The absolute base directory used for relative paths.
 
         Returns:
             The application-data directory.

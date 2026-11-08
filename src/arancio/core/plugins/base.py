@@ -59,7 +59,7 @@ class Plugin:
 
     @property
     def location(self) -> str:
-        """Return the source location used in startup diagnostics.
+        """The source location used in startup diagnostics.
 
         Returns:
             The plugin's relative file path and class name.

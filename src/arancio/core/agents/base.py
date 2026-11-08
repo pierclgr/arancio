@@ -133,7 +133,7 @@ class Agent:
 
     @property
     def max_turns(self) -> int | str:
-        """Return the maximum number of loop turns per run.
+        """The maximum number of loop turns per run.
 
         Returns:
             The maximum number of turns before the run aborts, or ``"inf"``
@@ -152,7 +152,7 @@ class Agent:
 
     @property
     def max_retries(self) -> int:
-        """Return the maximum number of consecutive failed turns per run.
+        """The maximum number of consecutive failed turns per run.
 
         Returns:
             The maximum number of consecutive failed turns before the run
@@ -171,7 +171,7 @@ class Agent:
 
     @property
     def retry_delay(self) -> float:
-        """Return the base wait before retrying a failed turn.
+        """The base wait before retrying a failed turn.
 
         Returns:
             The base retry wait in seconds.
@@ -189,7 +189,7 @@ class Agent:
 
     @property
     def retry_delay_multiplier(self) -> float:
-        """Return the factor the retry wait grows by on each consecutive retry.
+        """The factor multiplying the retry wait on each consecutive retry.
 
         Returns:
             The exponential-backoff multiplier.

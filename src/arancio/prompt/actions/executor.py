@@ -98,7 +98,7 @@ class ActionExecutor:
 
     @property
     def is_running(self) -> bool:
-        """Return whether this executor owns an active Core execution."""
+        """Whether this executor owns an active Core execution."""
         return self.__execution is not None
 
     def close(self) -> None:

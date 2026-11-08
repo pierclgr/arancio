@@ -61,7 +61,7 @@ class FetchWebTool(Tool):
 
     @property
     def client(self) -> Client:
-        """Return the summarization client.
+        """The summarization client.
 
         Returns:
             The client used for the summarization request.

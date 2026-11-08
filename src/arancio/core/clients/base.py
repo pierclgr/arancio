@@ -94,7 +94,7 @@ class Client(ABC):
 
     @property
     def model_id(self) -> str | None:
-        """Return the model id used for outgoing requests.
+        """The model ID used for outgoing requests.
 
         Returns:
             The current model id, or ``None`` when no default exists and
@@ -122,7 +122,7 @@ class Client(ABC):
 
     @property
     def thinking_effort(self) -> str | None:
-        """Return the thinking effort used for outgoing requests.
+        """The thinking effort used for outgoing requests.
 
         Returns:
             The current effort string, or ``None`` when none is set.
@@ -149,7 +149,7 @@ class Client(ABC):
 
     @property
     def thinking_summary(self) -> str | None:
-        """Return the reasoning summary level used for outgoing requests.
+        """The reasoning summary level used for outgoing requests.
 
         Returns:
             The current summary level, or ``None`` when none is set.

@@ -56,7 +56,7 @@ class _PermissionCategoryMeta(type):
 
     @property
     def __members__(cls) -> dict[str, "PermissionCategory"]:
-        """Return every registered category keyed by its uppercased name.
+        """Every registered category keyed by its uppercased name.
 
         Returns:
             A copy of the registry.

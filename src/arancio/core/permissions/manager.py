@@ -126,7 +126,7 @@ class PermissionManager:
 
     @property
     def allowed_categories(self) -> Set[PermissionCategory]:
-        """Return the categories whose tools may be built.
+        """The categories whose tools may be built.
 
         Returns:
             Every category granted at a level other than

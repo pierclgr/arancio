@@ -274,6 +274,7 @@ state, confirmation, notices). Internals (`SessionRecorder`, `SessionChecksum`,
 ## Conventions
 
 - **Docstrings**: Google style on all public symbols, tests included.
+  Property summaries describe values rather than actions.
 - **Style**: `ruff` (`E,F,I`), `ruff format`.
 - **Comments**: lowercase start, no final period, only for non-obvious code.
 - **Files**: `snake_case.py`, Markdown `UPPER_SNAKE_CASE.md`; `src/`, `tests/`.

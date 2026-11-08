@@ -111,7 +111,7 @@ class Tool(ABC):
 
     @property
     def name(self) -> str:
-        """Return the tool's name, derived from the python class name.
+        """The tool's name, derived from the Python class name.
 
         Returns:
             The class name of this tool instance.

@@ -159,7 +159,7 @@ class Session:
 
     @property
     def name(self) -> str:
-        """Return the explicit name, or the ID when no name is set."""
+        """The explicit name, or the ID when no name is set."""
         return self.id if self.explicit_name is None else self.explicit_name
 
     @name.setter
@@ -218,7 +218,7 @@ class SessionState:
 
     @property
     def name(self) -> str:
-        """Return the explicit name, or the ID when no name is set."""
+        """The explicit name, or the ID when no name is set."""
         return self.id if self.explicit_name is None else self.explicit_name
 
 
@@ -236,7 +236,7 @@ class SessionRegistryEntry:
 
     @property
     def name(self) -> str:
-        """Return the explicit name, or the ID when no name is set."""
+        """The explicit name, or the ID when no name is set."""
         return self.id if self.explicit_name is None else self.explicit_name
 
 
