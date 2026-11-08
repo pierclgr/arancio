@@ -37,6 +37,27 @@ Configure provider credentials as required by LiteLLM before sending a prompt. A
 - Persistent sessions, including conversation history and resumable work
 - Built-in slash commands for changing models, permissions, effort, and sessions
 
+## File Attachments
+
+Mention a file in a prompt to attach its contents:
+
+- `@file.py` reads from the beginning.
+- `@file.py:110` reads line 110.
+- `@file.py:110-120` reads lines 110 through 120, inclusive.
+- `@"folder/file name.py":110-120` supports paths containing spaces.
+
+Zero, negative and reversed selectors, and selectors starting beyond the end
+of the file, fall back to the whole-file read when the file exists. A range
+that starts within the file and ends beyond it returns through the last line.
+Every read selects at most 2,000 raw source lines. A valid range in a longer
+file can start beyond line 2,000.
+
+For Markdown, source lines are selected and capped before dynamic Markdown
+expansion. Only complete tags in the selected text expand; cut-off tags remain
+literal. Expanded output can exceed 2,000 lines. Its numbering starts at `1`,
+and the footer separately shows the original source range. Model-initiated
+file reads use the same source-selection and expansion order.
+
 ## Project Structure
 
 ```text

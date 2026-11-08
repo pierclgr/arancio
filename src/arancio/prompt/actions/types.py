@@ -47,6 +47,21 @@ class ShellCommandAction(Action):
 
 
 @dataclass
+class FileMention:
+    """An existing file or directory and optional inclusive source-line bounds.
+
+    Attributes:
+        path: the resolved absolute target path.
+        start_line: the first requested source line, or None for a whole-file read.
+        end_line: the last requested source line, or None for a whole-file read.
+    """
+
+    path: Path
+    start_line: int | None = None
+    end_line: int | None = None
+
+
+@dataclass
 class PromptAction(Action):
     """Send the raw prompt text to the model.
 
@@ -54,11 +69,10 @@ class PromptAction(Action):
         prompt: the prompt to send to the model, with every resolving
             @mention already rewritten to its resolved absolute path.
         raw_input: the exact text the user submitted before parsing.
-        mentions: absolute paths resolved from @mention tokens in the
-            prompt, in the order they appear. Empty when the prompt had
-            none.
+        mentions: resolved targets and source-line bounds from @mention tokens,
+            in their original order. Empty when the prompt had none.
     """
 
     prompt: str
     raw_input: str
-    mentions: list[Path] = field(default_factory=list)
+    mentions: list[FileMention] = field(default_factory=list)

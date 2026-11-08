@@ -1,799 +1,303 @@
 # AGENTS.md
 
-This file provides guidance to coding agents when working with code in this repository.
+Guidance for coding agents working in this repository.
 
 ## Project
 
-`arancio` — "another coding agent". A terminal (Textual TUI) coding agent that drives a
-multi-turn loop against any LLM through the LiteLLM **Responses API**. Python ≥ 3.11,
-managed with `uv`.
+`arancio` ("another coding agent"): a Textual TUI coding agent running a
+multi-turn loop against any LLM through the LiteLLM **Responses API**.
+Python ≥ 3.11, managed with `uv`.
 
 ## Commands
 
-Everything runs against the project venv (`.venv/`). The git hooks call binaries directly
-(`.venv/bin/ruff`); interactively you can also use `uv run <cmd>`.
+All tools run from `.venv/` (`uv run <cmd>` also works).
 
-- **Run the app**: `uv run arancio` (console script → `arancio.ui.__main__:main`), or `.venv/bin/arancio`
-- **Install / sync deps**: `uv sync` (add a dep with `uv add <pkg>`)
-- **Tests**: `.venv/bin/python -m pytest tests/`
-  - single file: `... -m pytest tests/test_agents.py`
-  - single test: `... -m pytest tests/test_agents.py::test_name`
-  - the suite is flat under `tests/`, one file per layer, plus `conftest.py`
-    (isolation and shared fixtures) and `fakes.py` (every hand-written double).
-    `tests/test_integration.py` wires the real object graph end to end.
-- **Lint**: `.venv/bin/ruff check src/ tests/` (rules `E,F,I`); autofix `ruff check --fix`; format `ruff format src/ tests/`
-- **Docstring completeness** (Google style, enforced on push): `.venv/bin/ruff check --select=D,DOC --preview src/ tests/`
-- **Docstring wrapping**: `.venv/bin/docformatter --in-place --recursive --wrap-summaries 88 --wrap-descriptions 88 src/ tests/`
+- **Run**: `uv run arancio` (→ `arancio.ui.__main__:main`)
+- **Sync deps**: `uv sync`; add one with `uv add <pkg>`
+- **Tests**: `.venv/bin/python -m pytest tests/` (append `::test_name` for one)
+- **Lint**: `.venv/bin/ruff check src/ tests/` (`E,F,I`)
+- **Format**: `.venv/bin/ruff format src/ tests/`
+- **Docstrings**: `.venv/bin/ruff check --select=D,DOC --preview src/ tests/`
+- **Docstring wrap**: `.venv/bin/docformatter --in-place --recursive --wrap-summaries 88 --wrap-descriptions 88 src/ tests/`
 
-`core.hooksPath` is set to `hooks/`, so the checked-in hooks are already active:
-`pre-commit` auto-fixes + formats staged `src/`/`tests/` and blocks on remaining lint
-errors; `pre-push` runs the docstring check and the full test suite.
+Hooks in `hooks/` are active (`core.hooksPath`): `pre-commit` fixes, formats and
+lints staged files; `pre-push` runs the docstring check and the test suite.
 
-## Runtime working directory (important)
+## Runtime directory: `~/.arancio/`
 
-At runtime tools do **not** read their prompts from the repo. They read from the arancio
-working directory `~/.arancio/` (shared paths are in `core/constants.py`, with
-component-specific paths in each component's `constants.py`).
-Storage uses `ARANCIO_DEFAULT_DIR` as its root;
-startup caller migration is deferred; Settings and Sessions now use Storage's APIs:
+Paths are in `core/constants.py` and each component's `constants.py`.
 
-- `~/.arancio/harness/tools/<snake_tool_name>/{description.md,input_schema.yml}` — each
-  tool's description and JSON input schema, loaded from disk by `Tool.__init__`.
-- `~/.arancio/harness/SYSTEM_PROMPT.md` — the agent's system prompt.
-  `SystemPromptBuilder` seeds it with a default when absent, parses it as dynamic
-  markdown once, and caches the text; `build()` (called once per agent turn) returns
-  that cached text with the current date appended. Runtime context that must stay
-  fresh belongs in `build()`, **not** in a `<script>` tag in the markdown — the file is
-  parsed once, so a date computed there would freeze at startup.
-- `~/.arancio/settings.yml` — values persisted by SettingsManager through Storage;
-  `settings/constants.py` supplies only the relative `ARANCIO_SETTINGS_FILENAME`.
-- `~/.arancio/litellm/` — the intended destination for LiteLLM login data. Future
-  startup wiring will supply the paths to Storage's generic `move_directory` and
-  `create_symlink`; the provider-specific Storage helper has been removed.
-- `~/.arancio/sessions/<creation-cwd>/<year>/<month>/<day>/<id>.jsonl` — one
-  append-only chat session per file. The readable creation-CWD directory has a hash suffix
-  to avoid collisions; session IDs are UUID4 hex strings. There is no persisted registry:
-  `SessionRegistry` is rebuilt by scanning these files at launch.
-- `~/.arancio/plugins/<folder>/plugin.py` — entry files scanned at launch by
-  `PluginManager` (see **Plugins** below). Each `@plugin(...)` class is an independent
-  plugin; one file can hold several. The user places folders here by hand: nothing
-  creates the directory, and a missing one means no plugins. Folders without `plugin.py`
-  are skipped. YAML manifests are not read.
+- `harness/tools/<snake_tool_name>/{description.md,input_schema.yml}`: read by
+  `Tool.__init__` (raises if missing).
+- `harness/SYSTEM_PROMPT.md`: seeded if absent, parsed once and cached by
+  `SystemPromptBuilder`; `build()` appends the current date each turn. Put
+  fresh runtime context in `build()`, never in a `<script>` tag.
+- `settings.yml`: written by `SettingsManager` through Storage.
+- `litellm/`: LiteLLM login data (moved/symlinked by Storage's generic ops).
+- `sessions/<cwd-name+hash>/<y>/<m>/<d>/<uuid4hex>.jsonl`: one append-only log
+  per session. No registry file; `SessionRegistry` rescans at launch.
+- `plugins/<folder>/plugin.py`: placed by hand; nothing creates the directory.
 
-The repo's `harness/` is the **source** for those prompt files; there is no auto-copy, so
-editing `harness/` in the repo has no effect on a real run until the files are placed
-under `~/.arancio/harness/`. **Tests** must sidestep this by repointing
-`tools_base.TOOLS_HARNESS_PATH` and
-`system_prompt_builder.SYSTEM_PROMPT_HARNESS_PATH` at the repo's `harness/` before any
-test imports, or they read the real home directory. The previous suite's
-`tests/conftest.py` did this at import time. Test sources were removed before the
-Storage refactor and are not restored in this step. `Tool.__init__` reads the path
-at construction and raises when the directory is missing.
-
-**Storage's root anchors paths; it is not a sandbox.** Every Storage operation
-anchors relative paths to the application root; explicit absolute paths are accepted
-as supplied. No Storage method substitutes a global settings or login path.
-Other modules still have their own home-directory defaults. Future tests must
-redirect these on the *importing* module or pass explicit temporary paths:
-
-| Constant, as imported | Read by | What an unpatched test does |
-| --- | --- | --- |
-| `core.plugins.manager.PLUGINS_PATH` | `PluginManager.__init__` | imports and runs the user's real plugins |
-| `storage.manager.ARANCIO_DEFAULT_DIR` | `StorageManager.__init__` | anchors relative settings/session paths to the real data directory |
-
-Storage tests should repoint `storage.manager.ARANCIO_DEFAULT_DIR` and use temporary
-source/target paths. Plugin loading remains a separate I/O boundary, outside Storage.
+The repo's `harness/` is only the **source** of those files; there is no copy
+step. Storage's root anchors relative paths; absolute paths pass through.
 
 ## Architecture
 
-Layered and provider-agnostic. The recurring pattern is a `base.py` abstract class plus a
-provider file (e.g. `litellm.py`); adding a provider means a new `Client` subclass
-with its own builder/parser trio, not touching the core loop.
+Layered and provider-agnostic: a `base.py` abstract class plus provider files
+(e.g. `litellm.py`). A new provider is a new `Client` subclass with its own
+builder/parser trio. Every `__init__.py` under `core/` is empty; import from
+the module (`core.hooks.base`, `core.hooks.manager`, ...).
 
-**Wiring** — Application.build(controller) in application/base.py constructs
-the backend graph. It uses the current StorageManager(), prepares explicit
-LiteLLM login paths, creates shared HookManager/ToolSession/clients/ToolManager, loads
-plugins, loads Settings, then constructs PermissionManager, Agent, Sessions, direct tools
-and Application. Plugins load before category/grant snapshots. Both clients receive
-controller.show_login as their one-way login callback; summary thinking stays disabled.
+### Wiring
 
-Application and ApplicationStatus live in application/base.py. Application applies the
-loaded settings before execution and owns later apply/save/session coordination.
-UIController in ui/controllers/base.py is the abstract frontend contract.
-TUIController (ui/controllers/tui.py) implements it for the Textual TUIApp, and
-ui/__main__.py connects the two to Application.build(controller) (see **UI** below).
+`Application.build(controller)` (`application/base.py`) creates
+`StorageManager`, LiteLLM login paths, one shared `HookManager` and
+`ToolSession`, the clients, `ToolManager`, then loads plugins, then Settings,
+then `PermissionManager`, `Agent`, `SessionManager`, direct tools and
+`Application`. **Plugins load before Settings/Permissions** so plugin
+categories exist. Clients get `controller.show_login` as login callback; they
+get no HookManager. `ui/__main__.py` builds `TUIController` →
+`Application.build` → `TUIApp(application)`, then attaches the app.
 
-**Messages** (`core/messages/`) — the lingua franca between clients, agent and UI. Every
-message carries `content` (fed to the model) and `display_text` (shown in the UI), plus
-**one** routing flag: `in_history` (model context). That is the only consumer core speaks
-for, because it owns neither a session nor a UI — persistence and display are each
-decided by the consumer that owns them: `SessionRecorder` keeps everything but chunks and
-takes `visible` as an argument from whoever asks for the write, and the UI renders what it
-is handed. `in_history` defaults to true, except on `ErrorMessage`, which defaults to
-`False` — an error reports what went wrong in this run, not what the conversation was, so
-it is shown and saved but never fed back to the model. `ToolErrorMessage` is the exception
-to the exception: `ToolResultMessage.__init__` wins in the MRO, so a failed tool call keeps
-`in_history=True`, being the outcome the model asked for. The hierarchy uses multiple inheritance
-for the chunk/error variants (`AssistantChunkMessage`, `ReasoningChunkMessage`,
-`ToolErrorMessage`). `ChunkMessage` marks streaming deltas;
-finalized messages are everything else. `WarningMessage` mirrors `ErrorMessage` at
-non-fatal severity (rendered with the `.warning` CSS class instead of `.error`); settings
-validation is its main producer. There is no audit message type: a fact that only a
-session would keep — the mtime a file tool left behind — is derived by the session layer
-from the shared `ToolSession`, not announced by core.
+### Messages (`core/messages/`)
 
-**Agent loop** (`core/agents/base.py`) — holds a flat `List[Message]` history, empty unless the
-constructor is given a `message_history` (copied, not aliased) — the seam a resumed session
-will use to hand its restored model context to the agent at startup, alongside the existing
-post-construction `restore_history`. Per turn: build
-request → stream response messages (yielding chunks live, appending only finalized ones to
-history) → if any `ToolCallMessage`, gate each through `PermissionManager.validate`, run
-it, append the `ToolResultMessage` (+ optional user note) → next turn. Natural stop on a
-text-only reply. `max_turns="inf"` means unlimited; failed turns retry with exponential
-backoff up to `max_retries` consecutive failures. A post-stream exception that fires
-*after* finalized messages were delivered does not retry.
+Each message has `content` (for the model), `display_text` (for the UI) and one
+flag `in_history` (default true). `ErrorMessage` defaults to `False`;
+`ToolErrorMessage` keeps `True` (MRO). `ChunkMessage` marks streaming deltas.
+`WarningMessage` is a non-fatal `ErrorMessage` (`.warning` CSS). Persistence and
+display are decided by their owners, not core.
 
-**The agent does not save anything.** Persistence is not agent business logic, and core
-owns no session. The agent is called directly — `__call__()` (there is no `run()`) yields
-`Iterator[Message]`: `_emit` appends a message to history
-and yields it, nothing more. Every message it yields is meant for the user, so a consumer
-forwards the stream unfiltered — see `ActionExecutor` under **Prompt & commands**.
-The initial `message` is appended to history but **never yielded**, because the caller
-that built it already holds it.
+### Agent (`core/agents/base.py`)
 
-**Client + request pipeline** (`core/clients/`, `core/builders/`, `core/parsers/`) —
-`Client` declares strategy class attrs `_request_builder` / `_payload_builder` /
-`_response_parser`. Flow: `build_request` → normalized mutable `Request` dataclass
-(model, thinking, system prompt, tools, messages) → `send_request` builds LiteLLM kwargs
-via the payload builder → `litellm.responses(**kwargs)` → response parser turns provider
-output back into normalized `Message`s (`parse` for a single response, `parse_stream` for
-SSE). `LiteLLMClient` routes *any* provider by `model_id` prefix (`openai/…`,
-`anthropic/…`, …) and lets LiteLLM resolve credentials from env vars. The Responses API is
-used specifically because it round-trips reasoning items (`ReasoningMessage`).
-`_litellm_patches.apply()` monkeypatches bugs in the pinned LiteLLM at import;
-`_register_native_streaming` works around LiteLLM's fake-stream path for models missing
-from its registry.
+`__call__()` yields `Iterator[Message]` (no `run()`). It keeps a flat history
+(optional copied `message_history` in the constructor, or `restore_history`).
+Per turn: build request → stream (yield chunks, store finalized) → for each
+`ToolCallMessage`: `PermissionManager.validate`, run, append result (+ optional
+user note) → next turn. Stops on a text-only reply. `max_turns="inf"` is
+unlimited; failures retry with exponential backoff up to `max_retries`, except
+after finalized messages were delivered. The initial message is stored but
+**not yielded**. The agent saves nothing; consumers forward its stream as is.
 
-For a ChatGPT device-code login, the LiteLLM patch emits a one-way controller request with
-the verification URL and user code before LiteLLM polls for authorization. `UIController`
-places a clickable link and copyable URL/code in the log, returning immediately; sign-in
-details are UI-only and never enter agent history.
+### Clients (`core/clients/`, `core/builders/`, `core/parsers/`)
 
-**Thinking effort is not graded on every provider.** `reasoning={"effort": ...}` is sent
-unconditionally by `LiteLLMPayloadBuilder.build` regardless of provider. For Ollama models
-(`ollama/…`, `ollama_chat/…`), LiteLLM bridges the Responses call through its chat-completion
-path, and its Ollama param mapping (`litellm/llms/ollama/{chat,completion}/transformation.py`)
-reduces `reasoning_effort` to a boolean: `optional_params["think"] = value in {"low",
-"medium", "high"}` for any model not prefixed `gpt-oss`. So `/effort low|medium|high` all
-collapse to the same `think: true` (no depth distinction) and any other value silently
-becomes `think: false` — only `gpt-oss` models forward the tier string as-is. Separately,
-setting `thinking_summary` alongside `thinking_effort` for a non-`gpt-oss` Ollama model
-crashes at the same mapping line with `TypeError: unhashable type: 'dict'` (LiteLLM keeps
-the whole `reasoning` dict as `reasoning_effort` once `summary` is present), so
-`thinking_summary` should stay `None` for Ollama models until upstream fixes this.
+`Client` sets `_request_builder`, `_payload_builder`, `_response_parser`. Flow:
+`build_request` → mutable `Request` → payload builder → `litellm.responses` →
+`parse` / `parse_stream` → `Message`s. `LiteLLMClient` routes by `model_id`
+prefix; credentials come from env vars. `_litellm_patches.apply()` patches
+pinned-LiteLLM bugs, including the ChatGPT device-code login notice sent to the
+controller (UI-only, never in history).
 
-**Tools** (`core/tools/`) — `Tool` subclasses implement `_call`; the public `call`
-wraps success/exception into a `ToolResultMessage`/`ToolErrorMessage` through the tool's
-`_result_parser`. It returns `(result, hook_messages)`, keeping plugin errors separate
-from the tool outcome. The tool's **name is its class name**, and its description/input schema
-are loaded from the harness dir (see runtime section); descriptions are dynamic-markdown
-(`<field>`, `<include>`, `<script>` tags expand against the tool instance). A
-`ToolSession` records which files were read so write/edit tools can refuse blind
-overwrites of unread or externally-modified files. Tools receive it as `tool_session`
-and store it as `_tool_session`. The same instance survives the tool rebuilds performed
-by `ToolManager.refresh` whenever permissions change. Families: `files/` (read, write, edit),
-`commands/` (shell), `web/` (search, fetch — fetch takes an
-injected summary client).
+**Ollama caveat**: `reasoning={"effort": ...}` is always sent, but for
+non-`gpt-oss` Ollama models LiteLLM turns it into `think: true|false`, so
+low/medium/high are equal. Setting `thinking_summary` there crashes LiteLLM
+(`unhashable type: 'dict'`); keep it `None` for Ollama.
 
-**Permissions** (`core/permissions/`) — `PermissionCategory` groups tool classes sharing a
-capability: the built-in `READ`/`WRITE`/`WEB`/`EXECUTE`/`PLUGIN`, plus whatever per-plugin
-categories `@tool(category="CUSTOM")` creates at plugin-load time (see **Plugins** below).
-It is **not** an `enum.Enum` — a category's tool set has to stay open for a plugin tool
-to join it, or for a wholly new category to appear, after the built-ins already exist,
-which a closed `Enum` cannot do. A small `_PermissionCategoryMeta` metaclass gives it the
-same class-level surface an `Enum` would (`for category in PermissionCategory`,
-`PermissionCategory[name]`, `PermissionCategory.__members__`), backed by a `_REGISTRY`
-dict keyed by uppercased name so lookup stays case-insensitive; `get(name)`/
-`get_or_create(name)` are the non-raising, idempotent ways to read or register a category,
-and `add_tool(tool_cls)` grows its mutable `.tools` set (not names → still refactor-safe).
-`PermissionLevel` is NONE, ASK or AUTO. The grants dict always covers every *currently
-registered* category — a category not granted is present at `NONE`, never absent — which
-is why `PluginManager.load()` (see **Plugins**) has to run, and does run, before any
-`PermissionManager`/`SettingsManager` is built. Settings snapshots the known categories
-from the registry at construction; categories discovered afterward are not
-added to its snapshots.
-`PermissionManager` owns the
-`ToolManager`, so tools in a NONE category are **never even instantiated**; the
-`allowed_tools` property is what builds them. `validate` runs
-AUTO calls silently and delegates ASK calls to the controller; denials and user notes are
-fed back to the model as messages rather than raising. It returns `(decision, hook_messages)`. The plain
-`PermissionDecision` (`core/permissions/types.py`): a `PermissionOutcome`
-(ALLOWED / DENIED / UNAVAILABLE) plus the user's `note`. It forwards hook messages but
-builds no permission messages — the
-agent's `_permission_message` turns the decision into the `ToolErrorMessage` (worded
-differently for a denial and for a missing tool) or the report-then-answer `UserMessage`,
-so model-facing wording stays in the one place that talks to the model. How a call was
-authorized is **not** recorded — the session keeps only what a resumed run needs, and the
-`ToolResultMessage`/`ToolErrorMessage` already say whether the tool ran.
+### Tools (`core/tools/`)
 
-**Hooks** (`core/hooks/`) — `Hook` (`core/hooks/base.py`) is a string-valued enum naming
-every dispatch point: `startup`/`shutdown`, `agent_start`/`agent_end`, `turn_start`/`turn_end`,
-`system_prompt_build`, `before_model_request`/`after_model_response`,
-`message_received`, `before_tool_call`/`after_tool_call`,
-`before_permission_check`/`after_permission_check`, and a single `error`. `HookManager`
-(`core/hooks/manager.py`) owns its own registrations — there is no global singleton, so
-two managers never share handlers. `register(hook, handler)` appends a handler for a hook;
-registering the same callable twice adds two invocations. Handlers declare only the
-arguments they need by name, or capture available arguments with `**kwargs`. The manager inspects signatures once at registration and
-injects explicitly named positional-or-keyword and keyword-only parameters, without
-coercion. Defaults apply to unavailable optional parameters; missing required parameters
-fail when called. Positional-only parameters are unsupported. A declared `**kwargs` receives all
-remaining services and current event arguments; `*args` receives no arguments.
+Subclasses implement `_call`; `call(call)` returns `(result, hook_messages)`,
+wrapping errors in `ToolErrorMessage` via `_result_parser`. Tool name = class
+name. Descriptions are dynamic markdown (`<field>`, `<include>`, `<script>`).
+The shared `ToolSession` (`_tool_session`) tracks read files so write/edit
+refuse unread or externally changed files; it survives `ToolManager.refresh`.
+Families: `files/`, `commands/`, `web/` (fetch uses an injected summary client).
 
-`provide(**dependencies)` registers permanent services privately. The manager provides
-`hook_manager`, PermissionManager provides `permission_manager`, and Agent provides
-`agent` and `client`. Later providers replace matching names. `run(hook, **event)`
-combines these services with only the current event arguments (event names take
-precedence); events never persist between dispatches. There is no public context dict.
-Each handler receives the original objects, so attribute and container mutations are
-visible to later handlers and core. Reassigning a local parameter does not replace the
-caller's object.
+`ReadFileTool` pages raw source lines (`offset`/`limit`) **before** Markdown
+expansion. Offset past EOF → first 2,000 lines; limit past EOF → remaining
+lines. Expansion uses `DynamicMarkdownFile(path, content=...)`; output is
+renumbered from one, not line-capped, and reports `source_start_line`,
+`source_end_line`, `source_total_lines`. The per-line char cap applies after.
 
-Prompt and turn state live on the existing Agent. `agent.system_prompt` is a string,
-initialized to empty and rebuilt each turn before `SYSTEM_PROMPT_BUILD`. Assign it
-directly; core reads that same attribute afterward to build the request. This does not
-change the cached builder text or harness file. `agent.turn` is the zero-based loop
-index, set before each `TURN_START`. Edits are visible for the rest of that iteration;
-the next iteration sets its own index, and loop scheduling/max-turn limits are unchanged.
-Neither value is injected separately.
+### Permissions (`core/permissions/`)
 
-`Request` and `PermissionDecision` are mutable dataclasses. Edit fields on the existing
-injected `request` and `decision` objects, without returning replacements. Tool hooks
-receive the original mutable `call: ToolCallMessage`, with `name`, `id` and `arguments`
-attributes, instead of separate `name`, `call_id` and `arguments` parameters.
-Edit `call.arguments` before execution and `call.id` before result parsing. Tool
-selection already happened by `BEFORE_TOOL_CALL`; to change the target, edit the call
-in a model-response hook before permission resolution and selection. `Tool.name`
-remains the selected tool's class-based identifier. Both direct and model calls pass
-their `ToolCallMessage` to `Tool.call(call)` and share it with hooks. Tool results remain mutable:
-edit `result.content` and `result.display_text` independently.
-`source` stays an informational error-source label.
-No context dictionary, replacement return contract or new wrapper class is required.
+`PermissionCategory` is **not** an `Enum` (plugins add tools and categories
+later); a metaclass gives it `Enum`-like access over a case-insensitive
+registry, plus `get`, `get_or_create`, `add_tool`. Built-ins: `READ`, `WRITE`,
+`WEB`, `EXECUTE`, `PLUGIN`; default levels in `core/permissions/constants.py`,
+others default to ASK. `PermissionLevel`: NONE, ASK, AUTO. Grants always cover
+every registered category. `PermissionManager` owns `ToolManager`; NONE tools
+are never instantiated. `validate` returns `(PermissionDecision, hook_messages)`
+(`PermissionOutcome` ALLOWED/DENIED/UNAVAILABLE + `note`); ASK goes to the
+controller. The agent's `_permission_message` writes all model-facing wording.
+
+### Hooks (`core/hooks/`)
+
+`Hook` is a string enum. Each `HookManager` owns its registrations (no
+singleton); registering a callable twice runs it twice. Handlers declare the
+arguments they need by name (or `**kwargs`); positional-only is unsupported.
+`provide(**deps)` registers permanent services: `hook_manager`,
+`permission_manager`, `agent`, `client`. `run(hook, **event)` merges services
+with event args (event wins). Handlers mutate the passed objects in place
+(`agent.system_prompt`, `agent.turn`, `request`, `decision`, `call.arguments`,
+`call.id`, `result.content`, `result.display_text`); returns are ignored except
+`Message`s, which are collected in order. Dispatch is synchronous; ordinary
+handler exceptions propagate.
 
 ```python
 @hook(Hook.SYSTEM_PROMPT_BUILD)
 def customize(self, agent, **kwargs):
     agent.system_prompt += "\nAdditional instructions."
-
-@hook(Hook.BEFORE_TOOL_CALL)
-def customize_call(self, call, **kwargs):
-    call.arguments["limit"] = 50
 ```
 
-Additional event arguments (all hooks also have the permanent services above):
+| Hook | Event args | Dispatched by |
+| --- | --- | --- |
+| startup / shutdown | none | `Application.start` / `.shutdown` |
+| agent_start | message | `Agent`, before history; **not** retried |
+| turn_start / turn_end | none | per turn; `turn_end` in `finally` |
+| system_prompt_build | none | before `build_request`, same turn |
+| before_model_request | request | after `build_request` |
+| message_received | response_message | each finalized message |
+| after_model_response | request, tool_calls | stream complete |
+| agent_end | message_history | natural text-only stop |
+| before/after_permission_check | call (+ decision) | once per `validate` |
+| before/after_tool_call | call (+ result) | `Tool.call`; after always fires |
+| error `source="tool"` | source, error, call | `_call` raised |
+| error `source="model"` | source, error, request | every failed turn |
+| error `source="agent"` | source, error | run ends on failure |
 
-| Hook | Event arguments |
-| --- | --- |
-| startup, shutdown, turn_start, turn_end, system_prompt_build | none |
-| agent_start | message |
-| agent_end | message_history |
-| before_model_request | request |
-| after_model_response | request, tool_calls |
-| message_received | response_message |
-| before_tool_call | call |
-| after_tool_call | call, result |
-| before_permission_check | call |
-| after_permission_check | call, decision |
-| error, source="tool" | source, error, call |
-| error, source="model" | source, error, request (possibly None) |
-| error, source="agent" | source, error (possibly None) |
+Notes:
 
-Returned `Message` objects are collected in dispatch order; other returns are ignored.
-Dispatch is synchronous and iterates a snapshot of registrations. Ordinary handler
-exceptions propagate immediately. Plugin guards preserve method signatures and catch
-invocation failures, reporting and disabling only that method.
-Both `core/hooks/__init__.py` and every
-sibling `core` package's `__init__.py` are empty; a caller imports `Hook` from
-`core.hooks.base` and `HookManager` from `core.hooks.manager` directly, the same as any
-other two-file `base.py`/`manager.py` package (`core/permissions/`, `core/controllers/`).
+- `request` is `None` for a model error raised inside `build_request`.
+- `source="agent"` also fires with `error=None` when `max_turns` runs out.
+  Exactly one of `agent_end` / `source="agent"` fires per run.
+- A hook handler exception inside `Tool.call` surfaces as `source="model"` and
+  is retried like a provider error (accepted behaviour).
+- To change the target tool, edit the call in a model-response hook; selection
+  is done before `before_tool_call`.
+- Startup hook messages go to the UI only; shutdown messages are dropped.
 
-Startup shares one HookManager and one ToolSession across the backend. ToolManager
-receives both and the summary client; PluginManager receives HookManager and ToolManager,
-then registers hooks/tool definitions before Settings and PermissionManager are built.
-Agent receives Client, PermissionManager, ToolManager and HookManager. Application owns
-STARTUP/SHUTDOWN dispatch rather than its frontend.
+### Plugins (`core/plugins/`)
 
-ActionExecutor receives direct ReadFileTool/ShellCommandTool instances built by Bootstrap
-with the same HookManager and ToolSession. Explicit mentions and !/!! remain available
-even when their catalog category is not instantiated. Permission changes rebuild catalog
-tools without resetting the shared read guard.
+`PluginManager.load() -> list[Message]` imports `plugin.py` from each folder in
+`manager.PLUGINS_PATH` (sorted; hidden, `_`-prefixed and entry-less folders
+skipped) as `arancio_plugins.<folder>.plugin`, so relative imports work.
+Decorators (`core/plugins/decorators.py`) `@plugin`, `@hook`, `@tool` fill
+`PLUGIN_REGISTRY` (`registry.py`) with `Plugin` records (`base.py`: internal,
+not a base class). Metadata: name (class name), version `"0.0.0"`,
+description, author, enabled `True`; bad or unknown fields skip the class with
+a startup error. Empty plugins warn. Failed imports roll back their
+declarations and modules. Enabled names clashing case-insensitively are all
+skipped. Each class is built once with `plugin_cls()`; its hooks and tools
+share that instance. A failing plugin method returns one `ErrorMessage` and is
+disabled; other methods keep running.
 
-Clients receive no HookManager or Core Controller. Agent dispatches before_model_request,
-after_model_response and model/agent errors around its client calls. FetchWebTool's direct
-summary request is outside the Agent model hooks, while its login callback still reaches
-the supplied abstract UIController.show_login. Core imports no Application class.
+`@tool(...)` creates `PluginTool.build(...)` classes named
+`<plugin_name>-<tool_name>` (method name by default). Description and schema
+come from the decorator (no harness, no dynamic markdown). Category: `READ`,
+`WRITE`, `WEB`, `EXECUTE`, `PLUGIN` (default) or `CUSTOM` (→
+`PLUGIN:<plugin_name>`, default ASK). `PluginToolResultParser` keeps dicts raw
+and displays them as JSON.
 
-Dispatch sites, by hook:
-- `Application.start`: `startup` (no event keys), once when the caller requests
-  startup output, before any user prompt. The permanent injectable services already contain the core objects.
-  Returned messages join the settings and plugin-load startup messages in the UI;
-  they are not added to agent history or saved to a session.
-- `Application.shutdown`: `shutdown` (no event keys), once after cancellation
-  and a safe execution-closure request. The Textual `TUIApp` calls it from `on_unmount`,
-  so `/exit`, `/quit` and Ctrl+C all reach it. Returned cleanup messages
-  are not displayed or saved. Application hooks do not create a session log.
-- `Agent.__call__`: `agent_start` (`message`) — first statement, before the message is
-  even recorded to history, and before the turn loop's own error handling exists: a
-  handler exception here is not caught, retried or turned into an `ErrorMessage`, unlike
-  every other dispatch below. Then per turn: `turn_start` (index available as `agent.turn`)
-  — first line inside that turn's `try`, so a broken handler is retried like any other turn
-  failure and still gets a paired `turn_end`; `before_model_request` (`request`) right after
-  `build_request` returns; `message_received` (`response_message`) for each finalized
-  (non-chunk) message as it streams in; `after_model_response` (`request`, `tool_calls`)
-  once the stream completes; then exactly one of `agent_end` (`message_history`,
-  natural text-only stop) or `error` with `source="model"` (`error`, `request` — `None`
-  when `build_request` itself failed before returning one), dispatched on *every* failed
-  turn, retried or not. `error` with `source="agent"` (`error`) additionally fires only
-  when the run is about to actually end on that failure (the `received_finalized` early
-  return, or `max_retries` exhausted), and once more with `error=None` when `max_turns` is
-  exhausted by loop exhaustion rather than an exception — so exactly one of
-  `agent_end`/`source="agent"` fires per completed run, modulo an unguarded `agent_start`
-  failure. `turn_end` (index available as `agent.turn`) fires from a `finally` wrapping the whole turn (one
-  `try`/`except`/`finally`, no extra nesting), exactly once per turn regardless of exit
-  path — including, per ordinary Python `finally` semantics, that a `turn_end` handler's
-  own exception replaces an in-flight `return` or exception rather than being appended
-  after it. Returned messages are yielded except during `GeneratorExit`, when cleanup
-  runs without yielding.
-- `Agent.__call__`: `system_prompt_build` (prompt available as `agent.system_prompt`), immediately after building
-  the prompt and before `build_request`, inside the same per-turn `try`. The agent then
-  reads `agent.system_prompt` and builds the request from that, so direct edits
-  change the prompt of the **same** turn.
-- `Tool.call`: `before_tool_call` (`call`) before running;
-  `error` with `source="tool"` (`call`, `error`) when `_call`
-  raises; `after_tool_call` (`call`, `result`) once the result
-  message is built, unconditionally — both the `source="tool"` `error` and
-  `after_tool_call` fire on a failed call. `call` then returns the same result object after `after_tool_call`,
-  including any direct edits made by handlers. Only `_call`'s own exceptions are caught by
-  `call`'s try/except; a handler exception raised during any of these three dispatches
-  propagates out of `call` itself, unlike a tool's own failure. When that happens inside
-  `Agent.__call__`'s tool-calling loop, it is caught by the *same* `except Exception as
-  e:` that catches a genuine model-call failure and dispatched the same way — `error`
-  with `source="model"`, surfaced as `"Error while executing user request: ..."`, and
-  retried/backed-off exactly like a provider outage, never as `source="tool"` since
-  `_call` itself never ran. This is accepted, not fixed: splitting the turn's try/except
-  to disambiguate would change existing retry semantics beyond wiring dispatch calls.
-- `PermissionManager.validate`: `before_permission_check` (`call`) then
-  `after_permission_check` (`call`, `decision`), exactly one pair per call regardless of
-  which of the unavailable/auto/ask outcomes resolves it — `validate` is now a thin
-  before/after wrapper around `_resolve`, which holds the unchanged unavailable/auto/ask
-  logic `validate` used to hold directly, so the dispatch pair isn't tripled across the
-  three early returns.
+### Frontend (`ui/`)
 
-The three error sources (`tool`/`model`/`agent`) are unified under the single `error` hook
-rather than three separately named ones, distinguished by an injected `source` argument — a handler that
-wants every failure registers once for `error` and declares `source`; one that only cares about
-tool failures filters on `source == "tool"`. The names in parentheses in the
-list above are the event argument names each dispatch supplies.
+`UIController` (`ui/controllers/base.py`): abstract `ask`,
+`cancel_questions`, `show_login`, `reset_conversation`, `exit`. Answers: yes
+allows, no/None denies, other text denies with a note. `TUIController` moves
+every call to the UI thread with `call_from_thread`; `ask` blocks the worker
+on a `threading.Event`; one pending ask at a time; after cancellation calls
+are no-ops and `ask` returns None.
 
-**Plugins** (`core/plugins/`) — `PluginManager.load()` imports `plugin.py` from
-immediate folders under `~/.arancio/plugins/`, sorted by folder name. Hidden and
-underscore-prefixed folders and folders without that entry file are skipped. The root
-is the module constant `manager.PLUGINS_PATH`, read by `PluginManager.__init__`, and
-nothing creates it. Tests must repoint that importing module's constant; the autouse
-home-isolation fixture does this. No manifest or plugin base class is required.
+`TUIApp` (`ui/apps/tui.py`) holds only the Application: `on_mount` shows
+`start()` output, `on_unmount` calls `shutdown()`, the toolbar reads
+`status()`, and a worker thread consumes `submit(text)` into `MessageLog`
+(closing the iterator in `finally`). `MessageLog` streams chunks into one
+`MarkdownStream` per span; `LoginPanel` and `QuestionScreen` live in
+`ui/widgets/`.
 
-`core/plugins/registry.py` owns one `PLUGIN_REGISTRY: list[Plugin]`, filled by the
-`@plugin`, `@hook` and `@tool` decorators in `core/plugins/decorators.py`. There is no
-registry class, loader class or metadata validator. Method decorators run before their
-class exists, so two weak-key pending maps hold hook events and raw tool fields. The
-class decorator reads its own functions once and stores hook declarations and generated
-tool classes in separate `hooks` and `tools` lists on a `Plugin` record. Each plugin
-gets its own tool classes, including when sharing decorated functions. Pending entries
-remain reusable while the function lives. Stacked hooks and either hook/tool
-decorator order work without changing the original functions or classes.
+### Application (`application/base.py`)
 
-Each valid decorated class registers immediately, including decorated classes in
-imported helpers. There is no later class discovery or source filter. Class aliases
-and undecorated subclasses add no declarations. Only methods defined directly on the
-decorated class are collected. An entry without decorated classes contributes nothing.
-A valid plugin without hooks or tools stays registered and produces a startup warning,
-including when disabled; enabled empty plugins are still constructed.
+Public coordinator over Core, Settings and Sessions; returns Messages and
+`ApplicationStatus(model_id, thinking_effort, working_directory)`.
 
-`Plugin` (`core/plugins/base.py`) is a mutable internal record, not a base class for
-plugin authors. It keeps `plugin_cls`, `source_path`, metadata, `instance`, `hooks` and
-`tools`. Name defaults to the class name; version defaults to `"0.0.0"`, description and
-author to empty strings, and enabled to `True`. `Plugin.__post_init__` requires strings
-for the text fields and a boolean for enabled; it raises `TypeError` for wrong types and
-`ValueError` for an empty name. Unknown decorator fields are also errors, rather than
-ignored values. The class decorator catches metadata errors, queues one startup error
-naming the source class,
-field and bad value, and returns the unchanged class without registering it. Sibling
-classes in the same file continue loading. Runtime fields cannot be supplied as metadata.
+- `update_settings(**changes)`: provider → model_name → thinking_effort →
+  permissions; unknown names rejected first; each field is set, applied,
+  saved alone, then recorded. No cross-layer rollback.
+- Owns directory changes (`os.chdir`), `rename`, `new_session`, `resume`
+  (restores settings without saving globals, history, unchanged file mtimes,
+  directory) and `fork`.
+- `start()` returns plugin/settings notices and STARTUP messages; `shutdown()`
+  releases questions and dispatches SHUTDOWN once. Mutation while Core is
+  running raises `RuntimeError`.
 
-`PluginManager.registry` references the shared list directly; it replaces `_plugins`
-and the old `plugins` property. Disabled plugins, conflicting names and constructor
-failures remain in that list with `instance=None`. After all imports, enabled names
-are compared case-insensitively. Every member of a conflicting group is reported and
-skipped before construction or hook/tool registration. Disabled records do not
-participate. Each eligible class is constructed once with `plugin_cls()`; a constructor
-failure reports only that class. A class's hooks and tools share its one instance,
-including when permission changes rebuild tool instances.
+### Prompt & commands (`prompt/`, `commands/`)
 
-Entry files load as `arancio_plugins.<folder>.plugin`. Their parent package points to
-the entry folder, allowing `from .helpers import X` without changing `sys.path` or
-mixing helpers from different folders. `PLUGIN_PACKAGE_ROOT` lives in
-`core/plugins/constants.py`. Importing executes module-level code even for disabled
-plugins. An unexpected import failure discards all declarations and queued diagnostics
-added during that import, removes newly cached plugin modules (including helpers), and
-reports the failure; unrelated entries still load. Cached entry modules and constructed
-instances are reused on subsequent `load()` calls. This is startup loading, not live reload.
+`PromptManager` returns typed `Action`s. `FileMention(path, start_line,
+end_line)` supports `@file:110` and `@file:110-120` (quoted paths too); the
+executor turns valid ranges into `offset`/`limit`, invalid ones into a full
+read. `ActionExecutor.execute(text)` routes input, records the user message
+before Core, yields each Core message then records it with a `ToolSession`
+snapshot. `!` keeps the exchange in history; `!!` does not. Mentions and `!`
+use direct tools that bypass permissions.
 
-`PluginManager.load() -> list[Message]` drains the temporary decorator diagnostic buffer
-and returns startup errors and warnings through the normal UI path. It runs before
-permission and settings initialization, so plugin tool categories exist when default
-grants and the tool catalog are built. Instances receive no injected metadata, paths
-or context attributes. Bundled resources are available through
-`Path(__file__).resolve().parent`; hook arguments remain separate from metadata.
+Commands receive only `application`. Commands in
+`commands/registry.py:SESSION_DISCARDING_COMMANDS` are recorded before
+switching; others after. String results become `in_history=False`
+`AssistantMessage`s.
 
-The manager binds each declared method once after construction. `@hook(Hook.X)` methods
-receive the named services and event arguments they declare. Returned messages enter the normal message
-stream; other return values are ignored. Notices should use `in_history=False` to stay
-outside model history. A failed method returns one `ErrorMessage` and is disabled across
-all its hooks for that instance. The disabled key uses instance identity and the original
-function, so shared functions and unhashable plugin instances remain independent. Other
-methods, tools and plugins keep running, and ordinary hook handlers still propagate errors.
-Runtime plugin errors are shown and saved without causing agent retries.
+### Settings & storage (`settings/`, `storage/`)
 
-`@tool(...)` defines a real tool named `<plugin_name>-<tool_name>`, with the method name
-as the tool-name default. Permission lookup, hook events, agent catalog, history and
-provider payloads use that same identifier. Description and input schema come directly
-from the decorator, without harness files or dynamic-markdown expansion. Categories are
-`READ`, `WRITE`, `WEB`, `EXECUTE`, `PLUGIN` (default), or `CUSTOM`. CUSTOM creates
-`PLUGIN:<plugin_name>`, shared by that plugin's tools and defaulting to ASK. Unknown
-categories report and skip only their tool. Renamed categories use normal settings
-validation, with no automatic grant transfer.
+`SettingsManager(storage, supported_providers)` does no I/O at construction.
+`settings` / `global_settings` return detached copies. `set_field`,
+`restore_active`, `reset_global` change active values only; `save`,
+`save_field`, `reset_default` write. `load()` returns a snapshot plus notices.
+Missing file → created from defaults; bad YAML → left untouched, defaults used.
+`SettingsValidator` returns checked mappings and Messages; strict for edits,
+lenient with notices on load. Only the manager builds `Settings`.
 
-The class decorator calls `PluginTool.build(plugin_name, method, **fields)` to create
-each tool class. Tool name, category, description, raw input schema and method live
-directly on that class; there is no `PluginToolSpec`, `_spec` attribute or method/spec
-tuple. The default category is declared on `PluginTool`. During startup, the manager
-binds each tool's method and adds that same class to its permission category. Tool
-instances are still created through the normal ToolManager only when permissions allow
-them, using `tool_cls(hook_manager=...)`. Each instance keeps the normal closed-object
-schema, without changing the class's raw schema. `PluginToolResultParser` keeps
-JSON-compatible dictionaries as raw content and displays readable JSON; other results
-and exceptions retain base behavior.
+`StorageManager` is generic file I/O rooted at `ARANCIO_DEFAULT_DIR` (text,
+lines, 64 KiB byte chunks, sizes, discovery, writes, `move_directory`,
+`create_symlink` — the link is created **at source**). Writes return None and
+raise on failure. Callers must close abandoned byte iterators.
 
-**Frontend contract** (ui/controllers/base.py) — abstract `UIController` with ask,
-cancel_questions, show_login, reset_conversation and exit methods, without widgets.
-Core yields PermissionRequest and accepts a matching PermissionResponse from Application's
-driver. yes allows, no/None denies, and other text denies with its note. Every response
-carries the request ID. LoginNotice reaches show_login directly through client callbacks
-and is never recorded. Cancellation releases a pending ask with None.
+### Sessions (`sessions/`)
 
-**TUIController** (`ui/controllers/tui.py`) — the Textual implementation of
-that contract. `app` is attached by the entry point after construction (the TUIApp needs
-the Application, which needs the controller). Application and the clients call it on the
-frontend's worker thread; every call moves to the UI thread through
-`TUIApp.call_from_thread`, and display methods return after the display work is done. `ask`
-blocks the worker (never the UI thread) on a `threading.Event`: it returns the preset,
-the typed text, or None once cancelled. A lock guards the permanent cancelled flag and
-the single pending-answer slot; it is never held while waiting or dispatching. A second
-`ask` while one is pending raises RuntimeError. `cancel_questions` is safe on any thread
-and releases the pending wait; afterwards questions return None, display/exit calls do
-nothing, and a late answer cannot replace the cancellation or answer a later question.
-The cancellation is rechecked on the UI thread before a modal is created. A teardown
-`RuntimeError` from dispatch is suppressed only when the app has stopped.
-
-**UI** (`ui/`) — the Textual frontend. `ui/__main__.py` builds `TUIController`,
-then `Application.build(controller)`, then `TUIApp(application)`, attaches the app to the
-controller and runs with mouse mode on. `TUIApp` (`ui/apps/tui.py`) receives only the
-Application and owns layout/CSS, the prompt, the toolbar, the worker and the lifecycle:
-`on_mount` shows `Application.start()` output, `on_unmount` calls
-`Application.shutdown()`, and the toolbar reads `Application.status()` (never stored
-copies). `on_input_submitted` sets busy before any await, then a thread worker consumes
-`Application.submit(text)`, forwards each message to `MessageLog.append` through
-`call_from_thread` and always closes the iterator on the worker thread in `finally`.
-The worker's UI-call helper checks `is_running` first and suppresses a `RuntimeError`
-only when the app has stopped. The frontend parses no input, saves nothing and maps no
-permission answers. `MessageLog` (`ui/widgets/message_log.py`, a `VerticalScroll`)
-owns rendering and streaming: assistant and reasoning chunks stream into one
-`MarkdownStream` widget per span, the finalized echo of an already-streamed span is
-suppressed once, and `replace` resets the stream, clears the log and replays messages.
-`LoginPanel` (`ui/widgets/login.py`) shows a provider-neutral sign-in notice with the
-CSS classes `login`/`login-code`; `QuestionScreen` (`ui/widgets/question.py`) is the
-modal used by `ask`. TUIApp and the controller hold no Core, Settings or Sessions service.
-
-**Application** (application/) — the public coordinator above Core, Settings and
-Sessions. It holds those services privately and exposes operations, Messages and immutable
-ApplicationStatus(model_id, thinking_effort, working_directory). status returns None for
-model_id until provider/model are configured. The constructor applies loaded settings and
-builds its executor from injected direct tools; it constructs no frontend.
-
-update_settings(**changes) handles provider, model_name, thinking_effort and permissions
-in that dependency order, regardless of keyword order. Unknown names are rejected before
-any mutation. Empty updates and empty permission mappings perform no writes. Each field
-uses SettingsManager.set_field, applies the checked snapshot to clients/Agent, saves only
-that field (or supplied permission categories), then records the session configuration.
-A later failure retains earlier completed changes; there is no cross-layer transaction.
-Permissions merge into existing grants; permission_levels() is the copied read-only view.
-Existing single-field/all-category text stays the same and mixed updates use Markdown
-line breaks. Core configuration uses Agent.set, max_turns/max_retries, retry_delay and
-retry_delay_multiplier, preserving history and the shared read guard.
-
-Application owns directory resolution, validation and os.chdir. It updates runtime state
-only after a successful directory move, then records that value. rename changes only
-explicit_name. new_session resets active Settings to global defaults, applies them, clears
-history/guard, creates an unsaved Session, ignores its live return value and requests an
-empty display. resume searches through SessionManager, loads and repairs, restores the
-four conversation settings without saving globals, restores model history and only
-existing/unchanged file mtimes, applies the saved directory or pre-resume fallback and
-requests visible replay. If repair checksum writing fails after selection, it completes
-runtime restoration and returns the save notice. Fork passes through Sessions' exact
-(state, confirmation, notices) tuple and does not clear history, guard or settings.
-
-start returns plugin/settings notices followed by STARTUP hook messages once; none enter
-history or persistence. shutdown marks closed, releases questions, requests execution
-closure and dispatches SHUTDOWN once. It cannot interrupt blocking work. Only the owner
-thread closes Core; foreign threads set a closure request observed by the driver.
-Mutation while Core is active raises RuntimeError. Consumers stopping submit early must
-close its iterator on the consuming thread. No worker thread or user-facing cancel action
-is added here.
-
-**Prompt & commands** (prompt/, commands/) — PromptManager now returns typed Action data
-directly; ActionFactory and its intermediate keyword dictionary are removed. raw_input
-stays required. Shell prefixes, non-POSIX quotes, joined command arguments, mention
-rewriting, registry aliases, defaults and extra-word behavior are unchanged.
-
-ActionExecutor.execute(text) parses and routes input on the calling thread. It converts
-only parser ValueError to Invalid prompt: ..., records ordinary input/command errors,
-and drives Agent with send(answer) rather than wrapping it in record_stream. It yields
-each Core Message before recording it with a fresh ToolSession snapshot. Save notices
-are shown separately and never sent to Core or recursively persisted. The initial user
-message is recorded before Core because Agent does not yield it. Mentions still run as
-the prelude; ! keeps the hidden attribution and exchange in history, while !! excludes
-them. Both explicit paths bypass permission checks and share the same read guard.
-
-Commands receive only application and delegate to its operations. The injectable-name
-constant lives on Command in commands/base.py, removing the commands-to-prompt import cycle.
-StateChangeCommand and prompt/actions/constants.py are removed. Provider, model, effort
-and permission writes use update_settings. The permission adapter finds names through
-permission_levels; it alone interprets all/null. Commands import no UI or live backend
-managers. HelloWorld and all command names/descriptions/aliases remain unchanged.
-
-SESSION_DISCARDING_COMMANDS still controls source attribution: those command lines are
-recorded before switching, only if the source has a log. Other successful command lines
-are recorded after their operation. String results become in_history=False
-AssistantMessages and are saved once; returned Messages are display-only. Fork tuples
-yield the confirmation and each save notice without saving either again. Unknown or
-malformed input still creates an error record, while a recognized discarding command
-leaves an unused source unwritten.
-
-**Settings & storage** (`settings/`, `storage/`) — SettingsManager is the only Settings
-entry point. Its constructor requires StorageManager and `supported_providers`, without
-live Agent, Client, Sessions or frontend services. Construction performs no I/O. The
-manager snapshots registered categories and copies the supplied provider metadata.
-Plugins must be loaded first so their categories are included.
-
-`settings` and `global_settings` always return detached snapshots, including separate
-permission dictionaries. `set_field(field, value)`, `restore_active` and `reset_global`
-change active values only and return None. `set_field` accepts any settings field, validates
-before publication and merges permission changes; model selection requires a usable
-model ID, effort changes require a configured model, and provider selection may precede
-model selection. Application reads `settings` afterward and applies it to Core.
-
-`save(settings)` promotes the supplied snapshot; `save_field(field, category)`
-promotes only the selected field or permission category. Writes happen before publishing
-global defaults, and failures propagate.
-`reset_default()` creates code defaults inside SettingsManager, writes
-them, then replaces both active and global snapshots. A failed write leaves both in-memory
-snapshots unchanged. It returns None. `reset_global()` performs no file I/O.
-`restore_active()` accepts four plain values (provider, model name, thinking effort and
-complete permissions) and overlays them on global defaults without saving.
-
-`Settings` remains a plain holder with equality, representation and derived `model_id`.
-Its provider is a plain field, checked by SettingsValidator. SettingsManager creates
-defaults using its snapshot of registered categories. Built-in category levels are
-declared in `core/permissions/constants.py` and also used by PermissionManager; other
-categories default to ASK. The instance method
-`from_dict(data, categories)` fills its receiver and returns None. Only the manager
-constructs and copies Settings. `model_id` raises ValueError while provider/model is unset.
-
-`SettingsValidator` returns checked mappings and diagnostic Messages, never Settings
-objects. File loading applies defaults, reports warnings and errors, and
-reports unset provider/model values. Explicit edits use the same rules with strict
-rejection, allowing nullable unconfigured values. Missing file permissions use the code
-defaults; explicit null means NONE. Unknown names are ignored with notices on load and rejected
-for edits. Strict permission maps must cover every known category. Types are checked
-before membership/conversion; booleans are not numeric limits. The filename lives in
-`settings/constants.py`; scalar predicates and allowed permission levels are private
-class fields on SettingsValidator. Private members use double-leading underscores.
-
-SettingsManager calls Storage's `read_text` and `write_file` with
-`ARANCIO_SETTINGS_FILENAME = "settings.yml"`; Storage adds its root. A missing file is
-created from code defaults and reported. Empty, malformed or non-mapping YAML remains
-untouched while fallback values are used in memory. Other I/O and UTF-8 decoding failures
-propagate. `load()` initializes both snapshots and returns a detached snapshot plus
-file/field notices, without applying values to Core.
-
-SettingsManager uses PyYAML safe conversion directly and preserves mapping order when
-dumping settings.
-
-`StorageManager` (`storage/manager.py`) is now generic file I/O. It uses the fixed
-`ARANCIO_DEFAULT_DIR` root and exposes instance operations for text, lines, byte chunks,
-sizes, discovery, writes, directory moves and symlinks. Private `__root`, `__resolve_path`
-and static `__validate_directory` use double-leading underscores. `READ_CHUNK_SIZE` lives
-in `storage/constants.py` and bounds byte reads at 64 KiB. Consumers must close
-an abandoned byte iterator. Every write, including `create_directory`, returns None;
-failures propagate as exceptions. File-size queries and file removal raise when the
-file is missing.
-
-`move_directory(source, target)` validates source, moves its direct entries with
-the existing `shutil.move` behavior and removes the emptied source. It creates or
-reuses target. `create_symlink(source, target)` creates the link **at source**,
-pointing to target. It validates target before checking source. An existing source
-link resolving to target is a no-op; other occupied sources raise FileExistsError.
-The shared validator rejects symlinks with ValueError, missing paths with
-FileNotFoundError and non-directories with NotADirectoryError before writes.
-
-**Backend caller migration is implemented.** Application now uses Settings' set_field,
-save_field, reset_global and restore_active, plus Sessions' recording and snapshot APIs.
-Bootstrap uses Storage's generic login-directory operations. The Textual frontend
-reaches the backend only through Application. No compatibility wrappers were added;
-tests remain deferred.
-
-**Sessions** (sessions/) — SessionManager is the only public service. Its constructor
-requires StorageManager and an already-loaded SessionConfiguration. New conversations
-start in `Path.cwd()`; forks retain their source's working directory. Session logs live
-under Storage's root in `sessions/constants.py:ARANCIO_SESSIONS_DIR`.
-
-The grouped data models live in sessions/base.py: Session, SessionEvent,
-SessionConfiguration, SessionState, SessionRegistryEntry and SessionScan. SessionManager
-owns the mutable Session and events. current_state() returns a detached SessionState
-without events or recovery offsets; configuration permissions and file-state mappings
-are copied. find() returns copied entry data and replay methods reconstruct independent
-Messages, including nested content, arguments and reasoning payloads. Copies retain
-permission-category identities. Known categories are captured once at manager construction
-and supplied to validation; Sessions never loads plugins or creates categories.
-The `model_history` and `visible_messages` properties rebuild independent messages on
-each access.
-
-create() returns the managed Session and selects a new identity and unsaved header.
-The constructor creates an opening conversation, so an active session always exists. A new header-only
-session stays unsaved even when flush() is requested. Its first recordable message,
-command or state change writes the header first, exclusively, followed by queued events.
-Discovery may create the sessions directory, but an unused conversation creates no log.
-The nullable explicit_name is distinct from name's ID fallback.
-
-Application records through record_message(message, file_states=..., visible=True) and
-record_command(raw_input, name, args). These methods return ErrorMessage | None for log
-save failures. The file-read argument is a copied path-to-mtime mapping, never ToolSession.
-The recorder queues the message before changed file states and retains both on failure.
-Chunks are skipped before matching finalized message types. Unsupported messages,
-including WarningMessage, raise ValueError; no new saved record types were added.
-Transient permission and login control data must stay outside recording.
-
-update_state(**changes) accepts configuration, working_directory and explicit_name.
-Omitted fields remain unchanged; explicit_name=None clears the name, while None is
-invalid for the other fields. Empty changes perform no write. The validator checks every
-key/value and copies replacements before the manager applies them through a generic
-loop. Unknown or non-editable fields raise ValueError before mutation or I/O. The
-recorder then writes one complete configuration/directory/name snapshot. A failed write
-retains the in-memory change and pending event rather than rolling either back.
-
-SessionRecorder is internal. It receives callbacks accessing the manager's private
-__current property and __after_write method; callers cannot obtain the recorder or
-registry from the manager. Only the recorder constructs records and writes logs.
-flush() uses create_file for the creation record without first querying a missing
-file's size. Later appends capture file_size, retain a recovery_offset after failure,
-and truncate that unconfirmed tail before retry. Creation failures attempt partial-file
-cleanup, but filename collisions are never overwritten or removed. Events are marked
-saved only after each synced Storage write returns successfully.
-
-SessionChecksum is an instance helper using the supplied StorageManager for byte
-iteration and sidecar text I/O. Chunk size belongs to Storage. It closes the byte
-iterator and keeps the same SHA-256 hexadecimal sidecar format. A clean flush refreshes
-the checksum before its completion callback updates registry metadata. Checksum errors
-propagate as exceptions; save notices are not recursively recorded.
-
-SessionRegistry rebuilds its private entries deterministically from logs, calling
-create_directory for side effects before find_files. Exact IDs win over case-insensitive name
-substrings; all matches are returned. Duplicate IDs remain listed as damaged and cannot
-be selected. SessionScan is the validator's temporary metadata/status result;
-SessionRegistryEntry adds filename identity and log path for searching.
-
-Scanning reads all JSONL lines to locate the last state record, validates that state,
-and compares the checksum; it is not a header-only operation. Full loading validates
-every record, aware timestamps, absolute stored paths, configuration and filename ID.
-Invalid JSON/schema prevents selection. A successful full read refreshes the checksum,
-including missing or stale sidecars, then selects the session. All unmatched
-model-history tool calls receive the existing synthetic ToolErrorMessage; no tool is
-executed. Repair records are queued together before flushing. load() returns detached
-state and a possible repair-save notice; validation/checksum failures remain exceptions.
-
-fork() now owns session-only work previously performed by ForkCommand. It captures
-source events before a source-only rename, copies records except the old header, copies
-configuration/file states, and creates a new header with forked_from=source.id.
-Named sources preserve the :main/:fork_<timestamp> convention; unnamed sessions remain
-unnamed. A child state record follows copied state snapshots so their old names cannot
-replace its fork name on reload. Saved sources receive the same display-only confirmation
-as the child, exactly once per log; unused sources force neither log to be created.
-fork() returns detached child state, the AssistantMessage confirmation and log-save
-notices. The frontend displays that Message without saving it again. Failed saved
-source writes remain referenced for manager.flush() retries. Cross-log rollback is not
-promised.
-
-**Runtime coordination now belongs to Application.** Sessions imports no live Agent,
-SettingsManager, ToolSession or UI services; it never applies settings, resets Core
-history/guards, checks restored file freshness, picks a directory fallback, or changes
-the process directory. Application applies returned data and requests corrected state
-through update_state(). There are no current/registry/session_recorder properties,
-restore_runtime/discard_and_create/restore_file_states helpers, or record_stream wrapper.
-Application, executor and commands now use the public manager and base.py data imports.
-The Textual frontend uses Application only. No compatibility wrappers were added. `tests/test_session_creation.py` checks that normal
-sessions use the current process working directory.
+`SessionManager(storage, configuration)` is the only public service; data types
+are in `sessions/base.py`. A session starts in `Path.cwd()`; it is written only
+on its first recordable event. `record_message(message, file_states=...,
+visible=True)` and `record_command(...)` return `ErrorMessage | None`; chunks
+are skipped, unsupported types (incl. `WarningMessage`) raise `ValueError`.
+`update_state(**changes)` takes `configuration`, `working_directory`,
+`explicit_name` (only this may be None). `find`, `load` (validates, refreshes
+checksum, adds synthetic errors for unmatched tool calls), `fork` (returns
+state, confirmation, notices). Internals (`SessionRecorder`, `SessionChecksum`,
+`SessionRegistry`) are private. Sessions never touches live Agent, Settings,
+`ToolSession` or the UI; Application applies the returned data.
 
 ## Conventions
 
-- **Docstrings**: Google style, required on all public symbols (`pre-push` enforces `D,DOC`).
-- **Code style**: PEP 8 via `ruff` (`E,F,I`); import sorting on. Format with `ruff format`.
-- **Comments**: start lowercase, no trailing period; only comment non-obvious slices.
-- **Files**: `snake_case.py`; Markdown `UPPER_SNAKE_CASE.md`. Source in `src/`, tests in `tests/`.
-- **Exceptions**: prefer built-ins (`ValueError`, `TypeError`, …); do not define custom exception classes.
-- **Application internals**: Application and ApplicationStatus live in application/base.py;
-  private members use double-leading underscores. One update_settings API covers the four
-  conversation fields. Concrete frontends remain outside this layer; commands receive
-  only Application and persistent I/O stays behind the existing manager boundaries.
-- **Settings internals**: double-leading underscores for private fields and methods;
-  shared constants belong in `settings/constants.py`; validator-only rules are private
-  class fields. Only SettingsManager constructs Settings.
-- **Sessions internals**: double-leading underscores for private fields and methods;
-  grouped data types live in `sessions/base.py`. External callers use SessionManager;
-  `create()` returns the managed session, while state and search results are detached.
-  Storage owns persistent file I/O; Application owns runtime
-  mutation. Partial update keys are validated before any managed state changes.
-- **Storage internals**: double-leading underscores for private fields and methods;
-  constants belong in `storage/constants.py`. Callers own paths and serialization.
-- **New provider / tool / command**: follow the existing seams — subclass the relevant
-  `base.py`, and for a tool also add its `harness/tools/<snake_name>/` prompt pair; for a
-  command register it in `commands/registry.py` and delegate its effect to Application. A command that ends or switches the active
-  session also goes into `commands/registry.py:SESSION_DISCARDING_COMMANDS`.
-- **New plugin**: import `plugin`, `hook` and `tool` from `core/plugins/decorators.py`.
-  Mark a plain class with `@plugin(...)` in `plugin.py`; define `@hook(...)` methods,
-  `@tool(...)` methods, or both. Each decorated class is independent;
-  constructors take no required arguments. Do not add a base class or YAML manifest.
-- **Git**: branches `feature/snake_case` or `fix/snake_case`; commit messages in past tense
-  naming the file(s) touched. Do not mention the contribution of coding agents (including
-  Claude) in commit messages — attribute commits to the human author only.
+- **Docstrings**: Google style on all public symbols, tests included.
+- **Style**: `ruff` (`E,F,I`), `ruff format`.
+- **Comments**: lowercase start, no final period, only for non-obvious code.
+- **Files**: `snake_case.py`, Markdown `UPPER_SNAKE_CASE.md`; `src/`, `tests/`.
+- **Exceptions**: built-ins only; no custom exception classes.
+- **Private members**: double leading underscore; constants in the package's
+  `constants.py`; shared data types in `base.py`.
+- **New provider / tool / command**: subclass the `base.py`. A tool also needs
+  `harness/tools/<snake_name>/`. A command goes in `commands/registry.py`
+  (and `SESSION_DISCARDING_COMMANDS` if it switches session) and delegates to
+  Application.
+- **New plugin**: plain class with `@plugin(...)` in `plugin.py`, plus
+  `@hook`/`@tool` methods; no-arg constructor; no base class, no YAML.
+- **Git**: branches `feature/snake_case` / `fix/snake_case`; past-tense commit
+  messages naming the files; never credit coding agents.
 
-### Testing
+## Testing
 
-Only `pytest` is available — no `pytest-mock`, `pytest-asyncio` or coverage plugin. Use
-`monkeypatch`, `tmp_path` and the stdlib.
+Only `pytest` (no mock/asyncio/coverage plugins); use `monkeypatch`,
+`tmp_path`, stdlib. Tests are flat in `tests/`, one file per layer, plus
+`conftest.py` and `fakes.py`; `test_integration.py` wires the real graph.
 
-- **Fake only the four real boundaries**: the model (`ScriptedClient`), the user
-  (`ScriptedController`), the Textual app (`FakeApp`, `RecordingApp`) and the network
-  (monkeypatched `trafilatura`/`ddgs`). They all live in `tests/fakes.py`; everything
-  else — storage, sessions, settings, permissions, tools, the executor — is the real
-  object against `tmp_path`. The pre-refactor suite faked whole layers instead, which is
-  how it drifted far enough from the source to shape it.
-- **Plugins are written to disk, not faked.** `tests/test_plugins.py` builds real plugin
-  folders under `tmp_path` and loads them through `PluginManager`. The autouse plugin
-  fixture clears the registry, pending declarations and diagnostics around every test,
-  and removes synthetic plugin modules afterward so helpers cannot leak between tests.
-  Tests describe the current registration and runtime contract, not removed internals.
-- **Never let a test reach the real home directory.** See the table under *Runtime
-  working directory*. When tests are restored, rebuild the isolation fixtures. A test
-  constructing `StorageManager` must repoint `storage.manager.ARANCIO_DEFAULT_DIR`;
-  tests must change the process working directory to a temporary directory when creating
-  sessions, and generic directory move/link calls must use temporary paths.
-- **File-read state**: construct an explicit ToolSession for Core. Sessions receives
-  copied snapshots and returns saved data; it never receives or clears the live guard.
-- **Docstrings are enforced on `tests/` too.** A one-line docstring is enough for a test
-  function — a fixture parameter needs no `Args:` entry. Two `DOC` rules bite: `DOC501`
-  wants a `Raises:` for a literal `raise ValueError(...)`, while `DOC502` **rejects** one
-  for `raise some_variable`, whose type ruff cannot resolve.
-- **Pin a known defect with `@pytest.mark.xfail(strict=True)`** and a `reason` naming the
-  cause, rather than asserting the wrong behaviour. The test turns green by itself once
-  the bug is fixed, and `strict` then fails the suite until the marker is removed, so the
-  fix and the marker go in together. The suite currently has no xfail.
+- **Fake only the real boundaries** (in `tests/fakes.py`): model
+  (`ScriptedClient`), user (`ScriptedController`), Textual app (`FakeApp`,
+  `RecordingApp`), network (monkeypatched `trafilatura`/`ddgs`). Everything else
+  is real, on `tmp_path`.
+- **Never touch the real home.** Repoint, on the *importing* module,
+  `tools_base.TOOLS_HARNESS_PATH` and
+  `system_prompt_builder.SYSTEM_PROMPT_HARNESS_PATH` (to repo `harness/`),
+  `storage.manager.ARANCIO_DEFAULT_DIR` and `core.plugins.manager.PLUGINS_PATH`;
+  chdir to a temp dir before creating sessions. `conftest.py` does this.
+- **Plugins** are written to disk under `tmp_path` and loaded for real; an
+  autouse fixture resets the registry and plugin modules.
+- **ToolSession**: build one explicitly; Sessions only gets copied snapshots.
+- **Docstring rules**: one line is enough for a test. `DOC501` wants `Raises:`
+  for `raise ValueError(...)`; `DOC502` rejects it for `raise some_variable`.
+- **Known bugs**: pin with `@pytest.mark.xfail(strict=True, reason=...)`.

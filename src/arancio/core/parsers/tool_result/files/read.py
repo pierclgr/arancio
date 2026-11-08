@@ -28,7 +28,26 @@ class ReadFileToolResultParser(ToolResultParser):
             parts.append(file_path)
         if content_block:
             parts.append(content_block)
-        if total_lines == 0:
+        if "source_total_lines" in output:
+            source_total = output["source_total_lines"]
+            if source_total == 0:
+                parts.append("[empty file]")
+            elif output["source_start_line"] == 0:
+                parts.append(
+                    f"[no source lines returned, file has {source_total} lines]"
+                )
+            else:
+                parts.append(
+                    f"[source lines {output['source_start_line']}-"
+                    f"{output['source_end_line']} of {source_total}]"
+                )
+                if total_lines == 0:
+                    parts.append("[expanded output is empty]")
+                else:
+                    parts.append(
+                        f"[expanded lines {start_line}-{end_line} of {total_lines}]"
+                    )
+        elif total_lines == 0:
             parts.append("[empty file]")
         elif start_line == 0:
             parts.append(f"[no lines returned, file has {total_lines} lines]")

@@ -8,7 +8,6 @@ import shlex
 import uuid
 from collections.abc import Iterator
 from inspect import GEN_RUNNING, getgeneratorstate
-from pathlib import Path
 from threading import get_ident
 from typing import TYPE_CHECKING
 
@@ -29,7 +28,12 @@ from arancio.core.messages.user import UserMessage
 from arancio.core.tools.commands.shell import ShellCommandTool
 from arancio.core.tools.files.read import ReadFileTool
 from arancio.core.tools.session import ToolSession
-from arancio.prompt.actions.types import CommandAction, PromptAction, ShellCommandAction
+from arancio.prompt.actions.types import (
+    CommandAction,
+    FileMention,
+    PromptAction,
+    ShellCommandAction,
+)
 from arancio.prompt.manager import PromptManager
 from arancio.sessions.manager import SessionManager
 from arancio.settings.manager import SettingsManager
@@ -405,7 +409,7 @@ class ActionExecutor:
             if notice is not None:
                 yield notice
 
-    def __resolve_mentions(self, mentions: list[Path]) -> list[Message]:
+    def __resolve_mentions(self, mentions: list[FileMention]) -> list[Message]:
         """Synthesize a tool call/result pair for each resolved @mention.
 
         Bypasses :class:`arancio.core.permissions.manager.PermissionManager`
@@ -419,8 +423,7 @@ class ActionExecutor:
         PowerShell equivalent on Windows) against the directory.
 
         Args:
-            mentions: resolved absolute paths for the prompt's @mentions, in
-                order.
+            mentions: resolved paths and inclusive source bounds, in prompt order.
 
         Returns:
             A flat list containing a ``ToolCallMessage`` named
@@ -433,7 +436,8 @@ class ActionExecutor:
             return []
 
         messages: list[Message] = []
-        for target in mentions:
+        for mention in mentions:
+            target = mention.path
             call_id = f"mention_{uuid.uuid4().hex}"
             if target.is_dir():
                 name = "ShellCommandTool"
@@ -446,6 +450,14 @@ class ActionExecutor:
             else:
                 name = "ReadFileTool"
                 arguments = {"file_path": str(target)}
+                start_line, end_line = mention.start_line, mention.end_line
+                if (
+                    start_line is not None
+                    and end_line is not None
+                    and 1 <= start_line <= end_line
+                ):
+                    arguments["offset"] = start_line
+                    arguments["limit"] = end_line - start_line + 1
                 tool = self.__read_file_tool
             call = ToolCallMessage(
                 content=f"{name}({json.dumps(arguments)})",

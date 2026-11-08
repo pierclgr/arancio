@@ -12,13 +12,11 @@ from arancio.core.tools.base import Tool
 class ReadFileTool(Tool):
     """Read a text file from disk with ``cat -n``-style line numbering.
 
-    The tool reads a UTF-8 file, optionally slicing it with ``offset`` and ``limit``,
-    and returns each line prefixed with its 1-indexed line number and a tab so the
-    output can feed a downstream edit tool. Long lines are truncated past a per-line
-    character cap to keep the model context bounded. A ``.md`` file is not read
-    raw: it is expanded through :class:`DynamicMarkdownFile` first (``<include>``/
-    ``@path``/``<script>``/``<field>`` tags resolved, with no field source), and the
-    expanded text is what gets sliced and line-numbered.
+    Select and cap raw source lines before expanding complete dynamic Markdown tags in
+    ``.md`` files. Plain-text prefixes retain source line numbers; Markdown prefixes
+    number the expanded excerpt from one, with source bounds reported separately.
+    Expanded output has no line-count cap. Every output line still has a per-line
+    character cap.
     """
 
     _default_limit: int = 2000
@@ -36,23 +34,21 @@ class ReadFileTool(Tool):
 
         Args:
             file_path: absolute path to the file to read.
-            offset: 1-indexed line number to start reading from. Defaults
-                to ``1``.
-            limit: maximum number of lines to read. Defaults to
-                ``_default_limit`` and is capped at ``_default_limit``.
+            offset: 1-indexed source line to start paging from. Defaults to one.
+                An offset beyond the last source line reads from the beginning.
+            limit: source-line page size, capped at ``_default_limit``.
 
         Returns:
-            A dict with keys ``file_path`` (str, canonical absolute path),
-            ``content`` (str, ``cat -n``-formatted slice), ``start_line``
-            (int, 1-indexed first returned line or ``0``), ``end_line``
-            (int, 1-indexed last returned line or ``0``), ``total_lines``
-            (int, total line count in the file) and ``truncated_lines``
-            (int, number of returned lines truncated to the per-line
-            character cap).
+            A dict containing ``file_path``, numbered ``content``, ``start_line``,
+            ``end_line``, ``total_lines`` and ``truncated_lines``. Plain-text
+            bounds refer to source positions. Markdown bounds describe the
+            expanded excerpt; ``source_start_line``, ``source_end_line`` and
+            ``source_total_lines`` describe its raw source selection. Empty
+            selections have zero start/end bounds.
 
         Raises:
-            ValueError: when ``file_path`` is not absolute, when ``offset``
-                or ``limit`` are not positive, or when a ``.md`` file's
+            ValueError: when ``file_path`` is not absolute, when paging arguments
+                are not positive, or when a ``.md`` file's
                 dynamic-markdown expansion fails (e.g. an unresolvable
                 ``<field>`` tag or an ``<include>`` cycle).
             FileNotFoundError: when ``file_path`` does not exist.
@@ -74,18 +70,32 @@ class ReadFileTool(Tool):
         canonical = str(path.resolve())
         mtime = path.stat().st_mtime
 
-        effective_limit = min(limit or self._default_limit, self._default_limit)
+        text: str = path.read_text(encoding="utf-8", errors="replace")
+        all_lines: list[str] = text.splitlines(keepends=True)
+        total_lines: int = len(all_lines)
 
-        if path.suffix == ".md":
-            text = DynamicMarkdownFile(path).content
-        else:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        all_lines = text.splitlines()
-        total_lines = len(all_lines)
+        if offset > total_lines:
+            offset = 1
+            limit = None
+        effective_limit: int = min(limit or self._default_limit, self._default_limit)
 
         start_idx = offset - 1
         end_idx = min(start_idx + effective_limit, total_lines)
-        selected = all_lines[start_idx:end_idx] if start_idx < total_lines else []
+        selected: list[str] = (
+            all_lines[start_idx:end_idx] if start_idx < total_lines else []
+        )
+        source_start: int = start_idx + 1 if selected else 0
+        source_end: int = start_idx + len(selected) if selected else 0
+        source_total: int = total_lines
+        selected_text: str = "".join(selected)
+
+        is_markdown: bool = path.suffix == ".md"
+        if is_markdown:
+            selected_text = DynamicMarkdownFile(path, content=selected_text).content
+            start_idx = 0
+        selected = selected_text.splitlines()
+        if is_markdown:
+            total_lines = len(selected)
 
         truncated_lines = 0
         capped_lines = []
@@ -104,7 +114,7 @@ class ReadFileTool(Tool):
 
         self._tool_session.record_read(path=canonical, mtime=mtime)
 
-        return {
+        output: dict = {
             "file_path": canonical,
             "content": formatted,
             "start_line": start_idx + 1 if selected else 0,
@@ -112,3 +122,10 @@ class ReadFileTool(Tool):
             "total_lines": total_lines,
             "truncated_lines": truncated_lines,
         }
+        if is_markdown:
+            output.update(
+                source_start_line=source_start,
+                source_end_line=source_end,
+                source_total_lines=source_total,
+            )
+        return output
