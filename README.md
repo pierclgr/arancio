@@ -45,6 +45,8 @@ Mention a file in a prompt to attach its contents:
 - `@file.py:110` reads line 110.
 - `@file.py:110-120` reads lines 110 through 120, inclusive.
 - `@"folder/file name.py":110-120` supports paths containing spaces.
+- `@file.md:raw` reads Markdown without expanding dynamic tags.
+- `@file.md:110-120:raw` selects raw Markdown source lines.
 
 Zero, negative and reversed selectors, and selectors starting beyond the end
 of the file, fall back to the whole-file read when the file exists. A range
@@ -57,6 +59,11 @@ expansion. Only complete tags in the selected text expand; cut-off tags remain
 literal. Expanded output can exceed 2,000 lines. Its numbering starts at `1`,
 and the footer separately shows the original source range. Model-initiated
 file reads use the same source-selection and expansion order.
+
+The `:raw` modifier applies only to `.md` files and also works with quoted
+paths. Raw reads keep source line numbers and leave dynamic tags untouched.
+Model-initiated reads can request this with `raw_markdown=true`; the default
+is `false`, which expands dynamic Markdown tags.
 
 ## Project Structure
 

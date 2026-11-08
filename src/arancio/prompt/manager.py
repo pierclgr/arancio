@@ -113,7 +113,8 @@ class PromptManager:
             The rewritten prompt and mentions in occurrence order. Existing literal
             paths take precedence over selectors; otherwise the longest existing
             path prefix is used. Missing targets stay unchanged. Malformed selectors
-            and directory selectors carry no line bounds.
+            and directory selectors carry no line bounds. A trailing ``:raw`` modifier
+            disables dynamic Markdown expansion only for ``.md`` file targets.
         """
         mentions: list[FileMention] = []
         rewritten_prompt: str = MENTION_PATTERN.sub(
@@ -156,7 +157,13 @@ class PromptManager:
 
             mention: FileMention = FileMention(path=target)
             suffix: str = raw_path[boundary:]
-            selector: re.Match[str] | None = LINE_RANGE_PATTERN.fullmatch(suffix[1:])
+            selector_suffix: str = suffix
+            if target.is_file() and target.suffix == ".md" and suffix.endswith(":raw"):
+                mention.raw_markdown = True
+                selector_suffix = suffix.removesuffix(":raw")
+            selector: re.Match[str] | None = LINE_RANGE_PATTERN.fullmatch(
+                selector_suffix[1:]
+            )
             if target.is_file() and selector is not None:
                 try:
                     start: int = int(selector.group(1))

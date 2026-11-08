@@ -416,7 +416,7 @@ class ActionExecutor:
         entirely: the user's own explicit mention is itself sufficient
         consent, regardless of the granted READ permission level. A file
         target is read via a real :class:`ReadFileTool` instance, reusing
-        its disk read (or, for a ``.md`` target, its dynamic-markdown
+        its disk read (or, for a ``.md`` target without ``:raw``, its dynamic-markdown
         expansion), line-numbering, truncation and session bookkeeping
         unchanged. A directory target is listed via a real
         :class:`ShellCommandTool` instance running ``ls -la`` (or the
@@ -450,6 +450,8 @@ class ActionExecutor:
             else:
                 name = "ReadFileTool"
                 arguments = {"file_path": str(target)}
+                if mention.raw_markdown:
+                    arguments["raw_markdown"] = True
                 start_line, end_line = mention.start_line, mention.end_line
                 if (
                     start_line is not None

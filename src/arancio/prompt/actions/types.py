@@ -54,11 +54,14 @@ class FileMention:
         path: the resolved absolute target path.
         start_line: the first requested source line, or None for a whole-file read.
         end_line: the last requested source line, or None for a whole-file read.
+        raw_markdown: whether to return raw Markdown source. True only
+            for ``.md`` file mentions with a trailing ``:raw`` modifier.
     """
 
     path: Path
     start_line: int | None = None
     end_line: int | None = None
+    raw_markdown: bool = False
 
 
 @dataclass

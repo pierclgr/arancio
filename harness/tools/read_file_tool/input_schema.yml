@@ -11,5 +11,8 @@ properties:
     description: Maximum raw source lines to read. Defaults to 2000, capped at 2000.
     minimum: 1
     maximum: 2000
+  raw_markdown:
+    type: boolean
+    description: Read raw .md source with source line numbers when true. Defaults to false, expanding dynamic Markdown tags. Ignored for other file types.
 required:
   - file_path

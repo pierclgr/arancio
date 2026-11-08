@@ -13,10 +13,10 @@ class ReadFileTool(Tool):
     """Read a text file from disk with ``cat -n``-style line numbering.
 
     Select and cap raw source lines before expanding complete dynamic Markdown tags in
-    ``.md`` files. Plain-text prefixes retain source line numbers; Markdown prefixes
-    number the expanded excerpt from one, with source bounds reported separately.
-    Expanded output has no line-count cap. Every output line still has a per-line
-    character cap.
+    ``.md`` files by default. Plain-text and raw Markdown prefixes retain source line
+    numbers; expanded Markdown prefixes number the excerpt from one, with source bounds
+    reported separately. Expanded output has no line-count cap. Every output line still
+    has a per-line character cap.
     """
 
     _default_limit: int = 2000
@@ -29,6 +29,7 @@ class ReadFileTool(Tool):
         file_path: str,
         offset: int = 1,
         limit: int | None = None,
+        raw_markdown: bool = False,
     ) -> dict:
         """Read a file slice and return its line-numbered contents.
 
@@ -37,12 +38,15 @@ class ReadFileTool(Tool):
             offset: 1-indexed source line to start paging from. Defaults to one.
                 An offset beyond the last source line reads from the beginning.
             limit: source-line page size, capped at ``_default_limit``.
+            raw_markdown: whether to return raw ``.md`` source with source line
+                numbers. Defaults to False, expanding dynamic Markdown tags.
+                Has no effect on other file types.
 
         Returns:
             A dict containing ``file_path``, numbered ``content``, ``start_line``,
             ``end_line``, ``total_lines`` and ``truncated_lines``. Plain-text
-            bounds refer to source positions. Markdown bounds describe the
-            expanded excerpt; ``source_start_line``, ``source_end_line`` and
+            and raw Markdown bounds refer to source positions. Expanded Markdown
+            bounds describe the excerpt; ``source_start_line``, ``source_end_line`` and
             ``source_total_lines`` describe its raw source selection. Empty
             selections have zero start/end bounds.
 
@@ -89,12 +93,12 @@ class ReadFileTool(Tool):
         source_total: int = total_lines
         selected_text: str = "".join(selected)
 
-        is_markdown: bool = path.suffix == ".md"
-        if is_markdown:
+        should_expand: bool = path.suffix == ".md" and not raw_markdown
+        if should_expand:
             selected_text = DynamicMarkdownFile(path, content=selected_text).content
             start_idx = 0
         selected = selected_text.splitlines()
-        if is_markdown:
+        if should_expand:
             total_lines = len(selected)
 
         truncated_lines = 0
@@ -122,7 +126,7 @@ class ReadFileTool(Tool):
             "total_lines": total_lines,
             "truncated_lines": truncated_lines,
         }
-        if is_markdown:
+        if should_expand:
             output.update(
                 source_start_line=source_start,
                 source_end_line=source_end,

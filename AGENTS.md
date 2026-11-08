@@ -110,6 +110,8 @@ expansion. Offset past EOF → first 2,000 lines; limit past EOF → remaining
 lines. Expansion uses `DynamicMarkdownFile(path, content=...)`; output is
 renumbered from one, not line-capped, and reports `source_start_line`,
 `source_end_line`, `source_total_lines`. The per-line char cap applies after.
+`raw_markdown=True` skips expansion for `.md` files and returns the same
+source numbering and metadata as plain-text reads; the default is `False`.
 
 ### Permissions (`core/permissions/`)
 
@@ -226,7 +228,9 @@ Public coordinator over Core, Settings and Sessions; returns Messages and
 ### Prompt & commands (`prompt/`, `commands/`)
 
 `PromptManager` returns typed `Action`s. `FileMention(path, start_line,
-end_line)` supports `@file:110` and `@file:110-120` (quoted paths too); the
+end_line, raw_markdown=False)` supports `@file:110` and `@file:110-120`
+(quoted paths too). Only `.md` file mentions support a trailing `:raw`
+(`@file.md:raw`, `@file.md:110-120:raw`), passed as `raw_markdown=True`; the
 executor turns valid ranges into `offset`/`limit`, invalid ones into a full
 read. `ActionExecutor.execute(text)` routes input, records the user message
 before Core, yields each Core message then records it with a `ToolSession`
