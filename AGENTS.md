@@ -87,6 +87,10 @@ prefix; credentials come from env vars. `_litellm_patches.apply()` patches
 pinned-LiteLLM bugs, including the ChatGPT device-code login notice sent to the
 controller (UI-only, never in history).
 
+The `litellm[mcp]` extra is required by the current Responses dispatcher even
+for ordinary function tools; without it, model requests fail before reaching the
+provider with `No module named 'mcp'`.
+
 **Ollama caveat**: `reasoning={"effort": ...}` is always sent, but for
 non-`gpt-oss` Ollama models LiteLLM turns it into `think: true|false`, so
 low/medium/high are equal. Setting `thinking_summary` there crashes LiteLLM
@@ -173,8 +177,9 @@ skipped) as `arancio_plugins.<folder>.plugin`, so relative imports work.
 Decorators (`core/plugins/decorators.py`) `@plugin`, `@hook`, `@tool` fill
 `PLUGIN_REGISTRY` (`registry.py`) with `Plugin` records (`base.py`: internal,
 not a base class). Metadata: name (class name), version `"0.0.0"`,
-description, author, enabled `True`; bad or unknown fields skip the class with
-a startup error. Empty plugins warn. Failed imports roll back their
+description, author, enabled `True`; spaces in plugin names become dashes before
+duplicate checks, tool naming and category creation. Bad or unknown fields skip
+the class with a startup error. Empty plugins warn. Failed imports roll back their
 declarations and modules. Enabled names clashing case-insensitively are all
 skipped. Each class is built once with `plugin_cls()`; its hooks and tools
 share that instance. A failing plugin method returns one `ErrorMessage` and is

@@ -25,7 +25,8 @@ def plugin(**metadata: Any) -> Callable[[type], type]:
 
     Args:
         **metadata: the plugin's name, version, description, author and enabled
-            flag. Omitted fields take their defaults from Plugin.
+            flag. Spaces in the name are replaced by dashes. Omitted fields take
+            their defaults from Plugin.
 
     Returns:
         A decorator returning the original class unchanged.

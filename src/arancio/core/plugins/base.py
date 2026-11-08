@@ -17,7 +17,8 @@ class Plugin:
     Attributes:
         plugin_cls: the original decorated class, constructed at startup.
         source_path: the file declaring the class.
-        name: the plugin name, defaulted to the class name by the decorator.
+        name: the plugin name with spaces replaced by dashes, defaulted to the
+            class name.
         version: the declared version.
         description: the plugin's purpose.
         author: the declared plugin author.
@@ -54,6 +55,7 @@ class Plugin:
                 raise TypeError(f"{name} must be {expected.__name__}, got {value!r}.")
         if not self.name:
             raise ValueError(f"name must not be empty, got {self.name!r}.")
+        self.name = self.name.replace(" ", "-")
 
     @property
     def location(self) -> str:

@@ -8,7 +8,8 @@ dependencies = [
     "botocore>=1.43.15",
     "ddgs>=9.14.4",
     "dynamic-markdown",
-    "litellm>=1.83.14",
+    # LiteLLM imports MCP while dispatching ordinary tool requests
+    "litellm[mcp]>=1.83.14",
     "pyyaml>=6.0.3",
     "requests>=2.33.1",
     "textual>=5.0.0",
