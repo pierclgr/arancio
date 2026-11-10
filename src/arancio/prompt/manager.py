@@ -148,11 +148,14 @@ class PromptManager:
         )
         for boundary in boundaries:
             try:
-                target: Path = (Path.cwd() / raw_path[:boundary]).resolve()
+                target: Path = (
+                    Path.cwd() / Path(raw_path[:boundary]).expanduser()
+                ).resolve()
                 if not (target.is_file() or target.is_dir()):
                     continue
-            except (OSError, ValueError):
-                # invalid suffixes can exceed filesystem filename limits
+            except (OSError, ValueError, RuntimeError):
+                # invalid suffixes can exceed filesystem filename limits, and
+                # expanduser raises RuntimeError for an unresolvable home
                 continue
 
             mention: FileMention = FileMention(path=target)
