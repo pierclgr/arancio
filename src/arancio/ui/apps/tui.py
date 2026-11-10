@@ -68,7 +68,8 @@ class TUIApp(TextualApp):
         """
         yield self.__message_log
         yield Input(placeholder="Type a message…", id="prompt")
-        yield Static(self.__toolbar_text(), id="toolbar")
+        # markup is off so a working directory with brackets shows verbatim
+        yield Static(self.__toolbar_text(), id="toolbar", markup=False)
 
     async def on_mount(self) -> None:
         """Prepare the log, show the startup messages and draw the toolbar."""

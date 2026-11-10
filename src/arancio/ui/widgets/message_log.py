@@ -164,12 +164,18 @@ class MessageLog(VerticalScroll):
             return Markdown(message.display_text, classes="reasoning")
         if isinstance(message, AssistantMessage):
             return Markdown(message.display_text)
+        # markup is off so brackets in tool output or user text show verbatim
+        # instead of being parsed as Textual style tags
         if isinstance(message, ToolCallMessage):
-            return Static(f"→ {message.name}({message.arguments})", classes="tool-call")
+            return Static(
+                f"→ {message.name}({message.arguments})",
+                classes="tool-call",
+                markup=False,
+            )
         if isinstance(message, (ToolErrorMessage, ErrorMessage)):
-            return Static(message.display_text, classes="error")
+            return Static(message.display_text, classes="error", markup=False)
         if isinstance(message, WarningMessage):
-            return Static(message.display_text, classes="warning")
+            return Static(message.display_text, classes="warning", markup=False)
         if isinstance(message, ToolResultMessage):
-            return Static(message.display_text, classes="tool-result")
-        return Static(message.display_text, classes="user")
+            return Static(message.display_text, classes="tool-result", markup=False)
+        return Static(message.display_text, classes="user", markup=False)
