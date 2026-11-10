@@ -30,7 +30,7 @@ class PermissionsCommand(Command):
         Args:
             category: a known category name or all, case-insensitively.
             application: the operation facade supplied by the executor.
-            level: ask, auto or null; omission reads the selected grants.
+            level: ask, auto or none; omission reads the selected grants.
 
         Returns:
             Existing level text, update confirmation, or a persistence notice.
@@ -64,7 +64,7 @@ class PermissionsCommand(Command):
                 )
             return "  \n".join(lines)
 
-        if level.lower() == "null":
+        if level.lower() == "none":
             new_level = PermissionLevel.NONE
         else:
             try:
@@ -75,7 +75,7 @@ class PermissionsCommand(Command):
                     for member in PermissionLevel
                     if member is not PermissionLevel.NONE
                 ]
-                valid = ", ".join(["null"] + other_levels)
+                valid = ", ".join(["none"] + other_levels)
                 raise ValueError(
                     f"Unknown permission level: {level!r}. Valid levels: {valid}."
                 ) from None
