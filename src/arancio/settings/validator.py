@@ -189,10 +189,10 @@ class SettingsValidator:
         """
         messages: list[Message] = []
         for key, child in node.items():
-            child_path = (*prefix, key)
-            label = ".".join(child_path)
+            # YAML keys may be numbers or booleans, so only known keys are joined as-is
             if key not in self.__sections[prefix]:
                 if strict:
+                    label = ".".join((*prefix, str(key)))
                     raise ValueError(f"Unknown settings field: {label!r}.")
                 where = f' in "{".".join(prefix)}"' if prefix else ""
                 messages.append(
@@ -204,9 +204,11 @@ class SettingsValidator:
                     )
                 )
                 continue
+            child_path = (*prefix, key)
             if child_path not in self.__sections or child is None:
                 continue
             if not isinstance(child, Mapping):
+                label = ".".join(child_path)
                 text = (
                     f'{ARANCIO_SETTINGS_FILENAME}: "{label}" must be a mapping, '
                     f"got {child!r}"
