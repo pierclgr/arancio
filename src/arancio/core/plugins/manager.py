@@ -3,6 +3,7 @@
 import importlib.util
 import sys
 from collections import Counter
+from collections.abc import Mapping
 from functools import partial, update_wrapper
 from pathlib import Path
 from types import ModuleType
@@ -10,12 +11,13 @@ from typing import Any, Callable
 
 from arancio.core.hooks.base import Hook
 from arancio.core.hooks.manager import HookManager
-from arancio.core.messages.base import ErrorMessage, Message
+from arancio.core.messages.base import ErrorMessage, Message, WarningMessage
 from arancio.core.permissions.types import PermissionCategory
 from arancio.core.plugins.base import Plugin
 from arancio.core.plugins.constants import (
     PLUGIN_MODULE_FILENAME,
     PLUGIN_PACKAGE_ROOT,
+    PLUGIN_PERMISSION_CATEGORY_PREFIX,
     PLUGINS_PATH,
 )
 from arancio.core.plugins.registry import PLUGIN_REGISTRY, REGISTRATION_MESSAGES
@@ -28,11 +30,12 @@ class PluginManager:
     """Load the shared registry and attach enabled plugins to core.
 
     Decorators own registration, including classes imported from helpers. Each
-    enabled, non-conflicting plugin is constructed once. Its hooks are attached
-    to the hook manager and its tools are registered with the tool manager.
-    Disabled plugins and constructor failures remain in the registry with no
-    instance. A failing hook method is disabled across its events without
-    stopping sibling methods. The root is never created by the manager.
+    plugin enabled in settings and without a name conflict is constructed once. Its
+    hooks are attached to the hook manager and its tools are registered with the
+    tool manager. Disabled or unconfigured plugins and constructor failures remain
+    in the registry with no instance. A failing hook method is disabled across its
+    events without stopping sibling methods. The root is never created by the
+    manager.
 
     Attributes:
         registry: the shared list filled by plugin decorators.
@@ -63,12 +66,18 @@ class PluginManager:
         """
         return f"{type(self).__name__}({self._root})"
 
-    def load(self) -> list[Message]:
-        """Import entry files, construct plugins and attach their declarations.
+    def load(self, enabled: Mapping[str, bool]) -> list[Message]:
+        """Import entry files, construct enabled plugins and attach their declarations.
 
-        Metadata errors skip only their class. Import failures discard that
-        import's declarations and cached plugin modules. Previously imported
+        Every entry file is imported, since a plugin's name is known only after
+        import. Only plugins enabled in ``enabled`` are constructed; a plugin
+        missing from it is reported with a warning, a disabled one is skipped
+        silently. Metadata errors skip only their class. Import failures discard
+        that import's declarations and cached plugin modules. Previously imported
         entries and constructed instances are reused on subsequent calls.
+
+        Args:
+            enabled: lowercase plugin names mapped to whether settings enable them.
 
         Returns:
             Startup errors and warnings, including decorator diagnostics.
@@ -88,13 +97,26 @@ class PluginManager:
         messages.extend(REGISTRATION_MESSAGES)
         REGISTRATION_MESSAGES.clear()
 
-        # detect all conflicting enabled names before constructing any plugin
-        name_counts = Counter(
-            plugin.name.upper() for plugin in self.registry if plugin.enabled
-        )
+        selected: list[Plugin] = []
         for plugin in self.registry:
-            if not plugin.enabled or plugin.instance is not None:
+            if plugin.instance is not None:
                 continue
+            state = enabled.get(plugin.name.lower())
+            if state is None:
+                messages.append(
+                    WarningMessage(
+                        content=(
+                            f"{plugin.location}: plugin {plugin.name!r} has no "
+                            "entry in the plugins settings; not loaded."
+                        )
+                    )
+                )
+            elif state:
+                selected.append(plugin)
+
+        # detect all conflicting enabled names before constructing any plugin
+        name_counts = Counter(plugin.name.upper() for plugin in selected)
+        for plugin in selected:
             if name_counts[plugin.name.upper()] > 1:
                 messages.append(
                     ErrorMessage(
@@ -216,7 +238,9 @@ class PluginManager:
             An error for an unknown category or duplicate name, otherwise ``None``.
         """
         if tool_class.permission_category == "CUSTOM":
-            category = PermissionCategory.get_or_create(f"PLUGIN:{plugin.name}")
+            category = PermissionCategory.get_or_create(
+                f"{PLUGIN_PERMISSION_CATEGORY_PREFIX}{plugin.name}"
+            )
         else:
             category = PermissionCategory.get(tool_class.permission_category)
             if category is None:

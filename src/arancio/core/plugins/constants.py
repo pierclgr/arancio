@@ -8,3 +8,6 @@ PLUGIN_MODULE_FILENAME = "plugin.py"
 # synthetic package every plugin module is imported under, so a plugin's own
 # modules are reachable by relative import without touching sys.path
 PLUGIN_PACKAGE_ROOT = "arancio_plugins"
+
+# prefix of the permission category created for a plugin's CUSTOM tools
+PLUGIN_PERMISSION_CATEGORY_PREFIX = "PLUGIN:"

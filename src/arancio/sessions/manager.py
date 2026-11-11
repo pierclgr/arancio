@@ -15,6 +15,7 @@ from typing import Any
 from arancio.core.messages.assistant import AssistantMessage
 from arancio.core.messages.base import ErrorMessage, Message
 from arancio.core.messages.user import UserMessage
+from arancio.core.permissions.constants import DEFAULT_PERMISSION_LEVELS
 from arancio.core.permissions.types import PermissionCategory
 from arancio.sessions.base import (
     Session,
@@ -44,7 +45,8 @@ class SessionManager:
     Attributes:
         __storage_manager: the injected file I/O service.
         __sessions_dir: the session location under Storage's root.
-        __categories: the known permission-category identities at construction.
+        __categories: the default permission categories stored in sessions;
+            plugin levels are global settings and are not stored.
         __session: the managed active conversation.
         __recorder: the record builder and writer.
         __registry: the reconstructed saved-session index.
@@ -66,9 +68,11 @@ class SessionManager:
             storage_manager: the generic file I/O service.
             configuration: the already-loaded opening configuration.
         """
-        self.__storage_manager = storage_manager
+        self.__storage_manager: StorageManager = storage_manager
         self.__sessions_dir = self.__storage_manager.root / ARANCIO_SESSIONS_DIR
-        self.__categories = tuple(PermissionCategory)
+        self.__categories: tuple[PermissionCategory, ...] = tuple(
+            DEFAULT_PERMISSION_LEVELS
+        )
         self.__pending_sources: list[Session] = []
         self.__validator = SessionValidator(self.__storage_manager, self.__categories)
         # reject invalid opening values before discovery can create a directory

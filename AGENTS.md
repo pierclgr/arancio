@@ -33,7 +33,9 @@ Paths are in `core/constants.py` and each component's `constants.py`.
 - `harness/system_prompt.md`: seeded if absent, parsed once and cached by
   `SystemPromptBuilder`; `build()` appends the current date each turn. Put
   fresh runtime context in `build()`, never in a `<script>` tag.
-- `settings.yml`: written by `SettingsManager` through Storage.
+- `settings.yml`: written by `SettingsManager` through Storage. Layout:
+  `permissions: default: {read: ask, ...}` and
+  `plugins: [{<name>: {enabled: bool, permission_level: ask|auto|null}}]`.
 - `litellm/`: LiteLLM login data (moved/symlinked by Storage's generic ops).
 - `sessions/<cwd-name+hash>/<y>/<m>/<d>/<uuid4hex>.jsonl`: one append-only log
   per session. No registry file; `SessionRegistry` rescans at launch.
@@ -53,9 +55,10 @@ the module (`core.hooks.base`, `core.hooks.manager`, ...).
 
 `Application.build(controller)` (`application/base.py`) creates
 `StorageManager`, LiteLLM login paths, one shared `HookManager` and
-`ToolSession`, the clients, `ToolManager`, then loads plugins, then Settings,
+`ToolSession`, the clients, `ToolManager`, then loads Settings, then plugins,
 then `PermissionManager`, `Agent`, `SessionManager`, direct tools and
-`Application`. **Plugins load before Settings/Permissions** so plugin
+`Application`. **Settings load before plugins** (their `plugins` entries decide
+which plugins load), and **plugins load before Permissions** so plugin
 categories exist. Clients get `controller.show_login` as login callback; they
 get no HookManager. `ui/__main__.py` builds `TUIController` →
 `Application.build` → `TUIApp(application)`, then attaches the app.
@@ -131,8 +134,13 @@ later); a metaclass gives it `Enum`-like access over a case-insensitive
 registry, plus `get`, `get_or_create`, `add_tool`. Built-ins: `READ`, `WRITE`,
 `WEB`, `EXECUTE`, `PLUGIN`; default levels in `core/permissions/constants.py`,
 others default to ASK. `PermissionLevel`: NONE, ASK, AUTO. Grants always cover
-every registered category. `PermissionManager` owns `ToolManager`; NONE tools
-are never instantiated. `validate` returns `(PermissionDecision, hook_messages)`
+every registered category: Application builds the grants from
+`permissions.default` plus the `permission_level` of each loaded plugin's
+`PLUGIN:<name>` category, and sends a change of a plugin category to
+`SettingsManager.set_plugin_permission_levels` /
+`save_plugin_permission_level`, so Settings stays plain data and never reads
+this registry. `PermissionManager` owns `ToolManager`; NONE tools are never instantiated.
+`validate` returns `(PermissionDecision, hook_messages)`
 (`PermissionOutcome` ALLOWED/DENIED/UNAVAILABLE + `note`); ASK goes to the
 controller. The agent's `_permission_message` writes all model-facing wording.
 
@@ -184,16 +192,20 @@ Notes:
 
 ### Plugins (`core/plugins/`)
 
-`PluginManager.load() -> list[Message]` imports `plugin.py` from each folder in
-`manager.PLUGINS_PATH` (sorted; hidden, `_`-prefixed and entry-less folders
+`PluginManager.load(enabled) -> list[Message]` imports `plugin.py` from each
+folder in `manager.PLUGINS_PATH` (sorted; hidden, `_`-prefixed and entry-less folders
 skipped) as `arancio_plugins.<folder>.plugin`, so relative imports work.
 Decorators (`core/plugins/decorators.py`) `@plugin`, `@hook`, `@tool` fill
 `PLUGIN_REGISTRY` (`registry.py`) with `Plugin` records (`base.py`: internal,
 not a base class). Metadata: name (class name), version `"0.0.0"`,
-description, author, enabled `True`; spaces in plugin names become dashes before
+description, author; spaces in plugin names become dashes before
 duplicate checks, tool naming and category creation. Bad or unknown fields skip
 the class with a startup error. Empty plugins warn. Failed imports roll back their
-declarations and modules. Enabled names clashing case-insensitively are all
+declarations and modules. Settings decide loading, not code: `enabled` maps
+lowercase plugin names (from the `plugins` settings) to their flag; a plugin
+with no entry warns and is not loaded, a disabled one is skipped silently
+(both are still imported, since the name is known only after import). Entries
+for missing plugins are kept. Enabled names clashing case-insensitively are all
 skipped. Each class is built once with `plugin_cls()`; its hooks and tools
 share that instance. A failing plugin method returns one `ErrorMessage` and is
 disabled; other methods keep running.
@@ -204,8 +216,8 @@ from the decorator (no harness, no dynamic markdown); the schema is derived
 from the decorated method like built-in tools (no `input_schema=` argument), and
 a method that cannot be described is skipped with a startup error. `permission_category`:
 `READ`, `WRITE`, `WEB`, `EXECUTE`, `PLUGIN` (default) or `CUSTOM` (→
-`PLUGIN:<plugin_name>`, default ASK). `PluginToolResultParser` keeps dicts raw
-and displays them as JSON.
+`PLUGIN:<plugin_name>`, level from the plugin's `permission_level`).
+`PluginToolResultParser` keeps dicts raw and displays them as JSON.
 
 ### Frontend (`ui/`)
 
@@ -264,6 +276,12 @@ switching; others after. String results become `in_history=False`
 Missing file → created from defaults; bad YAML → left untouched, defaults used.
 `SettingsValidator` returns checked mappings and Messages; strict for edits,
 lenient with notices on load. Only the manager builds `Settings`.
+`Settings.permissions` holds only the default categories
+(`DEFAULT_PERMISSION_LEVELS`); `Settings.plugins` maps lowercase plugin names
+to `PluginSettings(enabled, permission_level)`; plugin levels are edited by
+plugin name with `set_plugin_permission_levels` and saved with
+`save_plugin_permission_level`. Invalid plugin entries warn and are left out; there is no support for the old
+flat `permissions` layout.
 
 `StorageManager` is generic file I/O rooted at `ARANCIO_DEFAULT_DIR` (text,
 lines, 64 KiB byte chunks, sizes, discovery, writes, `move_directory`,
@@ -278,7 +296,9 @@ on its first recordable event. `record_message(message, file_states=...,
 visible=True)` and `record_command(...)` return `ErrorMessage | None`; chunks
 are skipped, unsupported types (incl. `WarningMessage`) raise `ValueError`.
 `update_state(**changes)` takes `configuration`, `working_directory`,
-`explicit_name` (only this may be None). `find`, `load` (validates, refreshes
+`explicit_name` (only this may be None). A configuration stores only the
+default permission levels; plugin levels are global settings, so sessions keep
+loading when plugins change. `find`, `load` (validates, refreshes
 checksum, adds synthetic errors for unmatched tool calls), `fork` (returns
 state, confirmation, notices). Internals (`SessionRecorder`, `SessionChecksum`,
 `SessionRegistry`) are private. Sessions never touches live Agent, Settings,

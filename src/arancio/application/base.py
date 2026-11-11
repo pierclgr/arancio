@@ -18,6 +18,7 @@ from arancio.core.messages.assistant import AssistantMessage
 from arancio.core.messages.base import ErrorMessage, Message
 from arancio.core.permissions.manager import PermissionManager
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
+from arancio.core.plugins.constants import PLUGIN_PERMISSION_CATEGORY_PREFIX
 from arancio.core.plugins.manager import PluginManager
 from arancio.core.tools.commands.shell import ShellCommandTool
 from arancio.core.tools.files.read import ReadFileTool
@@ -67,17 +68,17 @@ class Application:
         __working_directory: the current runtime directory.
         __started: whether STARTUP was dispatched.
         __closed: whether shutdown was requested.
-        __SETTING_FIELDS: editable fields in dependency order.
-        __SETTING_MESSAGES: confirmation formatters for checked changes.
+        __setting_fields: editable fields in dependency order.
+        __setting_messages: confirmation formatters for checked changes.
     """
 
-    __SETTING_FIELDS: ClassVar[tuple[str, ...]] = (
+    __setting_fields: ClassVar[tuple[str, ...]] = (
         "provider",
         "model_name",
         "thinking_effort",
         "permissions",
     )
-    __SETTING_MESSAGES: ClassVar[dict[str, Callable[[Settings, Any], str]]] = {
+    __setting_messages: ClassVar[dict[str, Callable[[Settings, Any], str]]] = {
         "provider": lambda settings, value: f"Provider set to {settings.provider}",
         "model_name": lambda settings, value: f"Model set to {settings.model_id}",
         "thinking_effort": lambda settings, value: (
@@ -92,8 +93,8 @@ class Application:
     def build(controller: UIController) -> Application:
         """Build and wire the backend using the supplied frontend contract.
 
-        This loads plugins and settings and creates the backend. It does not
-        create a frontend or dispatch lifecycle hooks.
+        This loads settings, then the plugins they enable, and creates the
+        backend. It does not create a frontend or dispatch lifecycle hooks.
 
         Args:
             controller: the frontend contract implementation supplied by the caller.
@@ -103,7 +104,7 @@ class Application:
         """
         storage_manager = StorageManager()
 
-        # build the shared core services and load plugins before settings
+        # build the shared core services
         hook_manager = HookManager()
         tool_session = ToolSession()
         client = LiteLLMClient(on_login=controller.show_login, stream=True)
@@ -115,14 +116,17 @@ class Application:
             hook_manager=hook_manager,
             tool_session=tool_session,
         )
-        plugin_manager = PluginManager(hook_manager, tool_manager)
-        plugin_messages = plugin_manager.load()
 
-        # load settings before constructing the agent and opening session
+        # settings decide which plugins load; plugins create their categories
+        # before permissions are granted
         settings_manager = SettingsManager(storage_manager, LITELLM_PROVIDER_NAMES)
         settings, settings_messages = settings_manager.load()
+        plugin_manager = PluginManager(hook_manager, tool_manager)
+        plugin_messages = plugin_manager.load(
+            {name: plugin.enabled for name, plugin in settings.plugins.items()}
+        )
         permission_manager = PermissionManager(
-            hook_manager=hook_manager, permissions=dict(settings.permissions)
+            hook_manager=hook_manager, permissions=Application.__grants(settings)
         )
         agent = Agent(
             client=client,
@@ -152,7 +156,7 @@ class Application:
             frontend_controller=controller,
             read_file_tool=read_file_tool,
             shell_command_tool=shell_command_tool,
-            startup_messages=plugin_messages + settings_messages,
+            startup_messages=settings_messages + plugin_messages,
         )
 
     def __init__(
@@ -183,7 +187,7 @@ class Application:
             frontend_controller: the future frontend's abstract contract implementation.
             read_file_tool: the direct tool for explicit file mentions.
             shell_command_tool: the direct tool for shell input and directories.
-            startup_messages: plugin/settings notices to show without recording.
+            startup_messages: settings/plugin notices to show without recording.
         """
         self.__agent: Agent = agent
         self.__client: Client = client
@@ -296,12 +300,12 @@ class Application:
         """
         self.__require_idle()
         for field, value in changes.items():
-            if field not in self.__SETTING_FIELDS:
+            if field not in self.__setting_fields:
                 raise ValueError(
                     f"Unknown editable application setting {field!r}: {value!r}"
                 )
         confirmations: list[str] = []
-        for field in self.__SETTING_FIELDS:
+        for field in self.__setting_fields:
             if field not in changes:
                 continue
             value = changes[field]
@@ -313,7 +317,7 @@ class Application:
             if notice is not None:
                 return notice
             confirmations.append(
-                self.__SETTING_MESSAGES[field](self.__settings_manager.settings, value)
+                self.__setting_messages[field](self.__settings_manager.settings, value)
             )
         return "  \n".join(confirmations) if confirmations else None
 
@@ -321,9 +325,10 @@ class Application:
         """Return the independent category-to-level mapping used by input adapters.
 
         Returns:
-            A copied grant map preserving category identities.
+            A copied grant map of default and plugin categories, preserving
+            category identities.
         """
-        return self.__settings_manager.settings.permissions
+        return self.__grants(self.__settings_manager.settings)
 
     def change_directory(self, path: str | Path) -> str | ErrorMessage:
         """Change the process directory and record the successful runtime value.
@@ -491,10 +496,13 @@ class Application:
         self.__agent.max_retries = settings.max_retries
         self.__agent.retry_delay = settings.turn_wait_time
         self.__agent.retry_delay_multiplier = settings.turn_wait_time_multiplier
-        self.__agent.set(dict(settings.permissions))
+        self.__agent.set(self.__grants(settings))
 
     def __change_setting(self, field: str, value: Any) -> ErrorMessage | None:
         """Complete one edit/apply/save/record sequence without cross-layer rollback.
+
+        Permission changes of a loaded plugin's category are applied and saved as
+        that plugin's ``permission_level``; the others as default categories.
 
         Args:
             field: the supported setting selected by update_settings.
@@ -503,13 +511,32 @@ class Application:
         Returns:
             A settings/session-save notice, or None on success.
         """
+        plugin_levels: dict[str, PermissionLevel] = {}
+        if field == "permissions" and isinstance(value, Mapping):
+            plugin_categories = self.__plugin_categories(
+                self.__settings_manager.settings
+            )
+            plugin_levels = {
+                plugin_categories[category]: level
+                for category, level in value.items()
+                if category in plugin_categories
+            }
+            value = {
+                category: level
+                for category, level in value.items()
+                if category not in plugin_categories
+            }
         self.__settings_manager.set_field(field, value)
+        if plugin_levels:
+            self.__settings_manager.set_plugin_permission_levels(plugin_levels)
         settings = self.__settings_manager.settings
         self.__apply_settings(settings)
         try:
             if field == "permissions":
                 for category in value:
                     self.__settings_manager.save_field(field, category)
+                for name in plugin_levels:
+                    self.__settings_manager.save_plugin_permission_level(name)
             else:
                 self.__settings_manager.save_field(field)
         except OSError as exc:
@@ -552,6 +579,44 @@ class Application:
         self.__working_directory = resolved
 
     @staticmethod
+    def __plugin_categories(settings: Settings) -> dict[PermissionCategory, str]:
+        """Find the permission category of each plugin that created one.
+
+        A plugin category exists only after its plugin was loaded with a ``CUSTOM``
+        tool, so plugins that are disabled or have no such tool add nothing.
+
+        Args:
+            settings: the snapshot holding the plugin entries.
+
+        Returns:
+            The existing ``PLUGIN:<name>`` categories mapped to their lowercase
+            plugin names.
+        """
+        categories: dict[PermissionCategory, str] = {}
+        for name in settings.plugins:
+            category = PermissionCategory.get(
+                f"{PLUGIN_PERMISSION_CATEGORY_PREFIX}{name}"
+            )
+            if category is not None:
+                categories[category] = name
+        return categories
+
+    @staticmethod
+    def __grants(settings: Settings) -> dict[PermissionCategory, PermissionLevel]:
+        """Combine default levels with the levels of existing plugin categories.
+
+        Args:
+            settings: the snapshot holding default levels and plugin entries.
+
+        Returns:
+            A new category to level mapping for Core.
+        """
+        grants = dict(settings.permissions)
+        for category, name in Application.__plugin_categories(settings).items():
+            grants[category] = settings.plugins[name].permission_level
+        return grants
+
+    @staticmethod
     def __format_permission_changes(
         settings: Settings,
         changes: Mapping[PermissionCategory, PermissionLevel],
@@ -565,9 +630,10 @@ class Application:
         Returns:
             The existing confirmation lines, joined with Markdown hard breaks.
         """
+        grants = Application.__grants(settings)
         if (
             len(changes) > 1
-            and set(changes) == set(settings.permissions)
+            and set(changes) == set(grants)
             and len(set(changes.values())) == 1
         ):
             level = next(iter(changes.values()))
@@ -579,7 +645,7 @@ class Application:
         lines: list[str] = []
         for category in changes:
             name = category.name.lower()
-            level = settings.permissions[category]
+            level = grants[category]
             lines.append(
                 f"{name} permission removed"
                 if level is PermissionLevel.NONE

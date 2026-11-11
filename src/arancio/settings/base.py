@@ -1,9 +1,24 @@
 """User-configurable settings holder and its YAML-serializable form."""
 
 from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
+
+
+@dataclass
+class PluginSettings:
+    """One entry of the plugins settings.
+
+    Attributes:
+        enabled: whether startup loads the plugin.
+        permission_level: the level of the plugin's ``PLUGIN:<name>`` category,
+            used by its ``CUSTOM`` tools.
+    """
+
+    enabled: bool
+    permission_level: PermissionLevel
 
 
 class Settings:
@@ -14,9 +29,12 @@ class Settings:
     :meth:`from_dict` populates an existing object from a complete checked mapping.
 
     Attributes:
-        permissions: category to autonomy level mapping, covering every
-            category; :attr:`~arancio.core.permissions.types.PermissionLevel.NONE`
-            marks a category as not granted.
+        permissions: default category to autonomy level mapping, covering
+            every default category;
+            :attr:`~arancio.core.permissions.types.PermissionLevel.NONE` marks a
+            category as not granted. Saved under ``permissions.default``.
+        plugins: lowercase plugin names mapped to their settings entries, in file
+            order. A plugin without an entry is not loaded.
         provider: the agent model's provider prefix (e.g. ``"openai"``), or
             ``None`` when not yet configured. SettingsManager supplies the
             normalized, validated value.
@@ -39,6 +57,7 @@ class Settings:
     def __init__(
         self,
         permissions: dict[PermissionCategory, PermissionLevel],
+        plugins: dict[str, PluginSettings],
         provider: str | None,
         model_name: str | None,
         thinking_effort: str | None,
@@ -51,8 +70,9 @@ class Settings:
         """Initialize the settings snapshot.
 
         Args:
-            permissions: category to autonomy level mapping, covering every
-                category.
+            permissions: default category to autonomy level mapping, covering
+                every default category.
+            plugins: lowercase plugin names mapped to their settings entries.
             provider: the checked provider prefix, or ``None`` when not configured.
             model_name: the agent model's name, or ``None`` when not yet
                 configured.
@@ -70,6 +90,7 @@ class Settings:
                 consecutive retry.
         """
         self.permissions = permissions
+        self.plugins = plugins
         self.provider = provider
         self.model_name = model_name
         self.thinking_effort = thinking_effort
@@ -92,6 +113,7 @@ class Settings:
             return NotImplemented
         return (
             self.permissions == other.permissions
+            and self.plugins == other.plugins
             and self.provider == other.provider
             and self.model_name == other.model_name
             and self.thinking_effort == other.thinking_effort
@@ -111,6 +133,7 @@ class Settings:
         return (
             f"{type(self).__name__}("
             f"permissions={self.permissions!r}, "
+            f"plugins={self.plugins!r}, "
             f"provider={self.provider!r}, "
             f"model_name={self.model_name!r}, "
             f"thinking_effort={self.thinking_effort!r}, "
@@ -143,17 +166,28 @@ class Settings:
         """Render the settings as a YAML-serializable dictionary.
 
         Permissions are flattened to plain strings (lowercase category name to
-        level value) so the file stays human-readable and free of Python
-        objects.
+        level value) under ``default``, and plugins to a list of one-key mappings,
+        so the file stays human-readable and free of Python objects.
 
         Returns:
             A dictionary with only built-in types, ready for ``yaml.safe_dump``.
         """
         return {
             "permissions": {
-                category.name.lower(): level.value
-                for category, level in self.permissions.items()
+                "default": {
+                    category.name.lower(): level.value
+                    for category, level in self.permissions.items()
+                },
             },
+            "plugins": [
+                {
+                    name: {
+                        "enabled": plugin.enabled,
+                        "permission_level": plugin.permission_level.value,
+                    }
+                }
+                for name, plugin in self.plugins.items()
+            ],
             "provider": self.provider,
             "model_name": self.model_name,
             "thinking_effort": self.thinking_effort,
@@ -173,15 +207,22 @@ class Settings:
 
         Args:
             data: the validated serialized values, as produced by :meth:`to_dict`.
-            categories: the known permission category identities used for lookup.
+            categories: the default permission category identities used for lookup.
         """
         categories_by_name = {
             category.name.lower(): category for category in categories
         }
         self.permissions = {
             categories_by_name[name.lower()]: PermissionLevel(level)
-            for name, level in data["permissions"].items()
+            for name, level in data["permissions"]["default"].items()
         }
+        self.plugins = {}
+        for entry in data["plugins"]:
+            for name, values in entry.items():
+                self.plugins[name.lower()] = PluginSettings(
+                    enabled=values["enabled"],
+                    permission_level=PermissionLevel(values["permission_level"]),
+                )
         self.provider = data["provider"]
         self.model_name = data["model_name"]
         self.thinking_effort = data["thinking_effort"]

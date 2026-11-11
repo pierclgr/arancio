@@ -19,7 +19,7 @@ class SettingsValidator:
     Attributes:
         __SETTINGS_FIELD_RULES: scalar predicates shared by loading and explicit edits.
         __PERMISSION_LEVEL_VALUES: the accepted serialized permission levels.
-        __defaults: copied code defaults, including known permission names.
+        __defaults: copied code defaults, including default permission names.
         __supported_providers: copied, lowercased provider names.
     """
 
@@ -60,11 +60,13 @@ class SettingsValidator:
         """Copy code defaults and provider metadata supplied by the manager.
 
         Args:
-            defaults: complete serialized code defaults and permission names.
+            defaults: complete serialized code defaults and default permission names.
             supported_providers: the supported provider prefixes.
         """
         self.__defaults: dict[str, Any] = dict(defaults)
-        self.__defaults["permissions"] = dict(defaults["permissions"])
+        self.__defaults["permissions"] = {
+            "default": dict(defaults["permissions"]["default"])
+        }
         self.__supported_providers: frozenset[str] = frozenset(
             provider.lower() for provider in supported_providers
         )
@@ -96,7 +98,12 @@ class SettingsValidator:
             raise ValueError(f"Settings must be a mapping, got {data!r}.")
 
         permissions, messages = self.__validate_permissions(data, strict=strict)
-        normalized: dict[str, Any] = {"permissions": permissions}
+        plugins, plugin_messages = self.__validate_plugins(data, strict=strict)
+        messages.extend(plugin_messages)
+        normalized: dict[str, Any] = {
+            "permissions": {"default": permissions},
+            "plugins": plugins,
+        }
 
         for field in self.__SETTINGS_FIELD_RULES:
             if strict and field not in data:
@@ -124,7 +131,7 @@ class SettingsValidator:
             ):
                 messages.append(ErrorMessage(content=self.__not_set_text(field)))
 
-        known_fields = {"permissions", *self.__SETTINGS_FIELD_RULES}
+        known_fields = {"permissions", "plugins", *self.__SETTINGS_FIELD_RULES}
         for key in data:
             if key in known_fields:
                 continue
@@ -173,11 +180,11 @@ class SettingsValidator:
         *,
         strict: bool,
     ) -> tuple[dict[str, str | None], list[Message]]:
-        """Check permissions against supplied names and return a complete mapping.
+        """Check ``permissions.default`` against default names and complete it.
 
         Args:
             data: the complete candidate settings mapping.
-            strict: require every known category and reject invalid entries.
+            strict: require every default category and reject invalid entries.
 
         Returns:
             Checked lowercase category names and serialized levels, plus file-mode
@@ -186,7 +193,8 @@ class SettingsValidator:
         Raises:
             ValueError: when a strict permission mapping is missing or invalid.
         """
-        result: dict[str, str | None] = dict(self.__defaults["permissions"])
+        defaults: dict[str, str | None] = self.__defaults["permissions"]["default"]
+        result: dict[str, str | None] = dict(defaults)
         if "permissions" not in data:
             if strict:
                 raise ValueError("Missing settings field: 'permissions'.")
@@ -203,6 +211,35 @@ class SettingsValidator:
             return result, [WarningMessage(content=f"{text}; using defaults.")]
 
         messages: list[Message] = []
+        for key in raw:
+            if key == "default":
+                continue
+            if strict:
+                raise ValueError(f"Unknown permissions field: {key!r}.")
+            messages.append(
+                WarningMessage(
+                    content=(
+                        f"{ARANCIO_SETTINGS_FILENAME}: unknown field {key!r} in "
+                        '"permissions"; entry ignored.'
+                    )
+                )
+            )
+        if "default" not in raw:
+            if strict:
+                raise ValueError("Missing permissions field: 'default'.")
+            return result, messages
+
+        raw = raw["default"]
+        if not isinstance(raw, Mapping):
+            text = (
+                f'{ARANCIO_SETTINGS_FILENAME}: "permissions.default" must be a '
+                f"mapping, got {raw!r}"
+            )
+            if strict:
+                raise ValueError(f"{text}.")
+            messages.append(WarningMessage(content=f"{text}; using defaults."))
+            return result, messages
+
         seen: set[str] = set()
         for name, level in raw.items():
             if not isinstance(name, str) or name.lower() not in result:
@@ -227,7 +264,7 @@ class SettingsValidator:
                     raise ValueError(
                         f"Invalid permission level {level!r} for category {name!r}."
                     )
-                default = self.__defaults["permissions"][name.lower()]
+                default = defaults[name.lower()]
                 default_text = f'"{default}"' if default is not None else "null"
                 messages.append(
                     WarningMessage(
@@ -251,6 +288,101 @@ class SettingsValidator:
                     f"Missing permission categories: {', '.join(sorted(missing))}."
                 )
         return result, messages
+
+    def __validate_plugins(
+        self,
+        data: Mapping[str, Any],
+        *,
+        strict: bool,
+    ) -> tuple[list[dict[str, dict[str, Any]]], list[Message]]:
+        """Check the plugins list, keeping each valid entry under a lowercase name.
+
+        Plugins are not looked up: an entry is valid even when its plugin does
+        not exist, so it survives saving.
+
+        Args:
+            data: the complete candidate settings mapping.
+            strict: reject a missing list and invalid entries.
+
+        Returns:
+            The valid entries as one-key mappings in file order, plus file-mode
+            warnings. Invalid file entries are left out.
+
+        Raises:
+            ValueError: when a strict plugins list is missing or invalid.
+        """
+        if "plugins" not in data:
+            if strict:
+                raise ValueError("Missing settings field: 'plugins'.")
+            return [], []
+
+        raw = data["plugins"]
+        if not isinstance(raw, list):
+            text = f'{ARANCIO_SETTINGS_FILENAME}: "plugins" must be a list, got {raw!r}'
+            if strict:
+                raise ValueError(f"{text}.")
+            return [], [WarningMessage(content=f"{text}; no plugins loaded.")]
+
+        result: list[dict[str, dict[str, Any]]] = []
+        messages: list[Message] = []
+        seen: set[str] = set()
+        for item in raw:
+            try:
+                name, enabled, level = self.__plugin_entry(item)
+                if name.lower() in seen:
+                    raise ValueError(f"duplicate plugin name {name!r}")
+            except ValueError as exc:
+                if strict:
+                    raise ValueError(f"Invalid plugins entry {item!r}: {exc}.") from exc
+                messages.append(
+                    WarningMessage(
+                        content=(
+                            f"{ARANCIO_SETTINGS_FILENAME}: invalid plugins entry "
+                            f"{item!r}: {exc}; entry ignored."
+                        )
+                    )
+                )
+                continue
+            seen.add(name.lower())
+            result.append(
+                {name.lower(): {"enabled": enabled, "permission_level": level}}
+            )
+        return result, messages
+
+    @classmethod
+    def __plugin_entry(cls, item: Any) -> tuple[str, bool, str | None]:
+        """Check one ``{name: {enabled, permission_level}}`` plugins entry.
+
+        Args:
+            item: one element of the plugins list.
+
+        Returns:
+            The plugin name as written, its enabled flag and its serialized level.
+
+        Raises:
+            ValueError: when the entry's shape, name, flag or level is invalid.
+        """
+        if not isinstance(item, Mapping) or len(item) != 1:
+            raise ValueError("expected one plugin name mapped to its settings")
+        ((name, values),) = item.items()
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"invalid plugin name {name!r}")
+        if not isinstance(values, Mapping) or set(values) != {
+            "enabled",
+            "permission_level",
+        }:
+            raise ValueError('expected exactly "enabled" and "permission_level"')
+        enabled = values["enabled"]
+        level = values["permission_level"]
+        if not isinstance(enabled, bool):
+            raise ValueError(f'invalid "enabled" value {enabled!r}')
+        # check the type before membership so collections cannot leak TypeError
+        if (
+            not (level is None or isinstance(level, str))
+            or level not in cls.__PERMISSION_LEVEL_VALUES
+        ):
+            raise ValueError(f'invalid "permission_level" value {level!r}')
+        return name, enabled, level
 
     @staticmethod
     def __not_set_text(field: str) -> str:

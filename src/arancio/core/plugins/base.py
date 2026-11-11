@@ -22,7 +22,6 @@ class Plugin:
         version: the declared version.
         description: the plugin's purpose.
         author: the declared plugin author.
-        enabled: whether startup should construct and attach the plugin.
         instance: the shared runtime instance, or None when inactive.
         hooks: methods and their hook events, bound once during loading.
         tools: tool classes holding metadata and methods bound during loading.
@@ -34,7 +33,6 @@ class Plugin:
     version: str = "0.0.0"
     description: str = ""
     author: str = ""
-    enabled: bool = True
     instance: object | None = field(default=None, init=False)
     hooks: list[tuple[Callable, tuple[Hook, ...]]] = field(
         default_factory=list, init=False
@@ -48,11 +46,10 @@ class Plugin:
             TypeError: if a metadata field has the wrong type.
             ValueError: if the plugin name is empty.
         """
-        for name in ("name", "version", "description", "author", "enabled"):
+        for name in ("name", "version", "description", "author"):
             value = getattr(self, name)
-            expected = bool if name == "enabled" else str
-            if not isinstance(value, expected):
-                raise TypeError(f"{name} must be {expected.__name__}, got {value!r}.")
+            if not isinstance(value, str):
+                raise TypeError(f"{name} must be str, got {value!r}.")
         if not self.name:
             raise ValueError(f"name must not be empty, got {self.name!r}.")
         self.name = self.name.replace(" ", "-")

@@ -18,7 +18,7 @@ from arancio.core.clients.constants import (
 from arancio.core.messages.base import ErrorMessage, Message, WarningMessage
 from arancio.core.permissions.constants import DEFAULT_PERMISSION_LEVELS
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
-from arancio.settings.base import Settings
+from arancio.settings.base import PluginSettings, Settings
 from arancio.settings.constants import ARANCIO_SETTINGS_FILENAME
 from arancio.settings.validator import SettingsValidator
 from arancio.storage.manager import StorageManager
@@ -33,7 +33,8 @@ class SettingsManager:
 
     Attributes:
         __storage_manager: the injected generic file I/O service.
-        __categories: category identities registered before construction.
+        __categories: the default permission categories, saved under
+            ``permissions.default`` and stored in sessions.
         __validator: shared validation for file loading and explicit edits.
         __settings: the active conversation values.
         __global: the defaults selected by load or a successful save.
@@ -51,7 +52,9 @@ class SettingsManager:
             supported_providers: the provider names available to the application.
         """
         self.__storage_manager = storage_manager
-        self.__categories: tuple[PermissionCategory, ...] = tuple(PermissionCategory)
+        self.__categories: tuple[PermissionCategory, ...] = tuple(
+            DEFAULT_PERMISSION_LEVELS
+        )
         self.__global: Settings = self.__default_settings()
         self.__settings: Settings = self.__copy(self.__global)
         self.__validator = SettingsValidator(
@@ -151,9 +154,7 @@ class SettingsManager:
             self.__settings.model_id
 
         if field == "permissions":
-            value = self.__permission_values(value)
-        if field == "permissions":
-            data[field].update(value)
+            data[field]["default"].update(self.__permission_values(value))
         else:
             data[field] = value
 
@@ -180,7 +181,7 @@ class SettingsManager:
             provider: the restored provider, or None when unconfigured.
             model_name: the restored model name, or None when unconfigured.
             thinking_effort: the restored effort, or None when disabled.
-            permissions: the complete restored permission map for known categories.
+            permissions: the complete restored permission map for default categories.
         """
         values = self.__permission_values(permissions)
         data = self.__global.to_dict()
@@ -188,7 +189,7 @@ class SettingsManager:
             provider=provider,
             model_name=model_name,
             thinking_effort=thinking_effort,
-            permissions=values,
+            permissions={"default": values},
         )
         self.__settings = self.__prepare(data)
 
@@ -233,17 +234,45 @@ class SettingsManager:
             setattr(candidate, field, getattr(self.__settings, field))
         self.save(candidate)
 
+    def set_plugin_permission_levels(
+        self, levels: Mapping[str, PermissionLevel]
+    ) -> None:
+        """Validate and update plugin permission levels without saving them.
+
+        An invalid mapping or level, or a plugin without a settings entry, raises
+        ValueError and changes nothing.
+
+        Args:
+            levels: plugin names, matched case-insensitively, mapped to typed levels.
+        """
+        candidate = self.__copy(self.__settings)
+        for name, level in self.__checked_levels(levels).items():
+            self.__find_plugin(candidate, name).permission_level = level
+        self.__settings = self.__prepare(candidate.to_dict())
+
+    def save_plugin_permission_level(self, name: str) -> None:
+        """Persist one plugin's active permission level as its global default.
+
+        Write failures propagate without changing global defaults. A plugin
+        without a settings entry raises ValueError.
+
+        Args:
+            name: the plugin name, matched case-insensitively.
+        """
+        level = self.__find_plugin(self.__settings, name).permission_level
+        candidate = self.__copy(self.__global)
+        self.__find_plugin(candidate, name).permission_level = level
+        self.save(candidate)
+
     def __default_settings(self) -> Settings:
-        """Build settings from code defaults and the known categories.
+        """Build settings from code defaults.
 
         Returns:
-            A settings snapshot with built-in defaults and additional categories at ASK.
+            A settings snapshot with default permission levels and no plugins.
         """
         return Settings(
-            permissions={
-                category: DEFAULT_PERMISSION_LEVELS.get(category, PermissionLevel.ASK)
-                for category in self.__categories
-            },
+            permissions=dict(DEFAULT_PERMISSION_LEVELS),
+            plugins={},
             provider=None,
             model_name=None,
             thinking_effort=LITELLM_DEFAULT_THINKING_EFFORT,
@@ -261,7 +290,7 @@ class SettingsManager:
             settings: the checked snapshot to copy.
 
         Returns:
-            An independent object, including its permission dictionary.
+            An independent object, including its permission and plugin entries.
         """
         copied = self.__default_settings()
         copied.from_dict(settings.to_dict(), self.__categories)
@@ -297,19 +326,55 @@ class SettingsManager:
         Raises:
             ValueError: when the mapping, a category or a level is invalid.
         """
-        if not isinstance(permissions, Mapping):
-            raise ValueError(f"Permissions must be a mapping, got {permissions!r}.")
         values: dict[str, str | None] = {}
-        for category, level in permissions.items():
+        for category, level in self.__checked_levels(permissions).items():
             if category not in self.__categories:
                 raise ValueError(f"Unknown permission category: {category!r}.")
-            if not isinstance(level, PermissionLevel):
-                raise ValueError(
-                    f"Invalid permission level {level!r} "
-                    f"for category {category.name!r}."
-                )
             values[category.name.lower()] = level.value
         return values
+
+    @staticmethod
+    def __checked_levels(
+        levels: Mapping[Any, PermissionLevel],
+    ) -> Mapping[Any, PermissionLevel]:
+        """Check that typed level input is a mapping of typed levels.
+
+        Args:
+            levels: the keys (categories or plugin names) and typed levels supplied
+                by a caller.
+
+        Returns:
+            The same mapping, unchanged.
+
+        Raises:
+            ValueError: when the input is not a mapping or a level is not typed.
+        """
+        if not isinstance(levels, Mapping):
+            raise ValueError(f"Permissions must be a mapping, got {levels!r}.")
+        for key, level in levels.items():
+            if not isinstance(level, PermissionLevel):
+                raise ValueError(
+                    f"Invalid permission level {level!r} for category {key!r}."
+                )
+        return levels
+
+    @staticmethod
+    def __find_plugin(settings: Settings, name: str) -> PluginSettings:
+        """Return a plugin's settings entry by name, matched case-insensitively.
+
+        Args:
+            settings: the snapshot holding the entries.
+            name: the plugin name.
+
+        Returns:
+            The entry, which callers may change in place.
+
+        Raises:
+            ValueError: when the name is not a string or has no entry.
+        """
+        if not isinstance(name, str) or name.lower() not in settings.plugins:
+            raise ValueError(f"Unknown plugin: {name!r}.")
+        return settings.plugins[name.lower()]
 
     def save(self, candidate: Settings) -> None:
         """Write a detached candidate before publishing it as global defaults.

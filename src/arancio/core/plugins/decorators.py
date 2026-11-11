@@ -24,9 +24,10 @@ def plugin(**metadata: Any) -> Callable[[type], type]:
     and no attributes are added to the class or its methods.
 
     Args:
-        **metadata: the plugin's name, version, description, author and enabled
-            flag. Spaces in the name are replaced by dashes. Omitted fields take
-            their defaults from Plugin.
+        **metadata: the plugin's name, version, description and author. Spaces
+            in the name are replaced by dashes. Omitted fields take their defaults
+            from Plugin. Whether the plugin is loaded is decided by its entry in the
+            plugins settings, not here.
 
     Returns:
         A decorator returning the original class unchanged.
@@ -125,8 +126,8 @@ def tool(
         permission_category: ``"READ"``/``"WRITE"``/``"WEB"``/``"EXECUTE"``/``"PLUGIN"``
             (the default) or ``"CUSTOM"`` — which creates a
             ``PLUGIN:<plugin_name>`` category dedicated to the owning
-            plugin, shared by every ``CUSTOM`` tool it defines, defaulting to
-            :attr:`~arancio.core.permissions.types.PermissionLevel.ASK`.
+            plugin, shared by every ``CUSTOM`` tool it defines, whose level is the
+            ``permission_level`` of the plugin's settings entry.
         name: the tool portion of the exposed name; defaults to the method's
             own name. The final name is ``<plugin_name>-<name>``.
 
