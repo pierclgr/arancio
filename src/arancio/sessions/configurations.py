@@ -4,14 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from arancio.core.clients.configs.model import ModelConfig
 from arancio.core.clients.configs.reasoning import ReasoningConfig
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
-
-if TYPE_CHECKING:
-    from arancio.settings.base import Settings
 
 
 @dataclass
@@ -50,21 +47,6 @@ class SessionConfiguration:
         return SessionConfiguration(
             model=self.model,
             permissions=dict(self.permissions),
-        )
-
-    @classmethod
-    def from_settings(cls, settings: Settings) -> SessionConfiguration:
-        """Copy command-controlled values from the active application settings.
-
-        Args:
-            settings: the active settings object supplied by ``SettingsManager``.
-
-        Returns:
-            A detached session configuration snapshot.
-        """
-        return cls(
-            model=settings.model,
-            permissions=dict(settings.permissions),
         )
 
     @classmethod

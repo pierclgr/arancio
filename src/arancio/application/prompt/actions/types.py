@@ -8,10 +8,11 @@ from pathlib import Path
 class Action(ABC):
     """Base class for a resolved decision about how to handle a prompt.
 
-    :class:`arancio.prompt.manager.PromptManager` turns a raw prompt into a
-    concrete action, and :class:`arancio.prompt.actions.executor.ActionExecutor`
-    carries it out. Actions are plain data: they hold what the executor needs and
-    do not execute themselves.
+    :class:`arancio.application.prompt.manager.PromptManager` turns a raw prompt
+    into a concrete action, and
+    :class:`arancio.application.prompt.actions.executor.ActionExecutor` carries it
+    out. Actions are plain data: they hold what the executor needs and do not
+    execute themselves.
     """
 
 

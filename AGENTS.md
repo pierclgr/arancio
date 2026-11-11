@@ -247,10 +247,14 @@ are no-ops and `ask` returns None.
 `MarkdownStream` per span; `LoginPanel` and `QuestionScreen` live in
 `ui/widgets/`.
 
-### Application (`application/base.py`)
+### Application (`application/`)
 
-Public coordinator over Core, Settings and Sessions; returns Messages and
-`ApplicationStatus(model, working_directory)` (`application/status.py`; `model`
+Only the application layer connects components: Commands call only
+Application, and Settings and Sessions never read each other.
+
+Public coordinator (`application/base.py`) over Core, Settings and Sessions;
+returns Messages and `ApplicationStatus(model, working_directory)`
+(`application/status.py`; `model`
 is the active `ModelConfig`; the TUI shows its provider and name). Only
 Application turns `settings.model` into an id, by calling each client's
 `get_model_id`; Settings stores just `provider` and `name`, and
@@ -269,17 +273,22 @@ Application turns `settings.model` into an id, by calling each client's
 - `start()` returns plugin/settings notices and STARTUP messages; `shutdown()`
   releases questions and dispatches SHUTDOWN once. Mutation while Core is
   running raises `RuntimeError`.
+- `submit(text)` hands the input to `ActionExecutor` (see Prompt below).
+- Application builds each `SessionConfiguration` from the active settings.
 
-### Prompt & commands (`prompt/`, `commands/`)
+### Prompt & commands (`application/prompt/`, `commands/`)
 
-`PromptManager` returns typed `Action`s. `FileMention(path, start_line,
+Everything that comes from the user's input lives in `application/prompt/`.
+`PromptManager` parses it into typed `Action`s (`actions/types.py`).
+`ActionExecutor` (`actions/executor.py`) carries them out: it runs commands and
+direct tools, records the user message before Core, yields each Core message
+then records it with a `ToolSession` snapshot, and asks the controller for
+permission questions. `FileMention(path, start_line,
 end_line, raw_markdown=False)` supports `@file:110` and `@file:110-120`
 (quoted paths too). Only `.md` file mentions support a trailing `:raw`
 (`@file.md:raw`, `@file.md:110-120:raw`), passed as `raw_markdown=True`; the
 executor turns valid ranges into `offset`/`limit`, invalid ones into a full
-read. `ActionExecutor.execute(text)` routes input, records the user message
-before Core, yields each Core message then records it with a `ToolSession`
-snapshot. `!` keeps the exchange in history; `!!` does not. Mentions and `!`
+read. `!` keeps the exchange in history; `!!` does not. Mentions and `!`
 use direct tools that bypass permissions.
 
 Commands receive only `application`. Commands in
@@ -333,9 +342,9 @@ unsupported types (incl. `WarningMessage`) raise `ValueError`.
 `explicit_name` (only this may be None). A `SessionConfiguration(model,
 permissions)` stores the whole model section as Core's `ModelConfig` (summary
 included) and only the default permission levels; plugin levels are global
-settings, so sessions keep loading when plugins change. Sessions imports nothing
-from Settings at runtime: on resume Application passes the session's
-`ModelConfig` to `restore_active` as it is. `find`,
+settings, so sessions keep loading when plugins change. Sessions knows nothing
+about Settings: Application builds the configuration from the settings and, on
+resume, passes the session's `ModelConfig` to `restore_active` as it is. `find`,
 `load` (validates, refreshes checksum, adds synthetic errors for unmatched tool
 calls), `fork` (returns state, confirmation, notices). Internals
 (`SessionRecorder`, `SessionChecksum`, `SessionRegistry`) are private. Sessions

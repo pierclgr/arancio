@@ -4,14 +4,14 @@ import re
 import shlex
 from pathlib import Path
 
-from arancio.prompt.actions.types import (
+from arancio.application.prompt.actions.types import (
     Action,
     CommandAction,
     FileMention,
     PromptAction,
     ShellCommandAction,
 )
-from arancio.prompt.patterns import (
+from arancio.application.prompt.patterns import (
     COMMAND_PATTERN,
     HIDDEN_SHELL_COMMAND_PATTERN,
     LINE_RANGE_PATTERN,

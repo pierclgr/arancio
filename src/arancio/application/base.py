@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any, ClassVar
 
+from arancio.application.prompt.actions.executor import ActionExecutor
 from arancio.application.status import ApplicationStatus
 from arancio.core.agents.base import Agent
 from arancio.core.clients.base import Client
@@ -25,7 +26,6 @@ from arancio.core.tools.commands.shell import ShellCommandTool
 from arancio.core.tools.files.read import ReadFileTool
 from arancio.core.tools.manager import ToolManager
 from arancio.core.tools.session import ToolSession
-from arancio.prompt.actions.executor import ActionExecutor
 from arancio.sessions.configurations import SessionConfiguration
 from arancio.sessions.manager import SessionManager
 from arancio.sessions.state import SessionState
@@ -131,7 +131,7 @@ class Application:
             hook_manager=hook_manager,
         )
         session_manager = SessionManager(
-            storage_manager, SessionConfiguration.from_settings(settings)
+            storage_manager, Application.__build_session_configuration(settings)
         )
 
         # direct tools share the same hooks and file-read guard as catalog tools
@@ -356,7 +356,7 @@ class Application:
         self.__apply_settings(settings)
         self.__agent.clear_history()
         self.__tool_session.clear()
-        self.__session_manager.create(SessionConfiguration.from_settings(settings))
+        self.__session_manager.create(self.__build_session_configuration(settings))
         self.__frontend_controller.reset_conversation([])
 
     def resume(self, query: str) -> str | Message | None:
@@ -561,7 +561,7 @@ class Application:
         except OSError as exc:
             return ErrorMessage(content=f"Could not save settings: {exc}")
         return self.__update_session_state(
-            configuration=SessionConfiguration.from_settings(settings)
+            configuration=self.__build_session_configuration(settings)
         )
 
     def __update_session_state(self, **changes: Any) -> ErrorMessage | None:
@@ -596,6 +596,22 @@ class Application:
             )
         os.chdir(resolved)
         self.__working_directory = resolved
+
+    @staticmethod
+    def __build_session_configuration(settings: Settings) -> SessionConfiguration:
+        """Take the part of the settings that each session saves.
+
+        Args:
+            settings: the active settings snapshot.
+
+        Returns:
+            A detached configuration with the model section and the default
+            permission levels.
+        """
+        return SessionConfiguration(
+            model=settings.model,
+            permissions=dict(settings.permissions),
+        )
 
     @staticmethod
     def __plugin_categories(settings: Settings) -> dict[PermissionCategory, str]:

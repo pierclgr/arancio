@@ -11,6 +11,13 @@ from inspect import GEN_RUNNING, getgeneratorstate
 from threading import get_ident
 from typing import TYPE_CHECKING
 
+from arancio.application.prompt.actions.types import (
+    CommandAction,
+    FileMention,
+    PromptAction,
+    ShellCommandAction,
+)
+from arancio.application.prompt.manager import PromptManager
 from arancio.commands.base import Command
 from arancio.commands.fork import ForkCommand
 from arancio.commands.registry import COMMAND_REGISTRY, SESSION_DISCARDING_COMMANDS
@@ -28,13 +35,6 @@ from arancio.core.messages.user import UserMessage
 from arancio.core.tools.commands.shell import ShellCommandTool
 from arancio.core.tools.files.read import ReadFileTool
 from arancio.core.tools.session import ToolSession
-from arancio.prompt.actions.types import (
-    CommandAction,
-    FileMention,
-    PromptAction,
-    ShellCommandAction,
-)
-from arancio.prompt.manager import PromptManager
 from arancio.sessions.manager import SessionManager
 from arancio.settings.manager import SettingsManager
 from arancio.ui.controllers.base import UIController
