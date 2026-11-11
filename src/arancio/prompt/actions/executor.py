@@ -269,7 +269,7 @@ class ActionExecutor:
             Model/prelude messages and save notices, or an unconfigured-model error.
         """
         try:
-            self.__settings_manager.settings.model_id
+            self.__settings_manager.settings.model.check_configured()
         except ValueError as exc:
             yield from self.__yield_error(f"Error sending message: {exc}")
             return

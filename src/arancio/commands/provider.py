@@ -28,4 +28,4 @@ class ProviderCommand(Command):
         Returns:
             The Application operation's confirmation, state or notices.
         """
-        return application.update_settings(provider=provider)
+        return application.update_settings(model={"provider": provider})

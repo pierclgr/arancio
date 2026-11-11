@@ -9,7 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from arancio.sessions.base import Session, SessionRegistryEntry
+from arancio.sessions.base import Session
+from arancio.sessions.registry.entry import SessionRegistryEntry
 
 if TYPE_CHECKING:
     from arancio.sessions.validator import SessionValidator

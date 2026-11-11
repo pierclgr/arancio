@@ -10,9 +10,10 @@ from arancio.core.builders.payload.litellm import LiteLLMPayloadBuilder
 from arancio.core.builders.request.litellm import LiteLLMRequestBuilder
 from arancio.core.clients import _litellm_patches
 from arancio.core.clients.base import Client
+from arancio.core.clients.configs.reasoning import ReasoningConfig
 from arancio.core.clients.constants import (
-    LITELLM_DEFAULT_THINKING_EFFORT,
-    LITELLM_DEFAULT_THINKING_SUMMARY,
+    LITELLM_DEFAULT_REASONING_EFFORT,
+    LITELLM_DEFAULT_REASONING_SUMMARY,
 )
 from arancio.core.events import LoginNotice
 from arancio.core.messages.base import Message
@@ -59,8 +60,10 @@ class LiteLLMClient(Client):
     _request_builder: Type[LiteLLMRequestBuilder] = LiteLLMRequestBuilder
     _response_parser: Type[LiteLLMResponseParser] = LiteLLMResponseParser
 
-    _default_thinking_effort: str = LITELLM_DEFAULT_THINKING_EFFORT
-    _default_thinking_summary: str = LITELLM_DEFAULT_THINKING_SUMMARY
+    _default_reasoning: ReasoningConfig = ReasoningConfig(
+        effort=LITELLM_DEFAULT_REASONING_EFFORT,
+        summary=LITELLM_DEFAULT_REASONING_SUMMARY,
+    )
 
     def __init__(
         self,
@@ -109,8 +112,7 @@ class LiteLLMClient(Client):
         return (
             f"{type(self).__name__}("
             f"model_id={self._model_id!r}, "
-            f"thinking_effort={self._thinking_effort!r}, "
-            f"thinking_summary={self._thinking_summary!r}, "
+            f"reasoning={self._reasoning!r}, "
             f"stream={self._stream!r}"
             ")"
         )

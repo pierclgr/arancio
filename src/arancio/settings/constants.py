@@ -1,4 +1,13 @@
-"""Relative filename used to persist settings through Storage."""
+"""Relative filename and field paths used to persist and edit settings."""
 
 # storage anchors this relative filename to its application-data root
 ARANCIO_SETTINGS_FILENAME: str = "settings.yml"
+
+# dotted paths of the fields in the settings file, used to edit one field
+PERMISSIONS_FIELD: str = "permissions"
+MODEL_FIELD: str = "model"
+PROVIDER_FIELD: str = f"{MODEL_FIELD}.provider"
+MODEL_NAME_FIELD: str = f"{MODEL_FIELD}.name"
+REASONING_FIELD: str = f"{MODEL_FIELD}.reasoning"
+REASONING_EFFORT_FIELD: str = f"{REASONING_FIELD}.effort"
+REASONING_SUMMARY_FIELD: str = f"{REASONING_FIELD}.summary"

@@ -6,6 +6,7 @@ from typing import List, Type
 
 from arancio.core.builders.payload.base import PayloadBuilder
 from arancio.core.builders.request.base import RequestBuilder
+from arancio.core.clients.configs.reasoning import ReasoningConfig
 from arancio.core.events import LoginNotice
 from arancio.core.messages.base import Message
 from arancio.core.parsers.responses.base import ResponseParser
@@ -32,19 +33,15 @@ class Client(ABC):
     _response_parser: Type[ResponseParser] = ResponseParser
 
     _model_options: List[str] | None = None
-    _thinking_options: List[str] | None = []
-    _thinking_summary_options: List[str] | None = []
 
     _default_model_id: str | None = None
-    _default_thinking_effort: str | None = None
-    _default_thinking_summary: str | None = None
+    _default_reasoning: ReasoningConfig = ReasoningConfig()
 
     def __init__(
         self,
         on_login: Callable[[LoginNotice], None],
         model_id: str | None = None,
-        thinking_effort: str | None = None,
-        thinking_summary: str | None = None,
+        reasoning: ReasoningConfig | None = None,
     ) -> None:
         """Initialize the client with its login callback and per-instance overrides.
 
@@ -59,24 +56,17 @@ class Client(ABC):
             model_id: the model identifier to use for outgoing requests;
                 when ``None`` the class default ``_default_model_id`` is
                 kept.
-            thinking_effort: the thinking effort tier to use for
+            reasoning: the reasoning effort and summary level to use for
                 outgoing requests; when ``None`` the class default
-                ``_default_thinking_effort`` is kept.
-            thinking_summary: the reasoning summary level to use for
-                outgoing requests (e.g. ``"auto"``, ``"concise"``,
-                ``"detailed"``); when ``None`` the class default
-                ``_default_thinking_summary`` is kept.
+                ``_default_reasoning`` is kept.
         """
         self._on_login: Callable[[LoginNotice], None] = on_login
         self._model_id: str | None = self._default_model_id
-        self._thinking_effort: str | None = self._default_thinking_effort
-        self._thinking_summary: str | None = self._default_thinking_summary
+        self._reasoning: ReasoningConfig = self._default_reasoning
         if model_id is not None:
             self.model_id = model_id
-        if thinking_effort is not None:
-            self.thinking_effort = thinking_effort
-        if thinking_summary is not None:
-            self.thinking_summary = thinking_summary
+        if reasoning is not None:
+            self.reasoning = reasoning
 
     def __repr__(self) -> str:
         """Return a developer-friendly representation of the client.
@@ -87,8 +77,7 @@ class Client(ABC):
         return (
             f"{type(self).__name__}("
             f"model_id={self._model_id!r}, "
-            f"thinking_effort={self._thinking_effort!r}, "
-            f"thinking_summary={self._thinking_summary!r}"
+            f"reasoning={self._reasoning!r}"
             ")"
         )
 
@@ -120,63 +109,41 @@ class Client(ABC):
             )
         self._model_id = value
 
-    @property
-    def thinking_effort(self) -> str | None:
-        """The thinking effort used for outgoing requests.
+    @staticmethod
+    def get_model_id(provider: str | None, name: str | None) -> str | None:
+        """Join a provider prefix and a model name into this client's model id.
 
-        Returns:
-            The current effort string, or ``None`` when none is set.
-        """
-        return self._thinking_effort
-
-    @thinking_effort.setter
-    def thinking_effort(self, value: str | None) -> None:
-        """Set the thinking effort, validating against ``_thinking_options``.
+        Subclasses override this when their provider expects another format.
 
         Args:
-            value: the thinking effort tier (e.g. ``"low"``).
-
-        Raises:
-            ValueError: when ``_thinking_options`` is set and ``value``
-                is not in it.
-        """
-        if self._thinking_options and value not in self._thinking_options:
-            raise ValueError(
-                f"Invalid thinking effort level: {value}. Choose between "
-                f"{self._thinking_options}"
-            )
-        self._thinking_effort = value
-
-    @property
-    def thinking_summary(self) -> str | None:
-        """The reasoning summary level used for outgoing requests.
+            provider: the provider prefix (e.g. ``"openai"``), or ``None`` when unset.
+            name: the model name without the provider prefix, or ``None`` when unset.
 
         Returns:
-            The current summary level, or ``None`` when none is set.
+            The ``provider/name`` model id, or ``None`` when either part is unset.
         """
-        return self._thinking_summary
+        if not provider or not name:
+            return None
+        return f"{provider}/{name}"
 
-    @thinking_summary.setter
-    def thinking_summary(self, value: str | None) -> None:
-        """Set the thinking summary, validating against ``_thinking_summary_options``.
+    @property
+    def reasoning(self) -> ReasoningConfig:
+        """The reasoning effort and summary level used for outgoing requests.
+
+        Returns:
+            The current reasoning options; a field is ``None`` when not set.
+        """
+        return self._reasoning
+
+    @reasoning.setter
+    def reasoning(self, value: ReasoningConfig) -> None:
+        """Set the reasoning options used for subsequent requests.
 
         Args:
-            value: the reasoning summary level (e.g. ``"auto"``,
-                ``"concise"``, ``"detailed"``).
-
-        Raises:
-            ValueError: when ``_thinking_summary_options`` is set and
-                ``value`` is not in it.
+            value: the reasoning effort tier (e.g. ``"low"``) and summary level
+                (e.g. ``"auto"``, ``"concise"``, ``"detailed"``).
         """
-        if (
-            self._thinking_summary_options
-            and value not in self._thinking_summary_options
-        ):
-            raise ValueError(
-                f"Invalid thinking summary level: {value}. Choose between "
-                f"{self._thinking_summary_options}"
-            )
-        self._thinking_summary = value
+        self._reasoning = value
 
     def build_request(
         self,

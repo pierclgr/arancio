@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar
 
+from arancio.application.status import ApplicationStatus
 from arancio.core.agents.base import Agent
 from arancio.core.clients.base import Client
+from arancio.core.clients.configs.reasoning import ReasoningConfig
 from arancio.core.clients.constants import LITELLM_PROVIDER_NAMES
 from arancio.core.clients.litellm import LiteLLMClient
 from arancio.core.hooks.base import Hook
@@ -25,27 +26,19 @@ from arancio.core.tools.files.read import ReadFileTool
 from arancio.core.tools.manager import ToolManager
 from arancio.core.tools.session import ToolSession
 from arancio.prompt.actions.executor import ActionExecutor
-from arancio.sessions.base import SessionConfiguration, SessionState
+from arancio.sessions.configurations import SessionConfiguration
 from arancio.sessions.manager import SessionManager
+from arancio.sessions.state import SessionState
 from arancio.settings.base import Settings
+from arancio.settings.constants import (
+    MODEL_NAME_FIELD,
+    PERMISSIONS_FIELD,
+    PROVIDER_FIELD,
+    REASONING_EFFORT_FIELD,
+)
 from arancio.settings.manager import SettingsManager
 from arancio.storage.manager import StorageManager
 from arancio.ui.controllers.base import UIController
-
-
-@dataclass(frozen=True)
-class ApplicationStatus:
-    """Immutable values a frontend can read without accessing managed services.
-
-    Attributes:
-        model_id: the configured model, or None while provider/model is unset.
-        thinking_effort: the active effort, or None when disabled.
-        working_directory: the runtime working directory owned by Application.
-    """
-
-    model_id: str | None
-    thinking_effort: str | None
-    working_directory: Path
 
 
 class Application:
@@ -57,7 +50,7 @@ class Application:
     Attributes:
         __agent: the Core execution and history owner.
         __client: the main model client.
-        __summary_client: the selected model with thinking disabled.
+        __summary_client: the selected model with reasoning disabled.
         __tool_session: the shared file-read guard.
         __hook_manager: the lifecycle hook dispatcher.
         __settings_manager: the active/global settings owner.
@@ -68,24 +61,28 @@ class Application:
         __working_directory: the current runtime directory.
         __started: whether STARTUP was dispatched.
         __closed: whether shutdown was requested.
-        __setting_fields: editable fields in dependency order.
-        __setting_messages: confirmation formatters for checked changes.
+        __setting_fields: the dotted paths of the editable fields, in dependency
+            order.
+        __setting_messages: confirmation formatters for checked changes, keyed by
+            dotted path.
     """
 
     __setting_fields: ClassVar[tuple[str, ...]] = (
-        "provider",
-        "model_name",
-        "thinking_effort",
-        "permissions",
+        PROVIDER_FIELD,
+        MODEL_NAME_FIELD,
+        REASONING_EFFORT_FIELD,
+        PERMISSIONS_FIELD,
     )
     __setting_messages: ClassVar[dict[str, Callable[[Settings, Any], str]]] = {
-        "provider": lambda settings, value: f"Provider set to {settings.provider}",
-        "model_name": lambda settings, value: f"Model set to {settings.model_id}",
-        "thinking_effort": lambda settings, value: (
-            f"Thinking effort set to {value if value is not None else 'null'}"
+        PROVIDER_FIELD: lambda settings, value: (
+            f"Provider set to {settings.model.provider}"
         ),
-        "permissions": lambda settings, value: Application.__format_permission_changes(
-            settings, value
+        MODEL_NAME_FIELD: lambda settings, value: f"Model set to {settings.model.name}",
+        REASONING_EFFORT_FIELD: lambda settings, value: (
+            f"Reasoning effort set to {value if value is not None else 'null'}"
+        ),
+        PERMISSIONS_FIELD: lambda settings, value: (
+            Application.__format_permission_changes(settings, value)
         ),
     }
 
@@ -109,8 +106,7 @@ class Application:
         tool_session = ToolSession()
         client = LiteLLMClient(on_login=controller.show_login, stream=True)
         summary_client = LiteLLMClient(on_login=controller.show_login, stream=False)
-        summary_client.thinking_effort = None
-        summary_client.thinking_summary = None
+        summary_client.reasoning = ReasoningConfig()
         tool_manager = ToolManager(
             web_summary_client=summary_client,
             hook_manager=hook_manager,
@@ -179,7 +175,7 @@ class Application:
         Args:
             agent: the Core execution and history owner.
             client: the main client to configure.
-            summary_client: the summary client, whose thinking stays disabled.
+            summary_client: the summary client, whose reasoning stays disabled.
             tool_session: the read guard shared by catalog and direct tools.
             hook_manager: the manager dispatching lifecycle hooks.
             settings_manager: the already-loaded settings manager.
@@ -272,44 +268,35 @@ class Application:
         Returns:
             A fresh immutable model/effort/directory snapshot.
         """
-        settings = self.__settings_manager.settings
-        model_id = (
-            settings.model_id if settings.provider and settings.model_name else None
-        )
         return ApplicationStatus(
-            model_id=model_id,
-            thinking_effort=settings.thinking_effort,
+            model=self.__settings_manager.settings.model,
             working_directory=self.__working_directory,
         )
 
     def update_settings(self, **changes: Any) -> str | ErrorMessage | None:
         """Apply supplied settings in dependency order, preserving completed changes.
 
-        Unknown keys are rejected before any changes. Values are checked by
-        SettingsManager one field at a time. A later failure does not roll back
-        earlier fields. Omitted fields and empty permission mappings are unchanged.
+        Changes follow the settings file layout, for example
+        ``model={"reasoning": {"effort": "low"}}``. Unknown keys raise ValueError
+        before any change. Values are checked by SettingsManager one field at a
+        time. A later failure does not roll back earlier fields. Omitted fields
+        and empty permission mappings are unchanged.
 
         Args:
-            **changes: provider, model_name, thinking_effort and/or typed permissions.
+            **changes: a ``model`` mapping with ``provider``, ``name`` and/or
+                ``reasoning.effort``, and/or typed ``permissions``.
 
         Returns:
             Ordered confirmation text, a save notice, or None for no changes.
-
-        Raises:
-            ValueError: when a supplied field name is unknown.
         """
         self.__require_idle()
-        for field, value in changes.items():
-            if field not in self.__setting_fields:
-                raise ValueError(
-                    f"Unknown editable application setting {field!r}: {value!r}"
-                )
+        flat_changes = self.__flatten(changes)
         confirmations: list[str] = []
         for field in self.__setting_fields:
-            if field not in changes:
+            if field not in flat_changes:
                 continue
-            value = changes[field]
-            if field == "permissions" and isinstance(value, Mapping):
+            value = flat_changes[field]
+            if field == PERMISSIONS_FIELD and isinstance(value, Mapping):
                 value = dict(value)
                 if not value:
                     continue
@@ -412,9 +399,7 @@ class Application:
 
         configuration = state.configuration
         self.__settings_manager.restore_active(
-            provider=configuration.provider,
-            model_name=configuration.model_name,
-            thinking_effort=configuration.thinking_effort,
+            model=configuration.model,
             permissions=configuration.permissions,
         )
         self.__apply_settings(self.__settings_manager.settings)
@@ -483,20 +468,54 @@ class Application:
         Args:
             settings: the detached active settings to apply.
         """
-        model_id = (
-            settings.model_id if settings.provider and settings.model_name else None
+        # each client formats the id its provider expects
+        provider, name = settings.model.provider, settings.model.name
+        self.__client.model_id = self.__client.get_model_id(provider, name)
+        self.__client.reasoning = settings.model.reasoning
+        self.__summary_client.model_id = self.__summary_client.get_model_id(
+            provider, name
         )
-        self.__client.model_id = model_id
-        self.__client.thinking_effort = settings.thinking_effort
-        self.__client.thinking_summary = settings.thinking_summary
-        self.__summary_client.model_id = model_id
-        self.__summary_client.thinking_effort = None
-        self.__summary_client.thinking_summary = None
+        self.__summary_client.reasoning = ReasoningConfig()
         self.__agent.max_turns = settings.max_turns
         self.__agent.max_retries = settings.max_retries
         self.__agent.retry_delay = settings.turn_wait_time
         self.__agent.retry_delay_multiplier = settings.turn_wait_time_multiplier
         self.__agent.set(self.__grants(settings))
+
+    @classmethod
+    def __flatten(cls, changes: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
+        """Turn nested setting changes into values keyed by their dotted paths.
+
+        An editable field is a leaf, so a permissions mapping is kept whole.
+
+        Args:
+            changes: the nested changes, following the settings file layout.
+            prefix: the dotted path of ``changes``, ending with a dot; empty at
+                the top level.
+
+        Returns:
+            Each changed value keyed by the dotted path of its field.
+
+        Raises:
+            ValueError: when a key is not an editable field or section, or a
+                section is not a mapping.
+        """
+        flat: dict[str, Any] = {}
+        for key, value in changes.items():
+            path = f"{prefix}{key}"
+            if path in cls.__setting_fields:
+                flat[path] = value
+            elif any(field.startswith(f"{path}.") for field in cls.__setting_fields):
+                if not isinstance(value, Mapping):
+                    raise ValueError(
+                        f"Application setting {path!r} must be a mapping: {value!r}"
+                    )
+                flat.update(cls.__flatten(value, f"{path}."))
+            else:
+                raise ValueError(
+                    f"Unknown editable application setting {path!r}: {value!r}"
+                )
+        return flat
 
     def __change_setting(self, field: str, value: Any) -> ErrorMessage | None:
         """Complete one edit/apply/save/record sequence without cross-layer rollback.
@@ -505,14 +524,14 @@ class Application:
         that plugin's ``permission_level``; the others as default categories.
 
         Args:
-            field: the supported setting selected by update_settings.
+            field: the dotted path of the setting selected by update_settings.
             value: the proposed typed value or permission changes.
 
         Returns:
             A settings/session-save notice, or None on success.
         """
         plugin_levels: dict[str, PermissionLevel] = {}
-        if field == "permissions" and isinstance(value, Mapping):
+        if field == PERMISSIONS_FIELD and isinstance(value, Mapping):
             plugin_categories = self.__plugin_categories(
                 self.__settings_manager.settings
             )
@@ -532,7 +551,7 @@ class Application:
         settings = self.__settings_manager.settings
         self.__apply_settings(settings)
         try:
-            if field == "permissions":
+            if field == PERMISSIONS_FIELD:
                 for category in value:
                     self.__settings_manager.save_field(field, category)
                 for name in plugin_levels:

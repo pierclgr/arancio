@@ -11,15 +11,23 @@ from arancio.core.agents.constants import (
     AGENT_DEFAULT_TURN_WAIT_TIME,
     AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
 )
+from arancio.core.clients.configs.model import ModelConfig
+from arancio.core.clients.configs.reasoning import ReasoningConfig
 from arancio.core.clients.constants import (
-    LITELLM_DEFAULT_THINKING_EFFORT,
-    LITELLM_DEFAULT_THINKING_SUMMARY,
+    LITELLM_DEFAULT_REASONING_EFFORT,
+    LITELLM_DEFAULT_REASONING_SUMMARY,
 )
 from arancio.core.messages.base import ErrorMessage, Message, WarningMessage
 from arancio.core.permissions.constants import DEFAULT_PERMISSION_LEVELS
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 from arancio.settings.base import PluginSettings, Settings
-from arancio.settings.constants import ARANCIO_SETTINGS_FILENAME
+from arancio.settings.constants import (
+    ARANCIO_SETTINGS_FILENAME,
+    MODEL_NAME_FIELD,
+    PERMISSIONS_FIELD,
+    REASONING_EFFORT_FIELD,
+)
+from arancio.settings.utils import locate_field
 from arancio.settings.validator import SettingsValidator
 from arancio.storage.manager import StorageManager
 
@@ -137,58 +145,55 @@ class SettingsManager:
     ) -> None:
         """Validate and update one active setting without saving it.
 
-        Permissions are merged rather than replaced. A model name must form a
-        usable model ID, and changing thinking effort requires a configured model.
+        Permissions are merged rather than replaced. A model name requires a
+        configured provider, and changing reasoning effort requires a configured model.
 
         Args:
-            field: the setting to change.
+            field: the dotted path of the setting to change, as in the settings
+                file (for example ``model.name`` or ``max_turns``).
             value: the new value, or typed category-to-level changes for permissions.
 
         Raises:
             ValueError: when the field or value is invalid, or a model is required.
         """
         data = self.__settings.to_dict()
-        if not isinstance(field, str) or field not in data:
+        located = locate_field(data, field)
+        if located is None:
             raise ValueError(f"Unknown editable settings field: {field!r}.")
-        if field == "thinking_effort":
-            self.__settings.model_id
+        if field == REASONING_EFFORT_FIELD:
+            self.__settings.model.check_configured()
 
-        if field == "permissions":
+        if field == PERMISSIONS_FIELD:
             data[field]["default"].update(self.__permission_values(value))
         else:
-            data[field] = value
+            section, key = located
+            section[key] = value
 
         candidate = self.__prepare(data)
-        if field == "model_name":
-            candidate.model_id
+        if field == MODEL_NAME_FIELD:
+            candidate.model.check_configured()
         self.__settings = candidate
 
     def restore_active(
         self,
         *,
-        provider: str | None,
-        model_name: str | None,
-        thinking_effort: str | None,
+        model: ModelConfig,
         permissions: Mapping[PermissionCategory, PermissionLevel],
     ) -> None:
-        """Restore four session-controlled values on top of global defaults.
+        """Restore the session's model and permissions on top of global defaults.
 
-        Thinking summary and loop limits retain their global-default values.
-        This operation does not save settings or receive a Sessions object.
-        Invalid values or incomplete permissions raise ValueError.
+        Plugins and loop limits retain their global-default values. This operation
+        does not save settings or receive a Sessions object. Invalid values or
+        incomplete permissions raise ValueError.
 
         Args:
-            provider: the restored provider, or None when unconfigured.
-            model_name: the restored model name, or None when unconfigured.
-            thinking_effort: the restored effort, or None when disabled.
+            model: the restored model section, reasoning options included.
             permissions: the complete restored permission map for default categories.
         """
         values = self.__permission_values(permissions)
         data = self.__global.to_dict()
         data.update(
-            provider=provider,
-            model_name=model_name,
-            thinking_effort=thinking_effort,
+            model=model.to_dict(),
             permissions={"default": values},
         )
         self.__settings = self.__prepare(data)
@@ -214,24 +219,28 @@ class SettingsManager:
         Write failures propagate without changing global defaults.
 
         Args:
-            field: the settings field whose active value to save.
+            field: the dotted path of the settings field whose active value to save.
             category: the known category to save when field is permissions.
 
         Raises:
             ValueError: when the field or category is invalid.
         """
-        if not isinstance(field, str) or field not in self.__settings.to_dict():
+        active = locate_field(self.__settings.to_dict(), field)
+        if active is None:
             raise ValueError(f"Unknown settings field: {field!r}.")
         if field == "permissions" and category not in self.__categories:
             raise ValueError(f"Unknown permission category: {category!r}.")
         if field != "permissions" and category is not None:
             raise ValueError(f"Category is only valid for permissions: {category!r}.")
 
-        candidate = self.__copy(self.__global)
         if field == "permissions":
+            candidate = self.__copy(self.__global)
             candidate.permissions[category] = self.__settings.permissions[category]
         else:
-            setattr(candidate, field, getattr(self.__settings, field))
+            data = self.__global.to_dict()
+            section, key = locate_field(data, field)
+            section[key] = active[0][key]
+            candidate = self.__prepare(data)
         self.save(candidate)
 
     def set_plugin_permission_levels(
@@ -268,15 +277,20 @@ class SettingsManager:
         """Build settings from code defaults.
 
         Returns:
-            A settings snapshot with default permission levels and no plugins.
+            A settings snapshot with default permission levels, no plugins and an
+            unconfigured model.
         """
         return Settings(
             permissions=dict(DEFAULT_PERMISSION_LEVELS),
             plugins={},
-            provider=None,
-            model_name=None,
-            thinking_effort=LITELLM_DEFAULT_THINKING_EFFORT,
-            thinking_summary=LITELLM_DEFAULT_THINKING_SUMMARY,
+            model=ModelConfig(
+                provider=None,
+                name=None,
+                reasoning=ReasoningConfig(
+                    effort=LITELLM_DEFAULT_REASONING_EFFORT,
+                    summary=LITELLM_DEFAULT_REASONING_SUMMARY,
+                ),
+            ),
             max_turns=AGENT_DEFAULT_MAX_TURNS,
             max_retries=AGENT_DEFAULT_MAX_RETRIES,
             turn_wait_time=AGENT_DEFAULT_TURN_WAIT_TIME,

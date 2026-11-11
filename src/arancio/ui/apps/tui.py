@@ -198,15 +198,15 @@ class TUIApp(TextualApp):
         """Build the toolbar text from the Application status.
 
         Returns:
-            The model id, thinking effort, working directory and the current
-            working/ready state.
+            The provider, model name, reasoning effort, working directory and the
+            current working/ready state.
         """
         status = self.__application.status()
         state = "working" if self.__busy else "ready"
-        effort = status.thinking_effort
+        effort = status.model.reasoning.effort
         if effort is None:
             effort = "null"
         return (
-            f"model: {status.model_id}  ·  effort: {effort}  ·  "
-            f"{status.working_directory}  ·  {state}"
+            f"provider: {status.model.provider}  ·  model: {status.model.name}  ·  "
+            f"effort: {effort}  ·  {status.working_directory}  ·  {state}"
         )

@@ -2,8 +2,8 @@
 
 import litellm
 
-LITELLM_DEFAULT_THINKING_EFFORT: str = "medium"
-LITELLM_DEFAULT_THINKING_SUMMARY: str = "auto"
+LITELLM_DEFAULT_REASONING_EFFORT: str = "medium"
+LITELLM_DEFAULT_REASONING_SUMMARY: str = "auto"
 
 # every provider name LiteLLM recognizes; the closed set Settings.set_provider validates
 # against

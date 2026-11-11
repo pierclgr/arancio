@@ -34,8 +34,10 @@ Paths are in `core/constants.py` and each component's `constants.py`.
   `SystemPromptBuilder`; `build()` appends the current date each turn. Put
   fresh runtime context in `build()`, never in a `<script>` tag.
 - `settings.yml`: written by `SettingsManager` through Storage. Layout:
-  `permissions: default: {read: ask, ...}` and
-  `plugins: [{<name>: {enabled: bool, permission_level: ask|auto|null}}]`.
+  `permissions: default: {read: ask, ...}`,
+  `plugins: [{<name>: {enabled: bool, permission_level: ask|auto|null}}]`,
+  `model: {provider, name, reasoning: {effort, summary}}` and the loop fields
+  (`max_turns`, `max_retries`, `turn_wait_time`, `turn_wait_time_multiplier`).
 - `litellm/`: LiteLLM login data (moved/symlinked by Storage's generic ops).
 - `sessions/<cwd-name+hash>/<y>/<m>/<d>/<uuid4hex>.jsonl`: one append-only log
   per session. No registry file; `SessionRegistry` rescans at launch.
@@ -87,9 +89,19 @@ after finalized messages were delivered. The initial message is stored but
 `Client` sets `_request_builder`, `_payload_builder`, `_response_parser`. Flow:
 `build_request` → mutable `Request` → payload builder → `litellm.responses` →
 `parse` / `parse_stream` → `Message`s. `LiteLLMClient` routes by `model_id`
-prefix; credentials come from env vars. `_litellm_patches.apply()` patches
-pinned-LiteLLM bugs, including the ChatGPT device-code login notice sent to the
-controller (UI-only, never in history).
+prefix; credentials come from env vars. The static
+`Client.get_model_id(provider, name)` builds a client's id (`provider/name` by
+default, `None` when a part is unset); a client whose provider expects another
+format overrides it. `_litellm_patches.apply()` patches pinned-LiteLLM bugs,
+including the ChatGPT device-code login notice sent to the controller (UI-only,
+never in history). `client.reasoning` and `request.reasoning` hold a frozen
+`ReasoningConfig(effort, summary)` (`core/clients/configs/reasoning.py`); change
+it by assigning a new one. Core does not check the values, so a bad effort or
+summary fails only when the request is sent. The payload builder sends it as
+LiteLLM's `reasoning`. `core/clients/configs/model.py` has the frozen
+`ModelConfig(provider, name, reasoning)` with `check_configured()`, `to_dict()`
+and `from_dict()`: the one model type that Settings, Sessions and Application
+share, so Settings and Sessions never import each other.
 
 The `litellm[mcp]` extra is required by the current Responses dispatcher even
 for ordinary function tools; without it, model requests fail before reaching the
@@ -97,8 +109,8 @@ provider with `No module named 'mcp'`.
 
 **Ollama caveat**: `reasoning={"effort": ...}` is always sent, but for
 non-`gpt-oss` Ollama models LiteLLM turns it into `think: true|false`, so
-low/medium/high are equal. Setting `thinking_summary` there crashes LiteLLM
-(`unhashable type: 'dict'`); keep it `None` for Ollama.
+low/medium/high are equal. Setting a reasoning summary there crashes LiteLLM
+(`unhashable type: 'dict'`); keep `model.reasoning.summary` `null` for Ollama.
 
 ### Tools (`core/tools/`)
 
@@ -238,11 +250,19 @@ are no-ops and `ask` returns None.
 ### Application (`application/base.py`)
 
 Public coordinator over Core, Settings and Sessions; returns Messages and
-`ApplicationStatus(model_id, thinking_effort, working_directory)`.
+`ApplicationStatus(model, working_directory)` (`application/status.py`; `model`
+is the active `ModelConfig`; the TUI shows its provider and name). Only
+Application turns `settings.model` into an id, by calling each client's
+`get_model_id`; Settings stores just `provider` and `name`, and
+`ModelConfig.check_configured()` raises when either is missing.
 
-- `update_settings(**changes)`: provider → model_name → thinking_effort →
-  permissions; unknown names rejected first; each field is set, applied,
-  saved alone, then recorded. No cross-layer rollback.
+- `update_settings(**changes)` takes the file layout:
+  `model={"provider": ..., "name": ..., "reasoning": {"effort": ...}}` and/or
+  `permissions={...}`. Application flattens them to the dotted paths that
+  `SettingsManager` takes, rejects unknown keys first, then runs
+  `model.provider` → `model.name` → `model.reasoning.effort` →
+  `permissions`; each field is set, applied, saved alone, then recorded. No
+  cross-layer rollback.
 - Owns directory changes (`os.chdir`), `rename`, `new_session`, `resume`
   (restores settings without saving globals, history, unchanged file mtimes,
   directory) and `fork`.
@@ -276,6 +296,14 @@ switching; others after. String results become `in_history=False`
 Missing file → created from defaults; bad YAML → left untouched, defaults used.
 `SettingsValidator` returns checked mappings and Messages; strict for edits,
 lenient with notices on load. Only the manager builds `Settings`.
+`set_field` / `save_field` take dotted paths as written in the file
+(`model.name`, `max_turns`, `permissions`); the manager walks the nested
+`to_dict()` and re-validates strictly. `Settings.model` is Core's
+`ModelConfig` (`provider`, `name`, `reasoning: ReasoningConfig(effort,
+summary)`); a missing or null `model` / `reasoning` section means defaults,
+unknown keys warn, and there is no support for the old flat model keys.
+`restore_active(model=, permissions=)` puts a
+session's model section and permissions over the global settings.
 `Settings.permissions` holds only the default categories
 (`DEFAULT_PERMISSION_LEVELS`); `Settings.plugins` maps lowercase plugin names
 to `PluginSettings(enabled, permission_level)`; plugin levels are edited by
@@ -291,19 +319,28 @@ raise on failure. Callers must close abandoned byte iterators.
 
 ### Sessions (`sessions/`)
 
-`SessionManager(storage, configuration)` is the only public service; data types
-are in `sessions/base.py`. A session starts in `Path.cwd()`; it is written only
-on its first recordable event. `record_message(message, file_states=...,
-visible=True)` and `record_command(...)` return `ErrorMessage | None`; chunks
-are skipped, unsupported types (incl. `WarningMessage`) raise `ValueError`.
+`SessionManager(storage, configuration)` is the only public service. Data types:
+`sessions/base.py` (`Session`), `sessions/configurations.py`
+(`SessionConfiguration`), `sessions/events/base.py`
+(`SessionEvent`), `sessions/state.py` (`SessionState`), `sessions/scan.py`
+(`SessionScan`) and `sessions/registry/entry.py` (`SessionRegistryEntry`); the
+registry itself is `sessions/registry/base.py`. A session starts in
+`Path.cwd()`; it is written only on its first recordable event.
+`record_message(message, file_states=..., visible=True)` and
+`record_command(...)` return `ErrorMessage | None`; chunks are skipped,
+unsupported types (incl. `WarningMessage`) raise `ValueError`.
 `update_state(**changes)` takes `configuration`, `working_directory`,
-`explicit_name` (only this may be None). A configuration stores only the
-default permission levels; plugin levels are global settings, so sessions keep
-loading when plugins change. `find`, `load` (validates, refreshes
-checksum, adds synthetic errors for unmatched tool calls), `fork` (returns
-state, confirmation, notices). Internals (`SessionRecorder`, `SessionChecksum`,
-`SessionRegistry`) are private. Sessions never touches live Agent, Settings,
-`ToolSession` or the UI; Application applies the returned data.
+`explicit_name` (only this may be None). A `SessionConfiguration(model,
+permissions)` stores the whole model section as Core's `ModelConfig` (summary
+included) and only the default permission levels; plugin levels are global
+settings, so sessions keep loading when plugins change. Sessions imports nothing
+from Settings at runtime: on resume Application passes the session's
+`ModelConfig` to `restore_active` as it is. `find`,
+`load` (validates, refreshes checksum, adds synthetic errors for unmatched tool
+calls), `fork` (returns state, confirmation, notices). Internals
+(`SessionRecorder`, `SessionChecksum`, `SessionRegistry`) are private. Sessions
+never touches live Agent, Settings, `ToolSession` or the UI; Application applies
+the returned data.
 
 ## Conventions
 

@@ -28,8 +28,8 @@ class RequestBuilder(Builder):
     ) -> Request:
         """Build a normalized request bound to the client's current state.
 
-        Reads the model id, thinking effort and thinking summary from
-        the client so callers do not need to pass them explicitly.
+        Reads the model id and reasoning options from the client so
+        callers do not need to pass them explicitly.
         Subclasses contribute provider-specific fields by overriding
         :meth:`_extra_kwargs`.
 
@@ -45,8 +45,7 @@ class RequestBuilder(Builder):
         """
         kwargs: Dict[str, Any] = {
             "model_id": client.model_id,
-            "thinking_effort": client.thinking_effort,
-            "thinking_summary": client.thinking_summary,
+            "reasoning": client.reasoning,
             "system_prompt": system_prompt,
             "tool_list": tools or [],
             "message_list": messages,

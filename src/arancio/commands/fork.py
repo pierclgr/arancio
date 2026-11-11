@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from arancio.application.base import Application
     from arancio.core.messages.assistant import AssistantMessage
     from arancio.core.messages.base import ErrorMessage
-    from arancio.sessions.base import SessionState
+    from arancio.sessions.state import SessionState
 
 
 class ForkCommand(Command):

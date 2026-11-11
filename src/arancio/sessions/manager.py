@@ -17,13 +17,9 @@ from arancio.core.messages.base import ErrorMessage, Message
 from arancio.core.messages.user import UserMessage
 from arancio.core.permissions.constants import DEFAULT_PERMISSION_LEVELS
 from arancio.core.permissions.types import PermissionCategory
-from arancio.sessions.base import (
-    Session,
-    SessionConfiguration,
-    SessionRegistryEntry,
-    SessionState,
-)
+from arancio.sessions.base import Session
 from arancio.sessions.codec import is_message_record, message_from_record
+from arancio.sessions.configurations import SessionConfiguration
 from arancio.sessions.constants import (
     ARANCIO_SESSIONS_DIR,
     SESSION_DIRECTORY_HASH_LENGTH,
@@ -31,7 +27,9 @@ from arancio.sessions.constants import (
     SESSION_LINEAGE_SUFFIX_PATTERN,
 )
 from arancio.sessions.recorder import SessionRecorder
-from arancio.sessions.registry import SessionRegistry
+from arancio.sessions.registry.base import SessionRegistry
+from arancio.sessions.registry.entry import SessionRegistryEntry
+from arancio.sessions.state import SessionState
 from arancio.sessions.validator import SessionValidator
 from arancio.storage.manager import StorageManager
 

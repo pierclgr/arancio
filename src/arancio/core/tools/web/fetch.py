@@ -29,7 +29,7 @@ class FetchWebTool(Tool):
     The tool downloads the URL and extracts its main readable content with trafilatura,
     caps the content length, then asks an injected summarization client to answer the
     caller's query using only that content. The client is built and configured by the
-    caller (model, thinking effort, streaming, …) outside the tool, kept separate from
+    caller (model, reasoning effort, streaming, …) outside the tool, kept separate from
     the agent's client so summarization can run on a cheap, dedicated model. This is a
     read-only, network-only tool: it does not interact with ``ToolSession``.
     """

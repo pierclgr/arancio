@@ -1,12 +1,20 @@
 """Shared validation rules for settings-file fallback and explicit edits."""
 
 from collections.abc import Callable, Collection, Mapping
+from copy import deepcopy
 from typing import Any, ClassVar
 
 from arancio.core.agents.constants import AGENT_UNLIMITED_MAX_TURNS
 from arancio.core.messages.base import ErrorMessage, Message, WarningMessage
 from arancio.core.permissions.types import PermissionLevel
-from arancio.settings.constants import ARANCIO_SETTINGS_FILENAME
+from arancio.settings.constants import (
+    ARANCIO_SETTINGS_FILENAME,
+    MODEL_NAME_FIELD,
+    PROVIDER_FIELD,
+    REASONING_EFFORT_FIELD,
+    REASONING_SUMMARY_FIELD,
+)
+from arancio.settings.utils import locate_field
 
 
 class SettingsValidator:
@@ -17,18 +25,21 @@ class SettingsValidator:
     metadata comes from the manager, never from a process-wide registry.
 
     Attributes:
-        __SETTINGS_FIELD_RULES: scalar predicates shared by loading and explicit edits.
-        __PERMISSION_LEVEL_VALUES: the accepted serialized permission levels.
+        __field_rules: scalar predicates keyed by the field's dotted path in the
+            file, shared by loading and explicit edits.
+        __required_fields: the dotted paths that must be set for the agent to run.
+        __permission_level_values: the accepted serialized permission levels.
         __defaults: copied code defaults, including default permission names.
+        __sections: every section path mapped to the names of its children.
         __supported_providers: copied, lowercased provider names.
     """
 
     # provider membership is checked separately against the supplied metadata
-    __SETTINGS_FIELD_RULES: ClassVar[dict[str, Callable[[Any], bool]]] = {
-        "provider": lambda value: value is None or isinstance(value, str),
-        "model_name": lambda value: value is None or isinstance(value, str),
-        "thinking_effort": lambda value: value is None or isinstance(value, str),
-        "thinking_summary": lambda value: value is None or isinstance(value, str),
+    __field_rules: ClassVar[dict[str, Callable[[Any], bool]]] = {
+        PROVIDER_FIELD: lambda value: value is None or isinstance(value, str),
+        MODEL_NAME_FIELD: lambda value: value is None or isinstance(value, str),
+        REASONING_EFFORT_FIELD: lambda value: value is None or isinstance(value, str),
+        REASONING_SUMMARY_FIELD: lambda value: value is None or isinstance(value, str),
         "max_turns": lambda value: (
             (isinstance(value, str) and value == AGENT_UNLIMITED_MAX_TURNS)
             or (isinstance(value, int) and not isinstance(value, bool) and value > 0)
@@ -48,7 +59,12 @@ class SettingsValidator:
         ),
     }
 
-    __PERMISSION_LEVEL_VALUES: ClassVar[frozenset[str | None]] = frozenset(
+    __required_fields: ClassVar[tuple[str, ...]] = (
+        PROVIDER_FIELD,
+        MODEL_NAME_FIELD,
+    )
+
+    __permission_level_values: ClassVar[frozenset[str | None]] = frozenset(
         level.value for level in PermissionLevel
     )
 
@@ -63,10 +79,16 @@ class SettingsValidator:
             defaults: complete serialized code defaults and default permission names.
             supported_providers: the supported provider prefixes.
         """
-        self.__defaults: dict[str, Any] = dict(defaults)
-        self.__defaults["permissions"] = {
-            "default": dict(defaults["permissions"]["default"])
+        self.__defaults: dict[str, Any] = deepcopy(dict(defaults))
+        # permissions and plugins have their own validation, so only the scalar
+        # rules define the sections
+        self.__sections: dict[tuple[str, ...], set[str]] = {
+            (): {"permissions", "plugins"}
         }
+        for field in self.__field_rules:
+            keys = tuple(field.split("."))
+            for depth in range(len(keys)):
+                self.__sections.setdefault(keys[:depth], set()).add(keys[depth])
         self.__supported_providers: frozenset[str] = frozenset(
             provider.lower() for provider in supported_providers
         )
@@ -92,7 +114,8 @@ class SettingsValidator:
             returns an empty diagnostic list on success.
 
         Raises:
-            ValueError: when data is not a mapping or a strict candidate is invalid.
+            ValueError: when data is not a mapping, a strict candidate is invalid,
+                or a field has no code default.
         """
         if not isinstance(data, Mapping):
             raise ValueError(f"Settings must be a mapping, got {data!r}.")
@@ -105,17 +128,26 @@ class SettingsValidator:
             "plugins": plugins,
         }
 
-        for field in self.__SETTINGS_FIELD_RULES:
-            if strict and field not in data:
+        for field in self.__field_rules:
+            located = locate_field(data, field)
+            if strict and located is None:
                 raise ValueError(f"Missing settings field: {field!r}.")
-            default = self.__defaults[field]
-            value = data.get(field, default)
+            default_located = locate_field(self.__defaults, field)
+            if default_located is None:
+                raise ValueError(f"No code default for settings field: {field!r}.")
+            default_section, default_key = default_located
+            default = default_section[default_key]
+            if located is None:
+                value = default
+            else:
+                section, key = located
+                value = section[key]
             try:
-                normalized[field] = self.__normalize_field(field, value)
+                checked = self.__normalize_field(field, value)
             except ValueError:
                 if strict:
                     raise
-                normalized[field] = default
+                self.__assign(normalized, field, default)
                 message_cls = ErrorMessage if default is None else WarningMessage
                 messages.append(
                     message_cls(
@@ -124,35 +156,88 @@ class SettingsValidator:
                 )
                 continue
 
-            if (
-                not strict
-                and field in ("provider", "model_name")
-                and normalized[field] is None
-            ):
+            self.__assign(normalized, field, checked)
+            if not strict and checked is None and field in self.__required_fields:
                 messages.append(ErrorMessage(content=self.__not_set_text(field)))
 
-        known_fields = {"permissions", "plugins", *self.__SETTINGS_FIELD_RULES}
-        for key in data:
-            if key in known_fields:
-                continue
-            if strict:
-                raise ValueError(f"Unknown settings field: {key!r}.")
-            messages.append(
-                WarningMessage(
-                    content=(
-                        f"{ARANCIO_SETTINGS_FILENAME}: unknown field {key!r}; "
-                        "entry ignored."
+        messages.extend(self.__check_sections(data, (), strict=strict))
+        return normalized, messages
+
+    def __check_sections(
+        self,
+        node: Mapping[str, Any],
+        prefix: tuple[str, ...],
+        *,
+        strict: bool,
+    ) -> list[Message]:
+        """Check one section for unknown keys and for subsections that are not mappings.
+
+        A null subsection counts as missing, so its fields use their defaults. Field
+        values are checked elsewhere.
+
+        Args:
+            node: the section mapping to check.
+            prefix: the path of the section; empty for the file's top level.
+            strict: reject unknown keys and invalid subsections instead of warning.
+
+        Returns:
+            File-mode warnings; empty for a valid section or in strict mode.
+
+        Raises:
+            ValueError: when a strict section has an unknown key or an invalid
+                subsection.
+        """
+        messages: list[Message] = []
+        for key, child in node.items():
+            child_path = (*prefix, key)
+            label = ".".join(child_path)
+            if key not in self.__sections[prefix]:
+                if strict:
+                    raise ValueError(f"Unknown settings field: {label!r}.")
+                where = f' in "{".".join(prefix)}"' if prefix else ""
+                messages.append(
+                    WarningMessage(
+                        content=(
+                            f"{ARANCIO_SETTINGS_FILENAME}: unknown field {key!r}"
+                            f"{where}; entry ignored."
+                        )
                     )
                 )
-            )
+                continue
+            if child_path not in self.__sections or child is None:
+                continue
+            if not isinstance(child, Mapping):
+                text = (
+                    f'{ARANCIO_SETTINGS_FILENAME}: "{label}" must be a mapping, '
+                    f"got {child!r}"
+                )
+                if strict:
+                    raise ValueError(f"{text}.")
+                messages.append(WarningMessage(content=f"{text}; using defaults."))
+                continue
+            messages.extend(self.__check_sections(child, child_path, strict=strict))
+        return messages
 
-        return normalized, messages
+    @staticmethod
+    def __assign(target: dict[str, Any], field: str, value: Any) -> None:
+        """Store a value by its dotted path, creating the sections on the way.
+
+        Args:
+            target: the nested mapping to change.
+            field: the dotted path of the value, for example ``model.name``.
+            value: the value to store.
+        """
+        *sections, key = field.split(".")
+        node = target
+        for section in sections:
+            node = node.setdefault(section, {})
+        node[key] = value
 
     def __normalize_field(self, field: str, value: Any) -> Any:
         """Check one scalar field and normalize a configured provider name.
 
         Args:
-            field: a known settings field name.
+            field: the dotted path of a known field.
             value: the candidate value.
 
         Returns:
@@ -161,9 +246,9 @@ class SettingsValidator:
         Raises:
             ValueError: when the type, range or provider name is invalid.
         """
-        if not self.__SETTINGS_FIELD_RULES[field](value):
+        if not self.__field_rules[field](value):
             raise ValueError(f"Invalid value {value!r} for settings field {field!r}.")
-        if field != "provider" or value is None:
+        if field != PROVIDER_FIELD or value is None:
             return value
 
         provider = value.lower()
@@ -258,7 +343,7 @@ class SettingsValidator:
             # check the type before membership so collections cannot leak TypeError
             if (
                 not (level is None or isinstance(level, str))
-                or level not in self.__PERMISSION_LEVEL_VALUES
+                or level not in self.__permission_level_values
             ):
                 if strict:
                     raise ValueError(
@@ -378,7 +463,7 @@ class SettingsValidator:
         # check the type before membership so collections cannot leak TypeError
         if (
             not (level is None or isinstance(level, str))
-            or level not in cls.__PERMISSION_LEVEL_VALUES
+            or level not in cls.__permission_level_values
         ):
             raise ValueError(f'invalid "permission_level" value {level!r}')
         return name, enabled, level
@@ -388,7 +473,7 @@ class SettingsValidator:
         """Build the existing notice for an unconfigured provider or model.
 
         Args:
-            field: the unset field name.
+            field: the dotted path of the unset field.
 
         Returns:
             The notice text naming the settings file and field.
@@ -400,7 +485,7 @@ class SettingsValidator:
         """Build the existing notice for an invalid file field and its fallback.
 
         Args:
-            field: the invalid field name.
+            field: the dotted path of the invalid field.
             value: the rejected value.
             default: the code-default fallback.
 

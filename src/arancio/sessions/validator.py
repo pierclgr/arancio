@@ -13,10 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
-from arancio.sessions.base import Session, SessionConfiguration, SessionScan
+from arancio.sessions.base import Session
 from arancio.sessions.checksum import SessionChecksum
 from arancio.sessions.codec import is_message_record, message_from_record
+from arancio.sessions.configurations import SessionConfiguration
 from arancio.sessions.constants import SESSION_FORMAT_VERSION
+from arancio.sessions.scan import SessionScan
 from arancio.storage.manager import StorageManager
 
 

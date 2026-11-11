@@ -18,14 +18,14 @@ class ModelCommand(Command):
     description = "Set the model name, keeping the current provider."
 
     @classmethod
-    def execute(cls, model_name: str, application: Application) -> str | ErrorMessage:
+    def execute(cls, name: str, application: Application) -> str | ErrorMessage:
         """Delegate the parsed invocation to Application.
 
         Args:
-            model_name: the parsed command argument.
+            name: the parsed model name, without the provider prefix.
             application: the operation facade supplied by the executor.
 
         Returns:
             The Application operation's confirmation, state or notices.
         """
-        return application.update_settings(model_name=model_name)
+        return application.update_settings(model={"name": name})

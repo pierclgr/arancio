@@ -1,4 +1,4 @@
-"""Input adapter for the thinking-effort command."""
+"""Input adapter for the reasoning-effort command."""
 
 from __future__ import annotations
 
@@ -12,21 +12,21 @@ if TYPE_CHECKING:
 
 
 class EffortCommand(Command):
-    """Set the model's thinking effort."""
+    """Set the model's reasoning effort."""
 
     name = "effort"
-    description = "Set the model's thinking effort."
+    description = "Set the model's reasoning effort."
 
     @classmethod
     def execute(cls, level: str, application: Application) -> str | ErrorMessage | None:
-        """Translate the command's null token and update thinking effort.
+        """Translate the command's null token and update reasoning effort.
 
         Args:
-            level: the effort text, or null to disable thinking.
+            level: the effort text, or null to disable reasoning.
             application: the operation facade supplied by the executor.
 
         Returns:
             The existing confirmation text or a persistence notice.
         """
         effort = None if level.lower() == "null" else level
-        return application.update_settings(thinking_effort=effort)
+        return application.update_settings(model={"reasoning": {"effort": effort}})
