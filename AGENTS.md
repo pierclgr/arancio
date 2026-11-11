@@ -280,7 +280,8 @@ lenient with notices on load. Only the manager builds `Settings`.
 (`DEFAULT_PERMISSION_LEVELS`); `Settings.plugins` maps lowercase plugin names
 to `PluginSettings(enabled, permission_level)`; plugin levels are edited by
 plugin name with `set_plugin_permission_levels` and saved with
-`save_plugin_permission_level`. Invalid plugin entries warn and are left out; there is no support for the old
+`save_plugin_permission_level`. A missing or null `plugins` means no plugins.
+Invalid plugin entries warn and are left out; there is no support for the old
 flat `permissions` layout.
 
 `StorageManager` is generic file I/O rooted at `ARANCIO_DEFAULT_DIR` (text,

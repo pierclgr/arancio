@@ -298,25 +298,24 @@ class SettingsValidator:
         """Check the plugins list, keeping each valid entry under a lowercase name.
 
         Plugins are not looked up: an entry is valid even when its plugin does
-        not exist, so it survives saving.
+        not exist, so it survives saving. A missing or null (YAML ``null``, ``~`` or
+        empty) ``plugins`` field means no plugins, in both modes.
 
         Args:
             data: the complete candidate settings mapping.
-            strict: reject a missing list and invalid entries.
+            strict: reject an invalid list and invalid entries.
 
         Returns:
             The valid entries as one-key mappings in file order, plus file-mode
             warnings. Invalid file entries are left out.
 
         Raises:
-            ValueError: when a strict plugins list is missing or invalid.
+            ValueError: when a strict plugins list is invalid.
         """
-        if "plugins" not in data:
-            if strict:
-                raise ValueError("Missing settings field: 'plugins'.")
+        raw = data.get("plugins")
+        if raw is None:
             return [], []
 
-        raw = data["plugins"]
         if not isinstance(raw, list):
             text = f'{ARANCIO_SETTINGS_FILENAME}: "plugins" must be a list, got {raw!r}'
             if strict:
