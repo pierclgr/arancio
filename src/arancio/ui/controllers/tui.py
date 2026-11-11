@@ -98,13 +98,13 @@ class TUIController(UIController):
             if self.__pending_event is not None:
                 self.__pending_event.set()
 
-    def show_login(self, notice: LoginNotice) -> None:
+    def show_login(self, login_notice: LoginNotice) -> None:
         """Show the login details on the UI thread without waiting for sign-in.
 
         Args:
-            notice: the provider, verification URL and user code.
+            login_notice: the provider, verification URL and user code.
         """
-        self.__call_ui(lambda app: app.show_login(notice))
+        self.__call_ui(lambda app: app.show_login(login_notice))
 
     def reset_conversation(self, messages: list[Message]) -> None:
         """Replace the visible conversation on the UI thread.

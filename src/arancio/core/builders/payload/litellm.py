@@ -36,7 +36,9 @@ class LiteLLMPayloadBuilder(PayloadBuilder):
         if request.system_prompt:
             kwargs["instructions"] = request.system_prompt
         if request.tool_list:
-            kwargs["tools"] = [cls._build_tool(tool) for tool in request.tool_list]
+            kwargs["tools"] = [
+                cls._build_tool(tool_schema) for tool_schema in request.tool_list
+            ]
         if request.reasoning.effort is not None:
             # not graded on every provider: for non-gpt-oss Ollama models, LiteLLM
             # collapses this to a plain "reasoning on/off" boolean (see AGENTS.md)
@@ -47,20 +49,20 @@ class LiteLLMPayloadBuilder(PayloadBuilder):
         return kwargs
 
     @staticmethod
-    def _build_tool(tool: ToolSchema) -> dict[str, Any]:
+    def _build_tool(tool_schema: ToolSchema) -> dict[str, Any]:
         """Convert a normalized tool schema to a Responses function tool.
 
         Args:
-            tool: the normalized tool definition.
+            tool_schema: the normalized tool definition.
 
         Returns:
             The Responses-format function tool dict.
         """
         return {
             "type": "function",
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": tool.input_schema,
+            "name": tool_schema.name,
+            "description": tool_schema.description,
+            "parameters": tool_schema.input_schema,
         }
 
     @classmethod
@@ -100,17 +102,17 @@ class LiteLLMPayloadBuilder(PayloadBuilder):
         raise ValueError(f"Unsupported message type: {type(message).__name__!r}")
 
     @staticmethod
-    def _render_tool_result(message: ToolResultMessage) -> str:
+    def _render_tool_result(tool_result_message: ToolResultMessage) -> str:
         """Render a tool result message as a string for the provider.
 
         The raw payload consumed by the model lives in ``content``.
 
         Args:
-            message: the tool result message to render.
+            tool_result_message: the tool result message to render.
 
         Returns:
             The rendered tool result string.
         """
-        if isinstance(message.content, str):
-            return message.content
-        return json.dumps(message.content)
+        if isinstance(tool_result_message.content, str):
+            return tool_result_message.content
+        return json.dumps(tool_result_message.content)

@@ -31,11 +31,11 @@ class UIController(ABC):
         """Release a pending question with None without waiting for worker work."""
 
     @abstractmethod
-    def show_login(self, notice: LoginNotice) -> None:
+    def show_login(self, login_notice: LoginNotice) -> None:
         """Display login details and return without waiting for sign-in.
 
         Args:
-            notice: the provider, verification URL and user code.
+            login_notice: the provider, verification URL and user code.
         """
 
     @abstractmethod

@@ -19,11 +19,11 @@ class PermissionRequest:
     """Request asking the caller to approve or deny a tool call.
 
     Attributes:
-        call: the tool call awaiting a decision.
+        tool_call: the tool call awaiting a decision.
         id: unique identifier the matching response must carry.
     """
 
-    call: ToolCallMessage
+    tool_call: ToolCallMessage
     id: str = field(default_factory=lambda: uuid4().hex)
 
 

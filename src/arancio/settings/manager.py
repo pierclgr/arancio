@@ -37,7 +37,7 @@ class SettingsManager:
         __storage_manager: the injected generic file I/O service.
         __categories: the default permission categories, saved under
             ``permissions.default`` and stored in sessions.
-        __validator: shared validation for file loading and explicit edits.
+        __settings_validator: shared validation for file loading and explicit edits.
         __settings: the active conversation values.
         __global: the defaults selected by load or a successful save.
     """
@@ -59,7 +59,7 @@ class SettingsManager:
         )
         self.__global: Settings = self.__default_settings()
         self.__settings: Settings = self.__copy(self.__global)
-        self.__validator = SettingsValidator(
+        self.__settings_validator = SettingsValidator(
             self.__global.to_dict(), supported_providers
         )
 
@@ -125,7 +125,7 @@ class SettingsManager:
                     )
                 )
 
-        checked, field_messages = self.__validator.validate(data)
+        checked, field_messages = self.__settings_validator.validate(data)
         defaults.from_dict(checked, self.__categories)
         active = self.__copy(defaults)
         self.__global = defaults
@@ -206,7 +206,7 @@ class SettingsManager:
         self.__settings = candidate
 
     def save_field(
-        self, field: str, category: PermissionCategory | None = None
+        self, field: str, permission_category: PermissionCategory | None = None
     ) -> None:
         """Persist one active field or permission category as a global default.
 
@@ -214,7 +214,7 @@ class SettingsManager:
 
         Args:
             field: the dotted path of the settings field whose active value to save.
-            category: the known category to save when field is permissions.
+            permission_category: the known category to save when field is permissions.
 
         Raises:
             ValueError: when the field or category is invalid.
@@ -222,14 +222,18 @@ class SettingsManager:
         active = locate_field(self.__settings.to_dict(), field)
         if active is None:
             raise ValueError(f"Unknown settings field: {field!r}.")
-        if field == "permissions" and category not in self.__categories:
-            raise ValueError(f"Unknown permission category: {category!r}.")
-        if field != "permissions" and category is not None:
-            raise ValueError(f"Category is only valid for permissions: {category!r}.")
+        if field == "permissions" and permission_category not in self.__categories:
+            raise ValueError(f"Unknown permission category: {permission_category!r}.")
+        if field != "permissions" and permission_category is not None:
+            raise ValueError(
+                f"Category is only valid for permissions: {permission_category!r}."
+            )
 
         if field == "permissions":
             candidate = self.__copy(self.__global)
-            candidate.permissions[category] = self.__settings.permissions[category]
+            candidate.permissions[permission_category] = self.__settings.permissions[
+                permission_category
+            ]
         else:
             data = self.__global.to_dict()
             section, key = locate_field(data, field)
@@ -238,7 +242,7 @@ class SettingsManager:
         self.save(candidate)
 
     def set_plugin_permission_levels(
-        self, levels: Mapping[str, PermissionLevel]
+        self, permission_levels: Mapping[str, PermissionLevel]
     ) -> None:
         """Validate and update plugin permission levels without saving them.
 
@@ -246,11 +250,12 @@ class SettingsManager:
         ValueError and changes nothing.
 
         Args:
-            levels: plugin names, matched case-insensitively, mapped to typed levels.
+            permission_levels: plugin names, matched case-insensitively, mapped to
+                typed levels.
         """
         candidate = self.__copy(self.__settings)
-        for name, level in self.__checked_levels(levels).items():
-            self.__find_plugin(candidate, name).permission_level = level
+        for name, permission_level in self.__checked_levels(permission_levels).items():
+            self.__find_plugin(candidate, name).permission_level = permission_level
         self.__settings = self.__prepare(candidate.to_dict())
 
     def save_plugin_permission_level(self, name: str) -> None:
@@ -312,7 +317,7 @@ class SettingsManager:
         Returns:
             A new checked Settings object ready for publication.
         """
-        checked, _ = self.__validator.validate(data, strict=True)
+        checked, _ = self.__settings_validator.validate(data, strict=True)
         candidate = self.__default_settings()
         candidate.from_dict(checked, self.__categories)
         return candidate
@@ -340,13 +345,13 @@ class SettingsManager:
 
     @staticmethod
     def __checked_levels(
-        levels: Mapping[Any, PermissionLevel],
+        permission_levels: Mapping[Any, PermissionLevel],
     ) -> Mapping[Any, PermissionLevel]:
         """Check that typed level input is a mapping of typed levels.
 
         Args:
-            levels: the keys (categories or plugin names) and typed levels supplied
-                by a caller.
+            permission_levels: the keys (categories or plugin names) and typed
+                levels supplied by a caller.
 
         Returns:
             The same mapping, unchanged.
@@ -354,14 +359,17 @@ class SettingsManager:
         Raises:
             ValueError: when the input is not a mapping or a level is not typed.
         """
-        if not isinstance(levels, Mapping):
-            raise ValueError(f"Permissions must be a mapping, got {levels!r}.")
-        for key, level in levels.items():
-            if not isinstance(level, PermissionLevel):
+        if not isinstance(permission_levels, Mapping):
+            raise ValueError(
+                f"Permissions must be a mapping, got {permission_levels!r}."
+            )
+        for key, permission_level in permission_levels.items():
+            if not isinstance(permission_level, PermissionLevel):
                 raise ValueError(
-                    f"Invalid permission level {level!r} for category {key!r}."
+                    f"Invalid permission level {permission_level!r} "
+                    f"for category {key!r}."
                 )
-        return levels
+        return permission_levels
 
     @staticmethod
     def __find_plugin(settings: Settings, name: str) -> PluginSettings:

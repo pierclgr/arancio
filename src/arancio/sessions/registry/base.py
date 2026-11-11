@@ -22,7 +22,7 @@ class SessionRegistry:
 
     Attributes:
         __storage_manager: the service discovering session logs.
-        __validator: the scanner recovering metadata and integrity status.
+        __session_validator: the scanner recovering metadata and integrity status.
         __entries: the owned entries in deterministic discovery order.
     """
 
@@ -30,17 +30,17 @@ class SessionRegistry:
         self,
         storage_manager: StorageManager,
         sessions_dir: Path,
-        validator: SessionValidator,
+        session_validator: SessionValidator,
     ) -> None:
         """Discover the supplied session directory.
 
         Args:
             storage_manager: the generic file I/O service.
             sessions_dir: the explicit directory containing session logs.
-            validator: the scanner used for each discovered file.
+            session_validator: the scanner used for each discovered file.
         """
         self.__storage_manager = storage_manager
-        self.__validator = validator
+        self.__session_validator = session_validator
         self.__entries: list[SessionRegistryEntry] = []
         self.build(sessions_dir)
 
@@ -155,7 +155,7 @@ class SessionRegistry:
         Returns:
             The recovered metadata and discovery status.
         """
-        scan = self.__validator.scan(path)
+        scan = self.__session_validator.scan(path)
         return SessionRegistryEntry(
             id=path.stem,
             explicit_name=scan.explicit_name,

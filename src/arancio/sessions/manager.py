@@ -46,16 +46,16 @@ class SessionManager:
         __categories: the default permission categories stored in sessions;
             plugin levels are global settings and are not stored.
         __session: the managed active conversation.
-        __recorder: the record builder and writer.
-        __registry: the reconstructed saved-session index.
-        __validator: the shared discovery, load and state-change validator.
+        __session_recorder: the record builder and writer.
+        __session_registry: the reconstructed saved-session index.
+        __session_validator: the shared discovery, load and state-change validator.
         __pending_sources: saved fork sources whose writes still need retrying.
     """
 
     def __init__(
         self,
         storage_manager: StorageManager,
-        configuration: SessionConfiguration,
+        session_configuration: SessionConfiguration,
     ) -> None:
         """Discover saved sessions and create an unsaved opening conversation.
 
@@ -64,7 +64,7 @@ class SessionManager:
 
         Args:
             storage_manager: the generic file I/O service.
-            configuration: the already-loaded opening configuration.
+            session_configuration: the already-loaded opening configuration.
         """
         self.__storage_manager: StorageManager = storage_manager
         self.__sessions_dir = self.__storage_manager.root / ARANCIO_SESSIONS_DIR
@@ -72,16 +72,20 @@ class SessionManager:
             DEFAULT_PERMISSION_LEVELS
         )
         self.__pending_sources: list[Session] = []
-        self.__validator = SessionValidator(self.__storage_manager, self.__categories)
-        # reject invalid opening values before discovery can create a directory
-        self.__validator.validate_state_changes({"configuration": configuration})
-        self.__registry = SessionRegistry(
-            self.__storage_manager, self.__sessions_dir, self.__validator
+        self.__session_validator = SessionValidator(
+            self.__storage_manager, self.__categories
         )
-        self.__recorder = SessionRecorder(
+        # reject invalid opening values before discovery can create a directory
+        self.__session_validator.validate_state_changes(
+            {"configuration": session_configuration}
+        )
+        self.__session_registry = SessionRegistry(
+            self.__storage_manager, self.__sessions_dir, self.__session_validator
+        )
+        self.__session_recorder = SessionRecorder(
             self.__storage_manager, lambda: self.__current, self.__after_write
         )
-        self.__session: Session = self.create(configuration)
+        self.__session: Session = self.create(session_configuration)
 
     def current_state(self) -> SessionState:
         """Return independent current values without events or retry internals.
@@ -101,12 +105,14 @@ class SessionManager:
             forked_from=session.forked_from,
             file_states=dict(session.file_states),
             created_on_disk=session.created_on_disk,
-            has_pending_events=any(not event.saved for event in session.events),
+            has_pending_events=any(
+                not session_event.saved for session_event in session.events
+            ),
         )
 
     def create(
         self,
-        configuration: SessionConfiguration,
+        session_configuration: SessionConfiguration,
         explicit_name: str | None = None,
     ) -> Session:
         """Select a new conversation without writing its creation header.
@@ -116,13 +122,15 @@ class SessionManager:
         and file-read guards separately.
 
         Args:
-            configuration: the configuration values to copy.
+            session_configuration: the configuration values to copy.
             explicit_name: the chosen name, or None for the ID fallback.
 
         Returns:
             The newly created and selected session.
         """
-        return self.__create(Path.cwd(), configuration, explicit_name, forked_from=None)
+        return self.__create(
+            Path.cwd(), session_configuration, explicit_name, forked_from=None
+        )
 
     def find(self, query: str) -> list[SessionRegistryEntry]:
         """Search saved sessions and return independent entry data.
@@ -142,7 +150,7 @@ class SessionManager:
                     else None
                 ),
             )
-            for entry in self.__registry.find(query)
+            for entry in self.__session_registry.find(query)
         ]
 
     def load(self, session_id: str) -> tuple[SessionState, ErrorMessage | None]:
@@ -158,13 +166,13 @@ class SessionManager:
         Returns:
             Detached selected state and an optional repair-save notice.
         """
-        entry = self.__registry.get(session_id)
-        session = self.__validator.read(entry.log_path)
-        self.__validator.certify(entry.log_path)
+        entry = self.__session_registry.get(session_id)
+        session = self.__session_validator.read(entry.log_path)
+        self.__session_validator.certify(entry.log_path)
         self.__session = session
-        error = self.__recorder.close_interrupted_tool_calls()
+        error = self.__session_recorder.close_interrupted_tool_calls()
         if error is None:
-            self.__registry.update(session)
+            self.__session_registry.update(session)
         return self.current_state(), error
 
     def record_message(
@@ -187,7 +195,7 @@ class SessionManager:
         Returns:
             A temporary save notice, or None when saved or skipped.
         """
-        return self.__recorder.message(
+        return self.__session_recorder.message(
             message, file_states=dict(file_states), visible=visible
         )
 
@@ -206,7 +214,7 @@ class SessionManager:
         Returns:
             A temporary save notice, or None on success.
         """
-        return self.__recorder.command(raw_input, name, args)
+        return self.__session_recorder.command(raw_input, name, args)
 
     def update_state(self, **changes: Any) -> ErrorMessage | None:
         """Validate supplied replacements and persist one complete state snapshot.
@@ -224,11 +232,11 @@ class SessionManager:
         """
         if not changes:
             return None
-        replacements = self.__validator.validate_state_changes(changes)
+        replacements = self.__session_validator.validate_state_changes(changes)
         session = self.__current
         for field, value in replacements.items():
             setattr(session, field, value)
-        return self.__recorder.state_changed()
+        return self.__session_recorder.state_changed()
 
     def fork(
         self,
@@ -272,11 +280,14 @@ class SessionManager:
             forked_name,
             forked_from=source.id,
         )
-        for event in events_to_copy:
-            child.add_event(event.record)
+        for session_event in events_to_copy:
+            child.add_event(session_event.record)
         child.file_states = dict(source.file_states)
-        if any(event.record.get("type") == "state_changed" for event in events_to_copy):
-            self.__recorder.queue_state()
+        if any(
+            session_event.record.get("type") == "state_changed"
+            for session_event in events_to_copy
+        ):
+            self.__session_recorder.queue_state()
 
         confirmation = AssistantMessage(
             content=f"Session {source.name} forked to {child.name}",
@@ -287,7 +298,7 @@ class SessionManager:
             checksum_error: OSError | None = None
             for session in (child, source):
                 try:
-                    error = self.__recorder.message_into(session, confirmation)
+                    error = self.__session_recorder.message_into(session, confirmation)
                 except OSError as exc:
                     if checksum_error is None:
                         checksum_error = exc
@@ -309,7 +320,7 @@ class SessionManager:
         """
         first_error = None
         for session in (*self.__pending_sources, self.__current):
-            error = self.__recorder.flush(session)
+            error = self.__session_recorder.flush(session)
             if first_error is None:
                 first_error = error
         return first_error
@@ -322,10 +333,10 @@ class SessionManager:
             Model-history messages in stored event order.
         """
         return [
-            message_from_record(deepcopy(event.record))
-            for event in self.__current.events
-            if is_message_record(event.record)
-            and event.record.get("in_history") is True
+            message_from_record(deepcopy(session_event.record))
+            for session_event in self.__current.events
+            if is_message_record(session_event.record)
+            and session_event.record.get("in_history") is True
         ]
 
     @property
@@ -336,8 +347,8 @@ class SessionManager:
             Visible messages in stored event order.
         """
         messages: list[Message] = []
-        for event in self.__current.events:
-            record = event.record
+        for session_event in self.__current.events:
+            record = session_event.record
             if record.get("visible") is not True:
                 continue
             if record.get("type") == "command":
@@ -361,7 +372,7 @@ class SessionManager:
         Args:
             session: the session whose log and checksum were saved.
         """
-        self.__registry.update(session)
+        self.__session_registry.update(session)
         self.__pending_sources = [
             pending for pending in self.__pending_sources if pending is not session
         ]
@@ -369,7 +380,7 @@ class SessionManager:
     def __create(
         self,
         working_directory: Path,
-        configuration: SessionConfiguration,
+        session_configuration: SessionConfiguration,
         explicit_name: str | None,
         forked_from: str | None,
     ) -> Session:
@@ -377,16 +388,16 @@ class SessionManager:
 
         Args:
             working_directory: the absolute creation/current working directory.
-            configuration: the configuration to validate and copy.
+            session_configuration: the configuration to validate and copy.
             explicit_name: the optional chosen name.
             forked_from: the optional source identity.
 
         Returns:
             The managed new session, for internal fork coordination only.
         """
-        checked = self.__validator.validate_state_changes(
+        checked = self.__session_validator.validate_state_changes(
             {
-                "configuration": configuration,
+                "configuration": session_configuration,
                 "working_directory": working_directory,
                 "explicit_name": explicit_name,
             }
@@ -413,7 +424,7 @@ class SessionManager:
             created_on_disk=False,
         )
         self.__session = session
-        self.__recorder.created()
+        self.__session_recorder.created()
         return session
 
     def create_new_id(self) -> str:
@@ -423,7 +434,7 @@ class SessionManager:
             A new UUID4 hexadecimal identity.
         """
         session_id = uuid.uuid4().hex
-        while self.__registry.contains(session_id):
+        while self.__session_registry.contains(session_id):
             session_id = uuid.uuid4().hex
         return session_id
 

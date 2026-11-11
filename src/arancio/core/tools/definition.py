@@ -16,11 +16,11 @@ class ToolDefinition:
 
     Attributes:
         name: unique tool identifier, equal to the built tool's ``name``.
-        category: the permission category whose grant enables the tool.
+        permission_category: the permission category whose grant enables the tool.
         factory: builds the tool when called with the keyword arguments
             ``hook_manager`` and ``tool_session``; a tool class is a valid factory.
     """
 
     name: str
-    category: PermissionCategory
+    permission_category: PermissionCategory
     factory: Callable[..., Tool]

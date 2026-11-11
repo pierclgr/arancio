@@ -110,17 +110,17 @@ class TUIApp(TextualApp):
         await self.__message_log.show(UserMessage(text))
         self.__run_submission(text)
 
-    async def show_login(self, notice: LoginNotice) -> None:
+    async def show_login(self, login_notice: LoginNotice) -> None:
         """Show the sign-in details of a provider in the log.
 
         Called on the UI thread by the controller; the worker stays free to wait for
         the provider's authorization.
 
         Args:
-            notice: the provider, verification URL and user code.
+            login_notice: the provider, verification URL and user code.
         """
         await self.__message_log.show_login(
-            notice.provider, notice.verification_url, notice.user_code
+            login_notice.provider, login_notice.verification_url, login_notice.user_code
         )
 
     async def replace_conversation(self, messages: list[Message]) -> None:

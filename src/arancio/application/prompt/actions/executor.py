@@ -168,7 +168,7 @@ class ActionExecutor:
         """
         call_id = f"shell_{uuid.uuid4().hex}"
         arguments = {"command": action.command}
-        call = ToolCallMessage(
+        tool_call = ToolCallMessage(
             content=f"ShellCommandTool({json.dumps(arguments)})",
             id=call_id,
             name="ShellCommandTool",
@@ -187,13 +187,13 @@ class ActionExecutor:
                 content="User explicitly ran the following command:"
             )
             self.__agent.add_message_to_history(attribution)
-            self.__agent.add_message_to_history(call)
+            self.__agent.add_message_to_history(tool_call)
             attribution_error = self.__record_message(attribution, visible=False)
-        call_error = self.__record_message(call)
-        yield call
+        call_error = self.__record_message(tool_call)
+        yield tool_call
         yield from self.__yield_notices(command_error, attribution_error, call_error)
 
-        result, hook_messages = self.__shell_command_tool.call(call)
+        result, hook_messages = self.__shell_command_tool.call(tool_call)
         for message in hook_messages:
             yield message
             yield from self.__yield_notices(self.__record_message(message))
@@ -252,11 +252,13 @@ class ActionExecutor:
             yield from self.__yield_notices(command_error)
             return
 
-        message = AssistantMessage(content=result, in_history=False)
+        assistant_message = AssistantMessage(content=result, in_history=False)
         result_error = (
-            None if self.__writes_nothing(command) else self.__record_message(message)
+            None
+            if self.__writes_nothing(command)
+            else self.__record_message(assistant_message)
         )
-        yield message
+        yield assistant_message
         yield from self.__yield_notices(command_error, result_error)
 
     def __execute_prompt(self, action: PromptAction) -> Iterator[Message]:
@@ -273,10 +275,10 @@ class ActionExecutor:
         except ValueError as exc:
             yield from self.__yield_error(f"Error sending message: {exc}")
             return
-        prelude = self.__resolve_mentions(action.mentions)
-        message = UserMessage(content=action.prompt, display_text=action.raw_input)
-        yield from self.__yield_notices(self.__record_message(message))
-        yield from self.__handle_agent(self.__agent(message, prelude=prelude))
+        prelude = self.__resolve_mentions(action.file_mentions)
+        user_message = UserMessage(content=action.prompt, display_text=action.raw_input)
+        yield from self.__yield_notices(self.__record_message(user_message))
+        yield from self.__handle_agent(self.__agent(user_message, prelude=prelude))
 
     def __handle_agent(self, execution: Execution) -> Iterator[Message]:
         """Advance Core with matching answers and close it on the consuming thread.
@@ -317,21 +319,24 @@ class ActionExecutor:
                 self.__execution = None
                 self.__owner_thread_id = None
 
-    def __ask_permission(self, request: PermissionRequest) -> PermissionResponse:
+    def __ask_permission(
+        self, permission_request: PermissionRequest
+    ) -> PermissionResponse:
         """Map the frontend answer using the current question and decision rules.
 
         Args:
-            request: the Core request whose identity the response must match.
+            permission_request: the Core request whose identity the response must match.
 
         Returns:
             ALLOW for yes, DENY for no/None, or DENY with the free-text note.
         """
         answer = self.__frontend_controller.ask(
-            f"Allow {request.call.name} with arguments {request.call.arguments}?",
+            f"Allow {permission_request.tool_call.name} with arguments "
+            f"{permission_request.tool_call.arguments}?",
             ["yes", "no"],
         )
         return PermissionResponse(
-            request_id=request.id,
+            request_id=permission_request.id,
             decision=Decision.ALLOW if answer == "yes" else Decision.DENY,
             message=answer if answer not in ("yes", "no", None) else None,
         )
@@ -409,7 +414,7 @@ class ActionExecutor:
             if notice is not None:
                 yield notice
 
-    def __resolve_mentions(self, mentions: list[FileMention]) -> list[Message]:
+    def __resolve_mentions(self, file_mentions: list[FileMention]) -> list[Message]:
         """Synthesize a tool call/result pair for each resolved @mention.
 
         Bypasses :class:`arancio.core.permissions.manager.PermissionManager`
@@ -423,21 +428,21 @@ class ActionExecutor:
         PowerShell equivalent on Windows) against the directory.
 
         Args:
-            mentions: resolved paths and inclusive source bounds, in prompt order.
+            file_mentions: resolved paths and inclusive source bounds, in prompt order.
 
         Returns:
             A flat list containing a ``ToolCallMessage`` named
             ``"ReadFileTool"`` or ``"ShellCommandTool"`` and its paired
             ``ToolResultMessage``/``ToolErrorMessage``, one pair per
-            mention, in the same order as ``mentions``. Hook messages appear
+            mention, in the same order as ``file_mentions``. Hook messages appear
             between each call and its result.
         """
-        if not mentions:
+        if not file_mentions:
             return []
 
         messages: list[Message] = []
-        for mention in mentions:
-            target = mention.path
+        for file_mention in file_mentions:
+            target = file_mention.path
             call_id = f"mention_{uuid.uuid4().hex}"
             if target.is_dir():
                 name = "ShellCommandTool"
@@ -450,9 +455,9 @@ class ActionExecutor:
             else:
                 name = "ReadFileTool"
                 arguments = {"file_path": str(target)}
-                if mention.raw_markdown:
+                if file_mention.raw_markdown:
                     arguments["raw_markdown"] = True
-                start_line, end_line = mention.start_line, mention.end_line
+                start_line, end_line = file_mention.start_line, file_mention.end_line
                 if (
                     start_line is not None
                     and end_line is not None
@@ -461,14 +466,14 @@ class ActionExecutor:
                     arguments["offset"] = start_line
                     arguments["limit"] = end_line - start_line + 1
                 tool = self.__read_file_tool
-            call = ToolCallMessage(
+            tool_call = ToolCallMessage(
                 content=f"{name}({json.dumps(arguments)})",
                 id=call_id,
                 name=name,
                 arguments=arguments,
             )
-            result, hook_messages = tool.call(call)
-            messages.append(call)
+            result, hook_messages = tool.call(tool_call)
+            messages.append(tool_call)
             messages.extend(hook_messages)
             messages.append(result)
         return messages

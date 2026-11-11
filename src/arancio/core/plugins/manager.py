@@ -238,12 +238,12 @@ class PluginManager:
             An error for an unknown category or duplicate name, otherwise ``None``.
         """
         if tool_class.permission_category == "CUSTOM":
-            category = PermissionCategory.get_or_create(
+            permission_category = PermissionCategory.get_or_create(
                 f"{PLUGIN_PERMISSION_CATEGORY_PREFIX}{plugin.name}"
             )
         else:
-            category = PermissionCategory.get(tool_class.permission_category)
-            if category is None:
+            permission_category = PermissionCategory.get(tool_class.permission_category)
+            if permission_category is None:
                 return ErrorMessage(
                     content=(
                         f"{plugin.location}: tool {tool_class.tool_name!r} "
@@ -255,7 +255,7 @@ class PluginManager:
             self._tool_manager.register_definition(
                 ToolDefinition(
                     name=tool_class.__name__,
-                    category=category,
+                    permission_category=permission_category,
                     factory=tool_class,
                 )
             )

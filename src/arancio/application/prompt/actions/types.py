@@ -73,10 +73,10 @@ class PromptAction(Action):
         prompt: the prompt to send to the model, with every resolving
             @mention already rewritten to its resolved absolute path.
         raw_input: the exact text the user submitted before parsing.
-        mentions: resolved targets and source-line bounds from @mention tokens,
+        file_mentions: resolved targets and source-line bounds from @mention tokens,
             in their original order. Empty when the prompt had none.
     """
 
     prompt: str
     raw_input: str
-    mentions: list[FileMention] = field(default_factory=list)
+    file_mentions: list[FileMention] = field(default_factory=list)

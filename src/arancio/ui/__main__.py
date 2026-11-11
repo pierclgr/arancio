@@ -9,13 +9,13 @@ def main() -> None:
     """Build the controller, the Application and the app, then run the UI.
 
     The controller is built first (the Application needs it); the app it drives needs
-    the Application, so ``controller.app`` is assigned once the app exists. Every other
-    backend layer is built by :meth:`Application.build`.
+    the Application, so ``ui_controller.app`` is assigned once the app exists. Every
+    other backend layer is built by :meth:`Application.build`.
     """
-    controller = TUIController()
-    application = Application.build(controller)
+    ui_controller = TUIController()
+    application = Application.build(ui_controller)
     app = TUIApp(application)
-    controller.app = app
+    ui_controller.app = app
     # textual captures clicks/drags, so the terminal emulator's native text selection
     # needs its modifier key (e.g. Option in iTerm2, Fn in Terminal.app)
     app.run(mouse=True)

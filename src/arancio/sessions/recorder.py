@@ -31,7 +31,7 @@ class SessionRecorder:
         __storage_manager: the file I/O service writing logs.
         __get_current: the manager's private active-session callback.
         __after_write: the manager's private successful-write callback.
-        __checksum: the helper hashing logs through the same Storage service.
+        __session_checksum: the helper hashing logs through the same Storage service.
     """
 
     def __init__(
@@ -50,7 +50,7 @@ class SessionRecorder:
         self.__storage_manager = storage_manager
         self.__get_current = get_current
         self.__after_write = after_write
-        self.__checksum = SessionChecksum(storage_manager)
+        self.__session_checksum = SessionChecksum(storage_manager)
 
     def created(self) -> None:
         """Queue the opening header without creating a conversation log."""
@@ -180,30 +180,30 @@ class SessionRecorder:
             A temporary repair-save notice, or None when saved or unnecessary.
         """
         session = self.__get_current()
-        calls: dict[str, ToolCallMessage] = {}
+        tool_calls: dict[str, ToolCallMessage] = {}
         answered: set[str] = set()
-        for event in session.events:
-            record = event.record
+        for session_event in session.events:
+            record = session_event.record
             if record.get("in_history") is not True or not is_message_record(record):
                 continue
             message = message_from_record(record)
             if isinstance(message, ToolCallMessage):
-                calls[message.id] = message
+                tool_calls[message.id] = message
             elif isinstance(message, ToolResultMessage):
                 answered.add(message.id)
 
         repaired = False
-        for call_id in calls:
+        for call_id in tool_calls:
             if call_id in answered:
                 continue
-            error = ToolErrorMessage(
+            tool_error = ToolErrorMessage(
                 content=(
                     "No result was saved for this tool call before the session "
                     "stopped. The operation may or may not have completed."
                 ),
                 id=call_id,
             )
-            session.add_event(message_to_record(error))
+            session.add_event(message_to_record(tool_error))
             repaired = True
         if repaired:
             return self.flush()
@@ -266,8 +266,8 @@ class SessionRecorder:
                 )
                 session.recovery_offset = None
 
-            for index, event in enumerate(session.events):
-                if event.saved:
+            for index, session_event in enumerate(session.events):
+                if session_event.saved:
                     continue
                 first_write = not session.created_on_disk and index == 0
                 offset = (
@@ -276,7 +276,7 @@ class SessionRecorder:
                     else self.__storage_manager.get_file_size(session.path)
                 )
                 line = json.dumps(
-                    event.record, ensure_ascii=False, separators=(",", ":")
+                    session_event.record, ensure_ascii=False, separators=(",", ":")
                 )
                 try:
                     if first_write:
@@ -287,13 +287,13 @@ class SessionRecorder:
                     if not isinstance(exc, FileExistsError):
                         self.__handle_write_failure(session, index, offset)
                     return self.__save_error(exc)
-                event.saved = True
+                session_event.saved = True
                 session.created_on_disk = True
         except (OSError, TypeError, ValueError) as exc:
             return self.__save_error(exc)
 
         if session.created_on_disk:
-            self.__checksum.write(session.path)
+            self.__session_checksum.write(session.path)
             self.__after_write(session)
         return None
 

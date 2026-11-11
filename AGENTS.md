@@ -55,13 +55,13 @@ the module (`core.hooks.base`, `core.hooks.manager`, ...).
 
 ### Wiring
 
-`Application.build(controller)` (`application/base.py`) creates
+`Application.build(ui_controller)` (`application/base.py`) creates
 `StorageManager`, LiteLLM login paths, one shared `HookManager` and
 `ToolSession`, the clients, `ToolManager`, then loads Settings, then plugins,
 then `PermissionManager`, `Agent`, `SessionManager`, direct tools and
 `Application`. **Settings load before plugins** (their `plugins` entries decide
 which plugins load), and **plugins load before Permissions** so plugin
-categories exist. Clients get `controller.show_login` as login callback; they
+categories exist. Clients get `ui_controller.show_login` as login callback; they
 get no HookManager. `ui/__main__.py` builds `TUIController` →
 `Application.build` → `TUIApp(application)`, then attaches the app.
 
@@ -118,7 +118,7 @@ low/medium/high are equal. Setting a reasoning summary there crashes LiteLLM
 
 ### Tools (`core/tools/`)
 
-Subclasses implement `_call`; `call(call)` returns `(result, hook_messages)`,
+Subclasses implement `_call`; `call(tool_call)` returns `(result, hook_messages)`,
 wrapping errors in `ToolErrorMessage` via `_result_parser`. Tool name = class
 name. Descriptions are dynamic markdown (`<field>`, `<include>`, `<script>`).
 The input schema is derived from `_call` by `InputSchemaBuilder`
@@ -168,10 +168,10 @@ arguments they need by name (or `**kwargs`); positional-only is unsupported.
 `provide(**deps)` registers permanent services: `hook_manager`,
 `permission_manager`, `agent`, `client`. `run(hook, **event)` merges services
 with event args (event wins). Handlers mutate the passed objects in place
-(`agent.system_prompt`, `agent.turn_index`, `request`, `decision`, `call.arguments`,
-`call.id`, `result.content`, `result.display_text`); returns are ignored except
-`Message`s, which are collected in order. Dispatch is synchronous; ordinary
-handler exceptions propagate.
+(`agent.system_prompt`, `agent.turn_index`, `request`, `permission_decision`,
+`tool_call.arguments`, `tool_call.id`, `result.content`, `result.display_text`);
+returns are ignored except `Message`s, which are collected in order. Dispatch is
+synchronous; ordinary handler exceptions propagate.
 
 ```python
 @hook(Hook.SYSTEM_PROMPT_BUILD)
@@ -189,9 +189,9 @@ def customize(self, agent, **kwargs):
 | message_received | response_message | each finalized message |
 | after_model_response | request, tool_calls | stream complete |
 | agent_end | message_history | natural text-only stop |
-| before/after_permission_check | call (+ decision) | once per `validate` |
-| before/after_tool_call | call (+ result) | `Tool.call`; after always fires |
-| error `source="tool"` | source, error, call | `_call` raised |
+| before/after_permission_check | tool_call (+ permission_decision) | once per `validate` |
+| before/after_tool_call | tool_call (+ result) | `Tool.call`; after always fires |
+| error `source="tool"` | source, error, tool_call | `_call` raised |
 | error `source="model"` | source, error, request | every failed turn |
 | error `source="agent"` | source, error | run ends on failure |
 
@@ -334,7 +334,7 @@ raise on failure. Callers must close abandoned byte iterators.
 
 ### Sessions (`sessions/`)
 
-`SessionManager(storage, configuration)` is the only public service. Data types:
+`SessionManager(storage, session_configuration)` is the only public service. Data types:
 `sessions/base.py` (`Session`), `sessions/configurations.py`
 (`SessionConfiguration`), `sessions/events/base.py`
 (`SessionEvent`), `sessions/state.py` (`SessionState`), `sessions/scan.py`

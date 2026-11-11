@@ -28,7 +28,7 @@ class PayloadBuilder(Builder, ABC):
 
     @staticmethod
     @abstractmethod
-    def _build_tool(tool: ToolSchema) -> dict[str, Any]:
+    def _build_tool(tool_schema: ToolSchema) -> dict[str, Any]:
         """Convert a tool schema to the provider's function tool item."""
         raise NotImplementedError("Subclasses must implement this method")
 
@@ -40,6 +40,6 @@ class PayloadBuilder(Builder, ABC):
 
     @staticmethod
     @abstractmethod
-    def _render_tool_result(message: ToolResultMessage) -> str:
+    def _render_tool_result(tool_result_message: ToolResultMessage) -> str:
         """Render a tool result message as a string for the provider."""
         raise NotImplementedError("Subclasses must implement this method")

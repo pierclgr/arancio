@@ -136,40 +136,42 @@ class Agent:
 
     def _refresh_tools(self) -> None:
         """Rebuild the active tools from the permission manager's grants."""
-        self._tool_manager.refresh(self._permission_manager.allowed_categories)
+        self._tool_manager.refresh(self._permission_manager.allowed)
 
     def add(
         self,
-        category: PermissionCategory,
-        level: PermissionLevel = PermissionLevel.ASK,
+        permission_category: PermissionCategory,
+        permission_level: PermissionLevel = PermissionLevel.ASK,
     ) -> None:
         """Grant a category and rebuild the tool catalog.
 
         Args:
-            category: the category to grant.
-            level: the permission level. Defaults to
+            permission_category: the category to grant.
+            permission_level: the permission level. Defaults to
                 :attr:`PermissionLevel.ASK`.
         """
-        self._permission_manager.add(category, level)
+        self._permission_manager.add(permission_category, permission_level)
         self._refresh_tools()
 
-    def remove(self, category: PermissionCategory) -> None:
+    def remove(self, permission_category: PermissionCategory) -> None:
         """Revoke a category's grant and rebuild the tool catalog.
 
         Args:
-            category: the category whose grant is removed.
+            permission_category: the category whose grant is removed.
         """
-        self._permission_manager.remove(category)
+        self._permission_manager.remove(permission_category)
         self._refresh_tools()
 
-    def set_level(self, category: PermissionCategory, level: PermissionLevel) -> None:
+    def set_level(
+        self, permission_category: PermissionCategory, permission_level: PermissionLevel
+    ) -> None:
         """Change a category's permission level and rebuild the tool catalog.
 
         Args:
-            category: the category whose grant to update.
-            level: the new permission level.
+            permission_category: the category whose grant to update.
+            permission_level: the new permission level.
         """
-        self._permission_manager.set_level(category, level)
+        self._permission_manager.set_level(permission_category, permission_level)
         self._refresh_tools()
 
     def set(self, permissions: dict[PermissionCategory, PermissionLevel]) -> None:
@@ -196,43 +198,45 @@ class Agent:
 
     @staticmethod
     def _permission_message(
-        call: ToolCallMessage, decision: PermissionDecision
+        tool_call: ToolCallMessage, permission_decision: PermissionDecision
     ) -> Message | None:
         """Build the model-facing message a resolved permission decision needs.
 
         Args:
-            call: the tool call the decision resolves.
-            decision: the permission decision to word for the model.
+            tool_call: the tool call the decision resolves.
+            permission_decision: the permission decision to word for the model.
 
         Returns:
             The note wrapped in a report-then-answer instruction when the call
             is allowed with one, the tool error describing the denial or the
             missing tool when it is refused, and ``None`` for a plain allow.
         """
-        if decision.outcome is PermissionOutcome.ALLOWED:
-            if not decision.note:
+        if permission_decision.outcome is PermissionOutcome.ALLOWED:
+            if not permission_decision.note:
                 return None
 
             # the note instructs the model to report the result first, then
             # answer it, so it is sent after the result
             instruction = (
-                f"While running tool {call.id}: {call.name}, user also noted: "
-                f"{decision.note}. First report tool calling result, then "
-                f"answer user note."
+                f"While running tool {tool_call.id}: {tool_call.name}, "
+                f"user also noted: {permission_decision.note}. "
+                f"First report tool calling result, then answer user note."
             )
-            return UserMessage(content=instruction, display_text=decision.note)
+            return UserMessage(
+                content=instruction, display_text=permission_decision.note
+            )
 
         # a missing tool must not read as a user denial: the model asked for a
         # tool that is not part of this run at all
-        if decision.outcome is PermissionOutcome.UNAVAILABLE:
+        if permission_decision.outcome is PermissionOutcome.UNAVAILABLE:
             return ToolErrorMessage(
-                content=f"Tool {call.name} does not exist.", id=call.id
+                content=f"Tool {tool_call.name} does not exist.", id=tool_call.id
             )
 
-        content = f"Tool call {call.name} denied by user."
-        if decision.note:
-            content += f" Additional information from user: {decision.note}"
-        return ToolErrorMessage(content=content, id=call.id)
+        content = f"Tool call {tool_call.name} denied by user."
+        if permission_decision.note:
+            content += f" Additional information from user: {permission_decision.note}"
+        return ToolErrorMessage(content=content, id=tool_call.id)
 
     def _emit(self, message: Message) -> Iterator[Message]:
         """Append a message to history and emit it.
@@ -255,17 +259,17 @@ class Agent:
         self._message_history = list(messages)
 
     def _run_tool(
-        self, call: ToolCallMessage
+        self, tool_call: ToolCallMessage
     ) -> tuple[ToolResultMessage, list[Message]]:
         """Run one tool call through the tool manager.
 
         Args:
-            call: the tool call to run.
+            tool_call: the tool call to run.
 
         Returns:
             The tool result and hook messages.
         """
-        return self._tool_manager.run_tool_call(call)
+        return self._tool_manager.run_tool_call(tool_call)
 
     def __call__(
         self,
@@ -385,15 +389,19 @@ class Agent:
                     return
 
                 # call the tools if tools are requested
-                for call in tool_calls:
-                    category = self._tool_manager.get_category(call.name)
-                    decision, hook_messages = yield from (
-                        self._permission_manager.validate(call, category)
+                for tool_call in tool_calls:
+                    permission_category = self._tool_manager.get_permission_category(
+                        tool_call.name
+                    )
+                    permission_decision, hook_messages = yield from (
+                        self._permission_manager.validate(
+                            tool_call, permission_category
+                        )
                     )
                     yield from hook_messages
-                    feedback = self._permission_message(call, decision)
-                    if decision.outcome is PermissionOutcome.ALLOWED:
-                        result, hook_messages = self._run_tool(call)
+                    feedback = self._permission_message(tool_call, permission_decision)
+                    if permission_decision.outcome is PermissionOutcome.ALLOWED:
+                        result, hook_messages = self._run_tool(tool_call)
                         yield from hook_messages
                         yield from self._emit(result)
 

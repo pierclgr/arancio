@@ -87,14 +87,14 @@ class Application:
     }
 
     @staticmethod
-    def build(controller: UIController) -> Application:
+    def build(ui_controller: UIController) -> Application:
         """Build and wire the backend using the supplied frontend contract.
 
         This loads settings, then the plugins they enable, and creates the
         backend. It does not create a frontend or dispatch lifecycle hooks.
 
         Args:
-            controller: the frontend contract implementation supplied by the caller.
+            ui_controller: the frontend contract implementation supplied by the caller.
 
         Returns:
             The configured Application and its shared backend dependencies.
@@ -104,8 +104,8 @@ class Application:
         # build the shared core services
         hook_manager = HookManager()
         tool_session = ToolSession()
-        client = LiteLLMClient(on_login=controller.show_login, stream=True)
-        summary_client = LiteLLMClient(on_login=controller.show_login, stream=False)
+        client = LiteLLMClient(on_login=ui_controller.show_login, stream=True)
+        summary_client = LiteLLMClient(on_login=ui_controller.show_login, stream=False)
         summary_client.reasoning = Reasoning()
         tool_manager = ToolManager(
             web_summary_client=summary_client,
@@ -149,7 +149,7 @@ class Application:
             hook_manager=hook_manager,
             settings_manager=settings_manager,
             session_manager=session_manager,
-            frontend_controller=controller,
+            frontend_controller=ui_controller,
             read_file_tool=read_file_tool,
             shell_command_tool=shell_command_tool,
             startup_messages=settings_messages + plugin_messages,
@@ -626,11 +626,11 @@ class Application:
         """
         categories: dict[PermissionCategory, str] = {}
         for name in settings.plugins:
-            category = PermissionCategory.get(
+            permission_category = PermissionCategory.get(
                 f"{PLUGIN_PERMISSION_CATEGORY_PREFIX}{name}"
             )
-            if category is not None:
-                categories[category] = name
+            if permission_category is not None:
+                categories[permission_category] = name
         return categories
 
     @staticmethod

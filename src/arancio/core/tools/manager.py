@@ -36,7 +36,7 @@ class ToolManager:
     only after an allowed decision.
 
     Attributes:
-        _definitions: registered definitions, keyed by tool name.
+        _tool_definitions: registered definitions, keyed by tool name.
         _tools: the instances active for the current grants, keyed by tool name.
         _hook_manager: injected into every tool this manager builds.
         _tool_session: the file-read state injected into every tool this manager
@@ -60,12 +60,12 @@ class ToolManager:
             tool_session: the file-read state injected into every tool this manager
                 builds; the same instance survives every :meth:`refresh`.
         """
-        self._definitions: dict[str, ToolDefinition] = {}
+        self._tool_definitions: dict[str, ToolDefinition] = {}
         self._tools: dict[str, Tool] = {}
         self._hook_manager = hook_manager
         self._tool_session = tool_session
 
-        builtin_definitions = [
+        builtin_tool_definitions = [
             ToolDefinition(
                 ReadFileTool.__name__, PermissionCategory.READ, ReadFileTool
             ),
@@ -87,8 +87,8 @@ class ToolManager:
                 ShellCommandTool.__name__, PermissionCategory.EXECUTE, ShellCommandTool
             ),
         ]
-        for definition in builtin_definitions:
-            self.register_definition(definition)
+        for tool_definition in builtin_tool_definitions:
+            self.register_definition(tool_definition)
 
     def __repr__(self) -> str:
         """Return a developer-friendly representation of the active tools.
@@ -98,23 +98,23 @@ class ToolManager:
         """
         return f"{type(self).__name__}(tools={list(self._tools.values())!r})"
 
-    def register_definition(self, definition: ToolDefinition) -> None:
+    def register_definition(self, tool_definition: ToolDefinition) -> None:
         """Add a tool definition to the catalog.
 
         The tool is built on the next :meth:`refresh` that allows its category.
 
         Args:
-            definition: the definition to add.
+            tool_definition: the definition to add.
 
         Raises:
             ValueError: when a definition with the same name is already
                 registered.
         """
-        if definition.name in self._definitions:
-            raise ValueError(f"Tool {definition.name!r} is already registered.")
-        self._definitions[definition.name] = definition
+        if tool_definition.name in self._tool_definitions:
+            raise ValueError(f"Tool {tool_definition.name!r} is already registered.")
+        self._tool_definitions[tool_definition.name] = tool_definition
 
-    def get_category(self, name: str) -> PermissionCategory | None:
+    def get_permission_category(self, name: str) -> PermissionCategory | None:
         """Return the permission category of a registered tool.
 
         Args:
@@ -124,8 +124,10 @@ class ToolManager:
             The category named by the tool's definition, or ``None`` when no
             definition has this name.
         """
-        definition = self._definitions.get(name)
-        return definition.category if definition is not None else None
+        tool_definition = self._tool_definitions.get(name)
+        return (
+            tool_definition.permission_category if tool_definition is not None else None
+        )
 
     def refresh(self, categories: Collection[PermissionCategory]) -> None:
         """Rebuild the active tools for the allowed categories.
@@ -137,12 +139,12 @@ class ToolManager:
             categories: the categories whose tools may be built.
         """
         self._tools = {
-            name: definition.factory(
+            name: tool_definition.factory(
                 hook_manager=self._hook_manager,
                 tool_session=self._tool_session,
             )
-            for name, definition in self._definitions.items()
-            if definition.category in categories
+            for name, tool_definition in self._tool_definitions.items()
+            if tool_definition.permission_category in categories
         }
 
     @property
@@ -155,18 +157,20 @@ class ToolManager:
         return [tool.schema() for tool in self._tools.values()]
 
     def run_tool_call(
-        self, call: ToolCallMessage
+        self, tool_call: ToolCallMessage
     ) -> tuple[ToolResultMessage, list[Message]]:
         """Run an allowed tool call and return its result alongside hook messages.
 
         Args:
-            call: the tool call to run.
+            tool_call: the tool call to run.
 
         Returns:
             The tool result and hook messages in dispatch order. A call naming
             no active tool returns a tool error and no hook messages.
         """
-        tool = self._tools.get(call.name)
+        tool = self._tools.get(tool_call.name)
         if tool is None:
-            return ToolErrorMessage(content=f"Unknown tool {call.name}", id=call.id), []
-        return tool.call(call)
+            return ToolErrorMessage(
+                content=f"Unknown tool {tool_call.name}", id=tool_call.id
+            ), []
+        return tool.call(tool_call)

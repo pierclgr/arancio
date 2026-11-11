@@ -57,6 +57,6 @@ class Session:
         Returns:
             The newly appended in-memory event.
         """
-        event = SessionEvent(record=deepcopy(record), saved=saved)
-        self.events.append(event)
-        return event
+        session_event = SessionEvent(record=deepcopy(record), saved=saved)
+        self.events.append(session_event)
+        return session_event

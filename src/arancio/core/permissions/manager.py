@@ -72,14 +72,14 @@ class PermissionManager:
 
     def add(
         self,
-        category: PermissionCategory,
-        level: PermissionLevel = PermissionLevel.ASK,
+        permission_category: PermissionCategory,
+        permission_level: PermissionLevel = PermissionLevel.ASK,
     ) -> None:
         """Grant a category at the given level.
 
         Args:
-            category: the category to grant.
-            level: the permission level. Defaults to
+            permission_category: the category to grant.
+            permission_level: the permission level. Defaults to
                 :attr:`PermissionLevel.ASK`.
 
         Raises:
@@ -87,33 +87,39 @@ class PermissionManager:
         """
         # a category created after construction (e.g. by a custom plugin)
         # has no grant yet, so it counts as NONE
-        granted = self._permissions.get(category, PermissionLevel.NONE)
+        granted = self._permissions.get(permission_category, PermissionLevel.NONE)
         if granted is not PermissionLevel.NONE:
-            raise ValueError(f"Permission already granted for category {category}.")
-        self._permissions[category] = level
+            raise ValueError(
+                f"Permission already granted for category {permission_category}."
+            )
+        self._permissions[permission_category] = permission_level
 
-    def remove(self, category: PermissionCategory) -> None:
+    def remove(self, permission_category: PermissionCategory) -> None:
         """Revoke the grant for the given category.
 
         Args:
-            category: the category whose grant is removed.
+            permission_category: the category whose grant is removed.
 
         Raises:
             ValueError: when the category has no grant.
         """
         # a category created after construction has no grant to revoke
-        if self._permissions.get(category) in (None, PermissionLevel.NONE):
-            raise ValueError(f"No permission granted for category {category}.")
-        self._permissions[category] = PermissionLevel.NONE
+        if self._permissions.get(permission_category) in (None, PermissionLevel.NONE):
+            raise ValueError(
+                f"No permission granted for category {permission_category}."
+            )
+        self._permissions[permission_category] = PermissionLevel.NONE
 
-    def set_level(self, category: PermissionCategory, level: PermissionLevel) -> None:
+    def set_level(
+        self, permission_category: PermissionCategory, permission_level: PermissionLevel
+    ) -> None:
         """Change the permission level for the given category.
 
         Args:
-            category: the category whose level to update.
-            level: the new permission level.
+            permission_category: the category whose level to update.
+            permission_level: the new permission level.
         """
-        self._permissions[category] = level
+        self._permissions[permission_category] = permission_level
 
     def set(self, permissions: dict[PermissionCategory, PermissionLevel]) -> None:
         """Replace all grants with the given category-to-level mapping.
@@ -125,7 +131,7 @@ class PermissionManager:
         self._permissions = permissions
 
     @property
-    def allowed_categories(self) -> Set[PermissionCategory]:
+    def allowed(self) -> Set[PermissionCategory]:
         """The categories whose tools may be built.
 
         Returns:
@@ -139,7 +145,7 @@ class PermissionManager:
         }
 
     def validate(
-        self, call: ToolCallMessage, category: PermissionCategory | None
+        self, tool_call: ToolCallMessage, permission_category: PermissionCategory | None
     ) -> Generator[
         PermissionRequest, CoreAnswer, tuple[PermissionDecision, list[Message]]
     ]:
@@ -154,8 +160,8 @@ class PermissionManager:
         generator while it waits runs no after hook and decides nothing.
 
         Args:
-            call: the tool call the agent wants to execute.
-            category: the call's category from the tool catalog, or ``None``
+            tool_call: the tool call the agent wants to execute.
+            permission_category: the call's category from the tool catalog, or ``None``
                 when the tool is unknown.
 
         Returns:
@@ -167,17 +173,21 @@ class PermissionManager:
         Yields:
             The permission request of an ``ask`` grant.
         """
-        messages = self._hook_manager.run(Hook.BEFORE_PERMISSION_CHECK, call=call)
-        decision = yield from self._resolve(call, category)
+        messages = self._hook_manager.run(
+            Hook.BEFORE_PERMISSION_CHECK, tool_call=tool_call
+        )
+        permission_decision = yield from self._resolve(tool_call, permission_category)
         messages.extend(
             self._hook_manager.run(
-                Hook.AFTER_PERMISSION_CHECK, call=call, decision=decision
+                Hook.AFTER_PERMISSION_CHECK,
+                tool_call=tool_call,
+                permission_decision=permission_decision,
             )
         )
-        return decision, messages
+        return permission_decision, messages
 
     def _resolve(
-        self, call: ToolCallMessage, category: PermissionCategory | None
+        self, tool_call: ToolCallMessage, permission_category: PermissionCategory | None
     ) -> Generator[PermissionRequest, CoreAnswer, PermissionDecision]:
         """Resolve a tool call to a permission decision, without dispatching hooks.
 
@@ -186,8 +196,8 @@ class PermissionManager:
         ``after_permission_check`` across the three branches below.
 
         Args:
-            call: the tool call the agent wants to execute.
-            category: the call's category, or ``None`` for an unknown tool.
+            tool_call: the tool call the agent wants to execute.
+            permission_category: the call's category, or ``None`` for an unknown tool.
 
         Returns:
             The resolved :class:`~arancio.core.permissions.types.PermissionDecision`.
@@ -201,8 +211,8 @@ class PermissionManager:
             ValueError: when the answer does not match the pending request.
         """
         level = (
-            self._permissions.get(category, PermissionLevel.NONE)
-            if category is not None
+            self._permissions.get(permission_category, PermissionLevel.NONE)
+            if permission_category is not None
             else PermissionLevel.NONE
         )
 
@@ -216,17 +226,17 @@ class PermissionManager:
 
         # ask case: wait for the caller's answer; a wrong or missing answer
         # never approves the call
-        request = PermissionRequest(call=call)
-        response = yield request
+        permission_request = PermissionRequest(tool_call=tool_call)
+        response = yield permission_request
         if not isinstance(response, PermissionResponse):
             raise TypeError(
-                f"Permission request {request.id} needs a PermissionResponse, "
-                f"got {response!r}."
+                f"Permission request {permission_request.id} needs a "
+                f"PermissionResponse, got {response!r}."
             )
-        if response.request_id != request.id:
+        if response.request_id != permission_request.id:
             raise ValueError(
                 f"Permission response for request {response.request_id!r} does "
-                f"not match the pending request {request.id!r}."
+                f"not match the pending request {permission_request.id!r}."
             )
         # a deny keeps the user's reason on the decision, the caller words the
         # refusal

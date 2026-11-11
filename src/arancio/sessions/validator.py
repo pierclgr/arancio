@@ -28,7 +28,7 @@ class SessionValidator:
     Attributes:
         __storage_manager: the supplied file I/O service.
         __categories: copied known permission-category identities.
-        __checksum: the checksum helper using the same Storage service.
+        __session_checksum: the checksum helper using the same Storage service.
         __state_change_normalizers: editable names and validation/copy operations.
     """
 
@@ -45,7 +45,7 @@ class SessionValidator:
         """
         self.__storage_manager = storage_manager
         self.__categories = tuple(categories)
-        self.__checksum = SessionChecksum(storage_manager)
+        self.__session_checksum = SessionChecksum(storage_manager)
         self.__state_change_normalizers: dict[str, Callable[[Any], Any]] = {
             "configuration": self.__normalize_configuration,
             "working_directory": self.__normalize_directory,
@@ -70,7 +70,7 @@ class SessionValidator:
         name = None
         try:
             configuration, working_directory, name = self.__scan_state(path)
-            matches = self.__checksum.verify(path)
+            matches = self.__session_checksum.verify(path)
         except (OSError, ValueError) as exc:
             return SessionScan(
                 explicit_name=name,
@@ -250,7 +250,7 @@ class SessionValidator:
         Args:
             path: the session log whose current bytes are checksumed.
         """
-        self.__checksum.write(path)
+        self.__session_checksum.write(path)
 
     def __scan_state(self, path: Path) -> tuple[SessionConfiguration, Path, str | None]:
         """Recover a session's latest state snapshot without a full parse.

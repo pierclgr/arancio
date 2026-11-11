@@ -58,9 +58,9 @@ class PromptManager:
 
         match = COMMAND_PATTERN.match(prompt)
         if match is None:
-            rewritten_prompt, mentions = cls.__resolve_mentions(prompt)
+            rewritten_prompt, file_mentions = cls.__resolve_mentions(prompt)
             return PromptAction(
-                prompt=rewritten_prompt, raw_input=prompt, mentions=mentions
+                prompt=rewritten_prompt, raw_input=prompt, file_mentions=file_mentions
             )
 
         command_name = match.group(1)
@@ -116,19 +116,21 @@ class PromptManager:
             and directory selectors carry no line bounds. A trailing ``:raw`` modifier
             disables dynamic Markdown expansion only for ``.md`` file targets.
         """
-        mentions: list[FileMention] = []
+        file_mentions: list[FileMention] = []
         rewritten_prompt: str = MENTION_PATTERN.sub(
-            lambda match: cls.__replace_mention(match, mentions), prompt
+            lambda match: cls.__replace_mention(match, file_mentions), prompt
         )
-        return rewritten_prompt, mentions
+        return rewritten_prompt, file_mentions
 
     @staticmethod
-    def __replace_mention(match: re.Match[str], mentions: list[FileMention]) -> str:
+    def __replace_mention(
+        match: re.Match[str], file_mentions: list[FileMention]
+    ) -> str:
         """Resolve one token and append its target when it exists.
 
         Args:
             match: the complete mention token and its optional quoted suffix.
-            mentions: resolved mentions, appended in prompt order.
+            file_mentions: resolved mentions, appended in prompt order.
 
         Returns:
             The canonical mention, or the original token if unresolved.
@@ -158,11 +160,11 @@ class PromptManager:
                 # expanduser raises RuntimeError for an unresolvable home
                 continue
 
-            mention: FileMention = FileMention(path=target)
+            file_mention: FileMention = FileMention(path=target)
             suffix: str = raw_path[boundary:]
             selector_suffix: str = suffix
             if target.is_file() and target.suffix == ".md" and suffix.endswith(":raw"):
-                mention.raw_markdown = True
+                file_mention.raw_markdown = True
                 selector_suffix = suffix.removesuffix(":raw")
             selector: re.Match[str] | None = LINE_RANGE_PATTERN.fullmatch(
                 selector_suffix[1:]
@@ -175,9 +177,9 @@ class PromptManager:
                     # excessively large integer strings are invalid selectors
                     pass
                 else:
-                    mention.start_line = start
-                    mention.end_line = end
-            mentions.append(mention)
+                    file_mention.start_line = start
+                    file_mention.end_line = end
+            file_mentions.append(file_mention)
             replacement: str = f'@"{target}"' if " " in str(target) else f"@{target}"
             return replacement + suffix
         return match.group(0)

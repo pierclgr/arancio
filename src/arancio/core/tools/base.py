@@ -105,33 +105,35 @@ class Tool(ABC):
         """
         return type(self).__name__
 
-    def call(self, call: ToolCallMessage) -> tuple[ToolResultMessage, list[Message]]:
+    def call(
+        self, tool_call: ToolCallMessage
+    ) -> tuple[ToolResultMessage, list[Message]]:
         """Execute an existing call, sharing its identity with hook handlers.
 
-        Handlers edit call.arguments before execution and call.id before result
-        parsing. The tool has already been selected: editing call.name here does
-        not route to another tool. Change the target in model-response hooks,
-        before permission resolution and selection.
+        Handlers edit tool_call.arguments before execution and tool_call.id before
+        result parsing. The tool has already been selected: editing tool_call.name
+        here does not route to another tool. Change the target in model-response
+        hooks, before permission resolution and selection.
 
         Only _call failures become tool errors. Ordinary hook failures propagate.
         Returned results keep edits made by after-tool handlers.
 
         Args:
-            call: the original model call, or a call created for direct execution.
+            tool_call: the original model call, or a call created for direct execution.
 
         Returns:
             The result and hook messages in dispatch order.
         """
-        messages = self._hook_manager.run(Hook.BEFORE_TOOL_CALL, call=call)
+        messages = self._hook_manager.run(Hook.BEFORE_TOOL_CALL, tool_call=tool_call)
         try:
-            output = self._call(**call.arguments)
+            output = self._call(**tool_call.arguments)
             is_error = False
         except Exception as exc:
             messages.extend(
                 self._hook_manager.run(
                     Hook.ERROR,
                     source="tool",
-                    call=call,
+                    tool_call=tool_call,
                     error=exc,
                 )
             )
@@ -139,14 +141,14 @@ class Tool(ABC):
             is_error = True
 
         result = self._result_parser.parse(
-            call_id=call.id,
+            call_id=tool_call.id,
             output=output,
             is_error=is_error,
         )
         messages.extend(
             self._hook_manager.run(
                 Hook.AFTER_TOOL_CALL,
-                call=call,
+                tool_call=tool_call,
                 result=result,
             )
         )
