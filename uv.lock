@@ -239,7 +239,7 @@ requires-dist = [
     { name = "botocore", specifier = ">=1.43.15" },
     { name = "ddgs", specifier = ">=9.14.4" },
     { name = "dynamic-markdown", git = "https://github.com/pierclgr/dynamic-markdown.git?tag=v0.3.2" },
-    { name = "litellm", extras = ["mcp"], specifier = ">=1.83.14" },
+    { name = "litellm", extras = ["mcp"], specifier = "==1.108.3" },
     { name = "pydantic", specifier = ">=2.14.3" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "requests", specifier = ">=2.33.1" },

@@ -8,8 +8,9 @@ dependencies = [
     "botocore>=1.43.15",
     "ddgs>=9.14.4",
     "dynamic-markdown",
-    # LiteLLM imports MCP while dispatching ordinary tool requests
-    "litellm[mcp]>=1.83.14",
+    # LiteLLM imports MCP while dispatching ordinary tool requests; pinned because
+    # core/clients/_litellm_patches.py patches its private internals
+    "litellm[mcp]==1.108.3",
     "pydantic>=2.14.3",
     "pyyaml>=6.0.3",
     "requests>=2.33.1",
