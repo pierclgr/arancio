@@ -6,8 +6,6 @@ from arancio.core.builders.tool_input_schemas.base import InputSchemaBuilder
 from arancio.core.parsers.tool_results.plugin import PluginToolResultParser
 from arancio.core.tools.base import Tool
 
-CUSTOM = "CUSTOM"
-
 
 class PluginTool(Tool):
     """A tool synthesized from one @tool-decorated plugin method.
@@ -27,14 +25,14 @@ class PluginTool(Tool):
 
     Attributes:
         tool_name: the tool portion of the full name, defaulting to the method name.
-        category: the uppercased permission category, defaulting to PLUGIN.
+        permission_category: the uppercased permission category, defaulting to PLUGIN.
         _method: the declaring function, bound to its plugin instance during loading.
         _description: the description supplied by the decorator, without expansion.
     """
 
     _result_parser = PluginToolResultParser
     tool_name: ClassVar[str]
-    category: ClassVar[str] = "PLUGIN"
+    permission_category: ClassVar[str] = "PLUGIN"
     _method: ClassVar[Callable]
     _description: ClassVar[str]
 
@@ -46,7 +44,7 @@ class PluginTool(Tool):
         *,
         name: str,
         description: str,
-        category: str,
+        permission_category: str,
     ) -> type["PluginTool"]:
         """Create a new tool subclass for one @tool-decorated method.
 
@@ -60,7 +58,7 @@ class PluginTool(Tool):
             method: the original function, bound by the manager after construction.
             name: the tool portion of the exposed name.
             description: the tool description, used verbatim.
-            category: the uppercased permission category.
+            permission_category: the uppercased permission category.
 
         Returns:
             A fresh tool subclass named from ``plugin_name`` and ``name``.
@@ -73,7 +71,7 @@ class PluginTool(Tool):
             (cls,),
             {
                 "tool_name": name,
-                "category": category,
+                "permission_category": permission_category,
                 "_method": method,
                 "_description": description,
             },

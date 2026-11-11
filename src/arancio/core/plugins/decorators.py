@@ -110,7 +110,7 @@ def hook(event: Hook) -> Callable[[Callable], Callable]:
 def tool(
     *,
     description: str,
-    category: str = PluginTool.category,
+    permission_category: str = PluginTool.permission_category,
     name: str | None = None,
 ) -> Callable[[Callable], Callable]:
     """Mark a plain plugin instance method as a tool the model can call.
@@ -122,7 +122,7 @@ def tool(
 
     Args:
         description: the tool's natural-language description.
-        category: ``"READ"``/``"WRITE"``/``"WEB"``/``"EXECUTE"``/``"PLUGIN"``
+        permission_category: ``"READ"``/``"WRITE"``/``"WEB"``/``"EXECUTE"``/``"PLUGIN"``
             (the default) or ``"CUSTOM"`` — which creates a
             ``PLUGIN:<plugin_name>`` category dedicated to the owning
             plugin, shared by every ``CUSTOM`` tool it defines, defaulting to
@@ -138,7 +138,7 @@ def tool(
         PENDING_TOOLS[func] = {
             "name": name or func.__name__,
             "description": description,
-            "category": category.upper(),
+            "permission_category": permission_category.upper(),
         }
         return func
 

@@ -70,8 +70,8 @@ class PermissionCategory(metaclass=_PermissionCategoryMeta):
     A category does not own tools: each tool definition registered with
     :class:`~arancio.core.tools.manager.ToolManager` names its category. Not an
     ``enum.Enum``: a plugin can create a brand new category (via
-    ``@tool(category="CUSTOM")``) after the built-in categories already exist,
-    which a closed ``Enum`` cannot do. Every category, built-in or
+    ``@tool(permission_category="CUSTOM")``) after the built-in categories already
+    exist, which a closed ``Enum`` cannot do. Every category, built-in or
     plugin-created, is this same type, registered by name (case-insensitively)
     in one place, so nothing downstream special-cases one kind against the
     other.

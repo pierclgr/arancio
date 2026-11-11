@@ -19,7 +19,7 @@ from arancio.core.plugins.constants import (
     PLUGINS_PATH,
 )
 from arancio.core.plugins.registry import PLUGIN_REGISTRY, REGISTRATION_MESSAGES
-from arancio.core.plugins.tools import CUSTOM, PluginTool
+from arancio.core.plugins.tools import PluginTool
 from arancio.core.tools.definition import ToolDefinition
 from arancio.core.tools.manager import ToolManager
 
@@ -215,16 +215,16 @@ class PluginManager:
         Returns:
             An error for an unknown category or duplicate name, otherwise ``None``.
         """
-        if tool_class.category == CUSTOM:
+        if tool_class.permission_category == "CUSTOM":
             category = PermissionCategory.get_or_create(f"PLUGIN:{plugin.name}")
         else:
-            category = PermissionCategory.get(tool_class.category)
+            category = PermissionCategory.get(tool_class.permission_category)
             if category is None:
                 return ErrorMessage(
                     content=(
                         f"{plugin.location}: tool {tool_class.tool_name!r} "
                         "names unknown permission category "
-                        f"{tool_class.category!r}; tool ignored."
+                        f"{tool_class.permission_category!r}; tool ignored."
                     )
                 )
         try:

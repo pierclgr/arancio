@@ -202,7 +202,7 @@ disabled; other methods keep running.
 `<plugin_name>-<tool_name>` (method name by default). The description comes
 from the decorator (no harness, no dynamic markdown); the schema is derived
 from the decorated method like built-in tools (no `input_schema=` argument), and
-a method that cannot be described is skipped with a startup error. Category:
+a method that cannot be described is skipped with a startup error. `permission_category`:
 `READ`, `WRITE`, `WEB`, `EXECUTE`, `PLUGIN` (default) or `CUSTOM` (→
 `PLUGIN:<plugin_name>`, default ASK). `PluginToolResultParser` keeps dicts raw
 and displays them as JSON.
