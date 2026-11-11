@@ -1,14 +1,19 @@
 """Agent loop constants."""
 
+from arancio.core.agents.types import Retry, Turn
+
 # "inf" means unlimited: the loop runs until the model stops requesting
 # tools; set an int only to cap unattended runs
-AGENT_UNLIMITED_MAX_TURNS: str = "inf"
-AGENT_DEFAULT_MAX_TURNS: str = AGENT_UNLIMITED_MAX_TURNS
-# consecutive failed turns before the run aborts
-AGENT_DEFAULT_MAX_RETRIES: int = 5
-AGENT_DEFAULT_TURN_WAIT_TIME: float = 3.0
-AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER: float = 2.0
+UNLIMITED_MAX_TURNS: str = "inf"
+# stop after 5 failed turns in a row, waiting 3, 6, 12, 24 seconds between the
+# retries
+DEFAULT_RETRY: Retry = Retry(max=5, delay=3.0, multiplier=2.0)
+# no turn limit, with the default retry rules
+DEFAULT_TURN: Turn = Turn(
+    max=UNLIMITED_MAX_TURNS,
+    retry=DEFAULT_RETRY,
+)
 # used by SystemPromptBuilder when the harness system_prompt.md file is missing
-AGENT_DEFAULT_SYSTEM_PROMPT: str = (
-    "You are an helpful assistant assisting the user Pier. Answer his questions."
+DEFAULT_SYSTEM_PROMPT: str = (
+    "You are an helpful assistant. Answer the user's questions."
 )

@@ -5,18 +5,12 @@ from typing import Any
 
 import yaml
 
-from arancio.core.agents.constants import (
-    AGENT_DEFAULT_MAX_RETRIES,
-    AGENT_DEFAULT_MAX_TURNS,
-    AGENT_DEFAULT_TURN_WAIT_TIME,
-    AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
-)
-from arancio.core.clients.configs.model import ModelConfig
-from arancio.core.clients.configs.reasoning import ReasoningConfig
+from arancio.core.agents.constants import DEFAULT_TURN
 from arancio.core.clients.constants import (
     LITELLM_DEFAULT_REASONING_EFFORT,
     LITELLM_DEFAULT_REASONING_SUMMARY,
 )
+from arancio.core.clients.types import Model, Reasoning
 from arancio.core.messages.base import ErrorMessage, Message, WarningMessage
 from arancio.core.permissions.constants import DEFAULT_PERMISSION_LEVELS
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
@@ -150,7 +144,7 @@ class SettingsManager:
 
         Args:
             field: the dotted path of the setting to change, as in the settings
-                file (for example ``model.name`` or ``max_turns``).
+                file (for example ``model.name`` or ``turn.max``).
             value: the new value, or typed category-to-level changes for permissions.
 
         Raises:
@@ -177,7 +171,7 @@ class SettingsManager:
     def restore_active(
         self,
         *,
-        model: ModelConfig,
+        model: Model,
         permissions: Mapping[PermissionCategory, PermissionLevel],
     ) -> None:
         """Restore the session's model and permissions on top of global defaults.
@@ -283,18 +277,15 @@ class SettingsManager:
         return Settings(
             permissions=dict(DEFAULT_PERMISSION_LEVELS),
             plugins={},
-            model=ModelConfig(
+            model=Model(
                 provider=None,
                 name=None,
-                reasoning=ReasoningConfig(
+                reasoning=Reasoning(
                     effort=LITELLM_DEFAULT_REASONING_EFFORT,
                     summary=LITELLM_DEFAULT_REASONING_SUMMARY,
                 ),
             ),
-            max_turns=AGENT_DEFAULT_MAX_TURNS,
-            max_retries=AGENT_DEFAULT_MAX_RETRIES,
-            turn_wait_time=AGENT_DEFAULT_TURN_WAIT_TIME,
-            turn_wait_time_multiplier=AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
+            turn=DEFAULT_TURN,
         )
 
     def __copy(self, settings: Settings) -> Settings:

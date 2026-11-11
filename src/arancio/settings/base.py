@@ -4,7 +4,8 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from arancio.core.clients.configs.model import ModelConfig
+from arancio.core.agents.types import Turn
+from arancio.core.clients.types import Model
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 
 
@@ -36,25 +37,16 @@ class Settings:
             category as not granted. Saved under ``permissions.default``.
         plugins: lowercase plugin names mapped to their settings entries, in file
             order. A plugin without an entry is not loaded.
-        modl: the agent model's provider, name and reasoning options.
-        max_turns: the maximum number of agent turns per run, or ``"inf"``
-            for no limit.
-        max_retries: the maximum number of consecutive failed agent turns
-            per run.
-        turn_wait_time: the base wait, in seconds, before retrying a failed turn.
-        turn_wait_time_multiplier: the factor the wait grows by on each
-            consecutive retry.
+        model: the agent model's provider, name and reasoning options.
+        turn: the agent loop's turn limit and retry rules for failed turns.
     """
 
     def __init__(
         self,
         permissions: dict[PermissionCategory, PermissionLevel],
         plugins: dict[str, PluginSettings],
-        model: ModelConfig,
-        max_turns: int | str,
-        max_retries: int,
-        turn_wait_time: float,
-        turn_wait_time_multiplier: float,
+        model: Model,
+        turn: Turn,
     ) -> None:
         """Initialize the settings snapshot.
 
@@ -63,22 +55,12 @@ class Settings:
                 every default category.
             plugins: lowercase plugin names mapped to their settings entries.
             model: the agent model's checked provider, name and reasoning options.
-            max_turns: the maximum number of agent turns per run, or ``"inf"``
-                for no limit.
-            max_retries: the maximum number of consecutive failed agent turns
-                per run.
-            turn_wait_time: the base wait, in seconds, before retrying a
-                failed turn.
-            turn_wait_time_multiplier: the factor the wait grows by on each
-                consecutive retry.
+            turn: the agent loop's checked turn limit and retry rules.
         """
         self.permissions = permissions
         self.plugins = plugins
         self.model = model
-        self.max_turns = max_turns
-        self.max_retries = max_retries
-        self.turn_wait_time = turn_wait_time
-        self.turn_wait_time_multiplier = turn_wait_time_multiplier
+        self.turn = turn
 
     def __eq__(self, other: object) -> bool:
         """Compare settings by their field values.
@@ -95,10 +77,7 @@ class Settings:
             self.permissions == other.permissions
             and self.plugins == other.plugins
             and self.model == other.model
-            and self.max_turns == other.max_turns
-            and self.max_retries == other.max_retries
-            and self.turn_wait_time == other.turn_wait_time
-            and self.turn_wait_time_multiplier == other.turn_wait_time_multiplier
+            and self.turn == other.turn
         )
 
     def __repr__(self) -> str:
@@ -112,10 +91,7 @@ class Settings:
             f"permissions={self.permissions!r}, "
             f"plugins={self.plugins!r}, "
             f"model={self.model!r}, "
-            f"max_turns={self.max_turns!r}, "
-            f"max_retries={self.max_retries!r}, "
-            f"turn_wait_time={self.turn_wait_time!r}, "
-            f"turn_wait_time_multiplier={self.turn_wait_time_multiplier!r}"
+            f"turn={self.turn!r}"
             ")"
         )
 
@@ -123,8 +99,9 @@ class Settings:
         """Render the settings as a YAML-serializable dictionary.
 
         Permissions are flattened to plain strings (lowercase category name to
-        level value) under ``default``, plugins to a list of one-key mappings, and
-        the model to a ``model`` section with a nested ``reasoning`` section, so the
+        level value) under ``default``, plugins to a list of one-key mappings, the
+        model to a ``model`` section with a nested ``reasoning`` section, and the
+        agent loop to a ``turn`` section with a nested ``retry`` section, so the
         file stays human-readable and free of Python objects.
 
         Returns:
@@ -147,10 +124,7 @@ class Settings:
                 for name, plugin in self.plugins.items()
             ],
             "model": self.model.to_dict(),
-            "max_turns": self.max_turns,
-            "max_retries": self.max_retries,
-            "turn_wait_time": self.turn_wait_time,
-            "turn_wait_time_multiplier": self.turn_wait_time_multiplier,
+            "turn": self.turn.to_dict(),
         }
 
     def from_dict(
@@ -178,8 +152,5 @@ class Settings:
                     enabled=values["enabled"],
                     permission_level=PermissionLevel(values["permission_level"]),
                 )
-        self.model = ModelConfig.from_dict(data["model"])
-        self.max_turns = data["max_turns"]
-        self.max_retries = data["max_retries"]
-        self.turn_wait_time = data["turn_wait_time"]
-        self.turn_wait_time_multiplier = data["turn_wait_time_multiplier"]
+        self.model = Model.from_dict(data["model"])
+        self.turn = Turn.from_dict(data["turn"])

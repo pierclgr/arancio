@@ -7,12 +7,10 @@ from itertools import count
 from typing import List
 
 from arancio.core.agents.constants import (
-    AGENT_DEFAULT_MAX_RETRIES,
-    AGENT_DEFAULT_MAX_TURNS,
-    AGENT_DEFAULT_TURN_WAIT_TIME,
-    AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
-    AGENT_UNLIMITED_MAX_TURNS,
+    DEFAULT_TURN,
+    UNLIMITED_MAX_TURNS,
 )
+from arancio.core.agents.types import Turn
 from arancio.core.builders.system_prompt import SystemPromptBuilder
 from arancio.core.clients.base import Client
 from arancio.core.events import CoreAnswer, CoreEvent
@@ -41,8 +39,9 @@ class Agent:
     Attributes:
         system_prompt: rendered text for the current turn, editable during
             SYSTEM_PROMPT_BUILD before the request is built. Initially empty.
-        turn: current zero-based loop index. Set at each iteration; edits remain
-            visible for that iteration without changing the loop's scheduling.
+        turn_index: current zero-based loop index. Set at each iteration; edits
+            remain visible for that iteration without changing the loop's
+            scheduling.
     """
 
     def __init__(
@@ -52,10 +51,7 @@ class Agent:
         tool_manager: ToolManager,
         hook_manager: HookManager,
         message_history: List[Message] | None = None,
-        max_turns: int | str = AGENT_DEFAULT_MAX_TURNS,
-        max_retries: int = AGENT_DEFAULT_MAX_RETRIES,
-        retry_delay: float = AGENT_DEFAULT_TURN_WAIT_TIME,
-        retry_delay_multiplier: float = AGENT_DEFAULT_TURN_WAIT_TIME_MULTIPLIER,
+        turn: Turn = DEFAULT_TURN,
     ) -> None:
         """Initialize the agent with its client and managers.
 
@@ -73,23 +69,14 @@ class Agent:
             message_history: the model context the agent starts from, copied so
                 the caller keeps no handle on it. Defaults to none, an empty
                 history; a restored session passes its saved messages here.
-            max_turns: the maximum number of loop turns before aborting, or
-                ``"inf"`` (the default) for no limit: the loop runs until the
-                model stops requesting tools.
-            max_retries: the maximum number of consecutive failed turns before
-                the run aborts.
-            retry_delay: seconds to wait before retrying a failed turn, so the
-                turn is not retried immediately.
-            retry_delay_multiplier: factor the retry wait grows by on each
-                consecutive failed-turn retry (exponential backoff).
+            turn: the turn limit (``"inf"`` by default, so the loop runs until
+                the model stops requesting tools) and the retry rules for failed
+                turns (exponential backoff).
         """
         self.system_prompt: str = ""
-        self.turn: int = 0
+        self.turn_index: int = 0
         self._client: Client = client
-        self._max_turns: int | str = max_turns
-        self._max_retries: int = max_retries
-        self._retry_delay: float = retry_delay
-        self._retry_delay_multiplier: float = retry_delay_multiplier
+        self._turn: Turn = turn
         self._message_history: List[Message] = list(message_history or [])
         self._system_prompt_builder: SystemPromptBuilder = SystemPromptBuilder()
         self._permission_manager: PermissionManager = permission_manager
@@ -109,8 +96,7 @@ class Agent:
             f"{type(self).__name__}("
             f"client={self._client!r}, "
             f"permissions={self._permission_manager!r}, "
-            f"max_turns={self._max_turns!r}, "
-            f"max_retries={self._max_retries!r}, "
+            f"turn={self._turn!r}, "
             f"tool_manager={self._tool_manager!r}"
             ")"
         )
@@ -125,85 +111,28 @@ class Agent:
             f"{type(self).__name__}(\n"
             f"    client={self._client!r},\n"
             f"    permissions={self._permission_manager!r},\n"
-            f"    max_turns={self._max_turns!r},\n"
-            f"    max_retries={self._max_retries!r},\n"
+            f"    turn={self._turn!r},\n"
             f"    tool_manager={self._tool_manager!r},\n"
             ")"
         )
 
     @property
-    def max_turns(self) -> int | str:
-        """The maximum number of loop turns per run.
+    def turn(self) -> Turn:
+        """The turn limit and the retry rules for failed turns.
 
         Returns:
-            The maximum number of turns before the run aborts, or ``"inf"``
-            when the run is unlimited.
+            The frozen configuration the loop reads.
         """
-        return self._max_turns
+        return self._turn
 
-    @max_turns.setter
-    def max_turns(self, value: int | str) -> None:
-        """Set the maximum number of loop turns per run.
+    @turn.setter
+    def turn(self, value: Turn) -> None:
+        """Replace the turn limit and the retry rules.
 
         Args:
-            value: the new maximum number of turns, or ``"inf"`` for no limit.
+            value: the new frozen configuration.
         """
-        self._max_turns = value
-
-    @property
-    def max_retries(self) -> int:
-        """The maximum number of consecutive failed turns per run.
-
-        Returns:
-            The maximum number of consecutive failed turns before the run
-            aborts.
-        """
-        return self._max_retries
-
-    @max_retries.setter
-    def max_retries(self, value: int) -> None:
-        """Set the maximum number of consecutive failed turns per run.
-
-        Args:
-            value: the new maximum number of consecutive failed turns.
-        """
-        self._max_retries = value
-
-    @property
-    def retry_delay(self) -> float:
-        """The base wait before retrying a failed turn.
-
-        Returns:
-            The base retry wait in seconds.
-        """
-        return self._retry_delay
-
-    @retry_delay.setter
-    def retry_delay(self, value: float) -> None:
-        """Set the base wait before retrying a failed turn.
-
-        Args:
-            value: the new base retry wait in seconds.
-        """
-        self._retry_delay = value
-
-    @property
-    def retry_delay_multiplier(self) -> float:
-        """The factor multiplying the retry wait on each consecutive retry.
-
-        Returns:
-            The exponential-backoff multiplier.
-        """
-        return self._retry_delay_multiplier
-
-    @retry_delay_multiplier.setter
-    def retry_delay_multiplier(self, value: float) -> None:
-        """Set the factor the retry wait grows by on each consecutive retry.
-
-        Args:
-            value: the new exponential-backoff multiplier.
-        """
-        self._retry_delay_multiplier = value
+        self._turn = value
 
     def _refresh_tools(self) -> None:
         """Rebuild the active tools from the permission manager's grants."""
@@ -357,9 +286,9 @@ class Agent:
         tool result are appended to conversation history. Produced client
         and tool-result messages are yielded in order as they are handled.
         The loop ends naturally when the model replies without tool calls;
-        when ``max_turns`` is an integer, it also aborts after that many
-        turns, and it always aborts after ``max_retries`` consecutive failed
-        turns.
+        when ``turn.max`` is an integer, it also aborts after that many
+        turns, and it always aborts after ``turn.retry.max`` consecutive
+        failed turns.
 
         Dispatches hooks through this agent's hook manager as the run
         progresses (see AGENTS.md's Hooks section for the full call-site and
@@ -394,17 +323,15 @@ class Agent:
             yield from self._emit(extra)
 
         # backoff wait that grows by the multiplier on each consecutive retry
-        retry_wait = self._retry_delay
+        retry_wait = self._turn.retry.delay
         consecutive_errors = 0
 
         # unlimited runs iterate until the model stops requesting tools
         turns = (
-            count()
-            if self._max_turns == AGENT_UNLIMITED_MAX_TURNS
-            else range(self._max_turns)
+            count() if self._turn.max == UNLIMITED_MAX_TURNS else range(self._turn.max)
         )
-        for turn in turns:
-            self.turn = turn
+        for turn_index in turns:
+            self.turn_index = turn_index
             tool_calls: List[ToolCallMessage] = []
             received_finalized = False
             request = None
@@ -448,7 +375,7 @@ class Agent:
                 # a completed stream is a successful turn: reset the
                 # consecutive-error tracking and the backoff wait
                 consecutive_errors = 0
-                retry_wait = self._retry_delay
+                retry_wait = self._turn.retry.delay
 
                 # natural stop: text-only reply
                 if not tool_calls:
@@ -494,9 +421,9 @@ class Agent:
                         Hook.ERROR, source="agent", error=e
                     )
                     return
-                # abort once the failed turns in a row reach max_retries
+                # abort once the failed turns in a row reach the retry maximum
                 consecutive_errors += 1
-                if consecutive_errors >= self._max_retries:
+                if consecutive_errors >= self._turn.retry.max:
                     yield ErrorMessage(content="Max retries exceeded")
                     yield from self._hook_manager.run(
                         Hook.ERROR, source="agent", error=e
@@ -505,7 +432,7 @@ class Agent:
                 # wait before retrying so the turn is not retried immediately;
                 # the wait grows by the multiplier on each consecutive retry
                 time.sleep(retry_wait)
-                retry_wait *= self._retry_delay_multiplier
+                retry_wait *= self._turn.retry.multiplier
 
             finally:
                 # closing a run must clean up without yielding

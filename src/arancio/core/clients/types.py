@@ -1,17 +1,30 @@
-"""Model configuration of a client, shared with the upper layers."""
+"""Model and reasoning types of a client, shared with the upper layers."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from arancio.core.clients.configs.reasoning import ReasoningConfig
+
+@dataclass(frozen=True)
+class Reasoning:
+    """The reasoning configuration of a model; frozen so changes go through their owner.
+
+    Attributes:
+        effort: the reasoning effort tier (e.g. ``"low"``), or ``None`` to disable
+            reasoning.
+        summary: the reasoning summary level (e.g. ``"auto"``), or ``None`` to
+            disable summaries.
+    """
+
+    effort: str | None = None
+    summary: str | None = None
 
 
 @dataclass(frozen=True)
-class ModelConfig:
+class Model:
     """The model to use and its reasoning configuration, shared across layers.
 
-    Frozen like :class:`ReasoningConfig`, so a holder can share it without copying.
+    Frozen like :class:`Reasoning`, so a holder can share it without copying.
 
     Attributes:
         provider: the provider prefix (e.g. ``"openai"``), or ``None`` when not
@@ -24,7 +37,7 @@ class ModelConfig:
 
     provider: str | None
     name: str | None
-    reasoning: ReasoningConfig
+    reasoning: Reasoning
 
     def check_configured(self) -> None:
         """Require both the provider and the model name, as the agent needs them.
@@ -54,7 +67,7 @@ class ModelConfig:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "ModelConfig":
+    def from_dict(cls, data: Mapping[str, Any]) -> "Model":
         """Build the options from a complete, checked mapping.
 
         Args:
@@ -66,7 +79,7 @@ class ModelConfig:
         return cls(
             provider=data["provider"],
             name=data["name"],
-            reasoning=ReasoningConfig(
+            reasoning=Reasoning(
                 effort=data["reasoning"]["effort"],
                 summary=data["reasoning"]["summary"],
             ),

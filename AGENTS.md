@@ -36,8 +36,8 @@ Paths are in `core/constants.py` and each component's `constants.py`.
 - `settings.yml`: written by `SettingsManager` through Storage. Layout:
   `permissions: default: {read: ask, ...}`,
   `plugins: [{<name>: {enabled: bool, permission_level: ask|auto|null}}]`,
-  `model: {provider, name, reasoning: {effort, summary}}` and the loop fields
-  (`max_turns`, `max_retries`, `turn_wait_time`, `turn_wait_time_multiplier`).
+  `model: {provider, name, reasoning: {effort, summary}}` and
+  `turn: {max, retry: {max, delay, multiplier}}`.
 - `litellm/`: LiteLLM login data (moved/symlinked by Storage's generic ops).
 - `sessions/<cwd-name+hash>/<y>/<m>/<d>/<uuid4hex>.jsonl`: one append-only log
   per session. No registry file; `SessionRegistry` rescans at launch.
@@ -79,10 +79,14 @@ display are decided by their owners, not core.
 (optional copied `message_history` in the constructor, or `restore_history`).
 Per turn: build request → stream (yield chunks, store finalized) → for each
 `ToolCallMessage`: `PermissionManager.validate`, run, append result (+ optional
-user note) → next turn. Stops on a text-only reply. `max_turns="inf"` is
-unlimited; failures retry with exponential backoff up to `max_retries`, except
-after finalized messages were delivered. The initial message is stored but
-**not yielded**. The agent saves nothing; consumers forward its stream as is.
+user note) → next turn. Stops on a text-only reply. `agent.turn` holds a frozen
+`Turn(max, retry=Retry(max, delay, multiplier))`
+(`core/agents/types.py`), the same object as `settings.turn` (defaults
+in `DEFAULT_TURN`); change it by assigning a new one.
+`turn.max="inf"` is unlimited; failures retry with exponential backoff
+(`retry.delay`, grown by `retry.multiplier`) up to `retry.max`, except after
+finalized messages were delivered. `agent.turn_index` is the current loop
+index. The initial message is stored but **not yielded**. The agent saves nothing; consumers forward its stream as is.
 
 ### Clients (`core/clients/`, `core/builders/`, `core/parsers/`)
 
@@ -95,11 +99,11 @@ default, `None` when a part is unset); a client whose provider expects another
 format overrides it. `_litellm_patches.apply()` patches pinned-LiteLLM bugs,
 including the ChatGPT device-code login notice sent to the controller (UI-only,
 never in history). `client.reasoning` and `request.reasoning` hold a frozen
-`ReasoningConfig(effort, summary)` (`core/clients/configs/reasoning.py`); change
+`Reasoning(effort, summary)` (`core/clients/types.py`); change
 it by assigning a new one. Core does not check the values, so a bad effort or
 summary fails only when the request is sent. The payload builder sends it as
-LiteLLM's `reasoning`. `core/clients/configs/model.py` has the frozen
-`ModelConfig(provider, name, reasoning)` with `check_configured()`, `to_dict()`
+LiteLLM's `reasoning`. `core/clients/types.py` has the frozen
+`Model(provider, name, reasoning)` with `check_configured()`, `to_dict()`
 and `from_dict()`: the one model type that Settings, Sessions and Application
 share, so Settings and Sessions never import each other.
 
@@ -164,7 +168,7 @@ arguments they need by name (or `**kwargs`); positional-only is unsupported.
 `provide(**deps)` registers permanent services: `hook_manager`,
 `permission_manager`, `agent`, `client`. `run(hook, **event)` merges services
 with event args (event wins). Handlers mutate the passed objects in place
-(`agent.system_prompt`, `agent.turn`, `request`, `decision`, `call.arguments`,
+(`agent.system_prompt`, `agent.turn_index`, `request`, `decision`, `call.arguments`,
 `call.id`, `result.content`, `result.display_text`); returns are ignored except
 `Message`s, which are collected in order. Dispatch is synchronous; ordinary
 handler exceptions propagate.
@@ -194,7 +198,7 @@ def customize(self, agent, **kwargs):
 Notes:
 
 - `request` is `None` for a model error raised inside `build_request`.
-- `source="agent"` also fires with `error=None` when `max_turns` runs out.
+- `source="agent"` also fires with `error=None` when `turn.max` runs out.
   Exactly one of `agent_end` / `source="agent"` fires per run.
 - A hook handler exception inside `Tool.call` surfaces as `source="model"` and
   is retried like a provider error (accepted behaviour).
@@ -255,10 +259,10 @@ Application, and Settings and Sessions never read each other.
 Public coordinator (`application/base.py`) over Core, Settings and Sessions;
 returns Messages and `ApplicationStatus(model, working_directory)`
 (`application/status.py`; `model`
-is the active `ModelConfig`; the TUI shows its provider and name). Only
+is the active `Model`; the TUI shows its provider and name). Only
 Application turns `settings.model` into an id, by calling each client's
 `get_model_id`; Settings stores just `provider` and `name`, and
-`ModelConfig.check_configured()` raises when either is missing.
+`Model.check_configured()` raises when either is missing.
 
 - `update_settings(**changes)` takes the file layout:
   `model={"provider": ..., "name": ..., "reasoning": {"effort": ...}}` and/or
@@ -306,11 +310,13 @@ Missing file → created from defaults; bad YAML → left untouched, defaults us
 `SettingsValidator` returns checked mappings and Messages; strict for edits,
 lenient with notices on load. Only the manager builds `Settings`.
 `set_field` / `save_field` take dotted paths as written in the file
-(`model.name`, `max_turns`, `permissions`); the manager walks the nested
+(`model.name`, `turn.max`, `permissions`); the manager walks the nested
 `to_dict()` and re-validates strictly. `Settings.model` is Core's
-`ModelConfig` (`provider`, `name`, `reasoning: ReasoningConfig(effort,
-summary)`); a missing or null `model` / `reasoning` section means defaults,
-unknown keys warn, and there is no support for the old flat model keys.
+`Model` (`provider`, `name`, `reasoning: Reasoning(effort,
+summary)`) and `Settings.turn` is Core's `Turn`; a missing or null
+`model` / `reasoning` / `turn` / `retry` section means defaults,
+unknown keys warn, and there is no support for the old flat model and loop
+keys.
 `restore_active(model=, permissions=)` puts a
 session's model section and permissions over the global settings.
 `Settings.permissions` holds only the default categories
@@ -340,11 +346,11 @@ registry itself is `sessions/registry/base.py`. A session starts in
 unsupported types (incl. `WarningMessage`) raise `ValueError`.
 `update_state(**changes)` takes `configuration`, `working_directory`,
 `explicit_name` (only this may be None). A `SessionConfiguration(model,
-permissions)` stores the whole model section as Core's `ModelConfig` (summary
+permissions)` stores the whole model section as Core's `Model` (summary
 included) and only the default permission levels; plugin levels are global
 settings, so sessions keep loading when plugins change. Sessions knows nothing
 about Settings: Application builds the configuration from the settings and, on
-resume, passes the session's `ModelConfig` to `restore_active` as it is. `find`,
+resume, passes the session's `Model` to `restore_active` as it is. `find`,
 `load` (validates, refreshes checksum, adds synthetic errors for unmatched tool
 calls), `fork` (returns state, confirmation, notices). Internals
 (`SessionRecorder`, `SessionChecksum`, `SessionRegistry`) are private. Sessions

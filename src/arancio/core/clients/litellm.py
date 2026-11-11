@@ -10,11 +10,11 @@ from arancio.core.builders.payload.litellm import LiteLLMPayloadBuilder
 from arancio.core.builders.request.litellm import LiteLLMRequestBuilder
 from arancio.core.clients import _litellm_patches
 from arancio.core.clients.base import Client
-from arancio.core.clients.configs.reasoning import ReasoningConfig
 from arancio.core.clients.constants import (
     LITELLM_DEFAULT_REASONING_EFFORT,
     LITELLM_DEFAULT_REASONING_SUMMARY,
 )
+from arancio.core.clients.types import Reasoning
 from arancio.core.events import LoginNotice
 from arancio.core.messages.base import Message
 from arancio.core.parsers.responses.litellm import LiteLLMResponseParser
@@ -60,7 +60,7 @@ class LiteLLMClient(Client):
     _request_builder: Type[LiteLLMRequestBuilder] = LiteLLMRequestBuilder
     _response_parser: Type[LiteLLMResponseParser] = LiteLLMResponseParser
 
-    _default_reasoning: ReasoningConfig = ReasoningConfig(
+    _default_reasoning: Reasoning = Reasoning(
         effort=LITELLM_DEFAULT_REASONING_EFFORT,
         summary=LITELLM_DEFAULT_REASONING_SUMMARY,
     )

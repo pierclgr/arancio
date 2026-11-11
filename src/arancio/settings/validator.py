@@ -4,7 +4,7 @@ from collections.abc import Callable, Collection, Mapping
 from copy import deepcopy
 from typing import Any, ClassVar
 
-from arancio.core.agents.constants import AGENT_UNLIMITED_MAX_TURNS
+from arancio.core.agents.constants import UNLIMITED_MAX_TURNS
 from arancio.core.messages.base import ErrorMessage, Message, WarningMessage
 from arancio.core.permissions.types import PermissionLevel
 from arancio.settings.constants import (
@@ -13,6 +13,10 @@ from arancio.settings.constants import (
     PROVIDER_FIELD,
     REASONING_EFFORT_FIELD,
     REASONING_SUMMARY_FIELD,
+    RETRY_DELAY_FIELD,
+    RETRY_MAX_FIELD,
+    RETRY_MULTIPLIER_FIELD,
+    TURN_MAX_FIELD,
 )
 from arancio.settings.utils import locate_field
 
@@ -40,19 +44,19 @@ class SettingsValidator:
         MODEL_NAME_FIELD: lambda value: value is None or isinstance(value, str),
         REASONING_EFFORT_FIELD: lambda value: value is None or isinstance(value, str),
         REASONING_SUMMARY_FIELD: lambda value: value is None or isinstance(value, str),
-        "max_turns": lambda value: (
-            (isinstance(value, str) and value == AGENT_UNLIMITED_MAX_TURNS)
+        TURN_MAX_FIELD: lambda value: (
+            (isinstance(value, str) and value == UNLIMITED_MAX_TURNS)
             or (isinstance(value, int) and not isinstance(value, bool) and value > 0)
         ),
-        "max_retries": lambda value: (
+        RETRY_MAX_FIELD: lambda value: (
             isinstance(value, int) and not isinstance(value, bool) and value >= 0
         ),
-        "turn_wait_time": lambda value: (
+        RETRY_DELAY_FIELD: lambda value: (
             isinstance(value, (int, float))
             and not isinstance(value, bool)
             and value >= 0
         ),
-        "turn_wait_time_multiplier": lambda value: (
+        RETRY_MULTIPLIER_FIELD: lambda value: (
             isinstance(value, (int, float))
             and not isinstance(value, bool)
             and value >= 0

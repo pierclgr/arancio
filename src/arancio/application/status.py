@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from arancio.core.clients.configs.model import ModelConfig
+from arancio.core.clients.types import Model
 
 
 @dataclass(frozen=True)
@@ -15,5 +15,5 @@ class ApplicationStatus:
         working_directory: the runtime working directory owned by Application.
     """
 
-    model: ModelConfig
+    model: Model
     working_directory: Path

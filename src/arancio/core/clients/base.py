@@ -6,7 +6,7 @@ from typing import List, Type
 
 from arancio.core.builders.payload.base import PayloadBuilder
 from arancio.core.builders.request.base import RequestBuilder
-from arancio.core.clients.configs.reasoning import ReasoningConfig
+from arancio.core.clients.types import Reasoning
 from arancio.core.events import LoginNotice
 from arancio.core.messages.base import Message
 from arancio.core.parsers.responses.base import ResponseParser
@@ -35,13 +35,13 @@ class Client(ABC):
     _model_options: List[str] | None = None
 
     _default_model_id: str | None = None
-    _default_reasoning: ReasoningConfig = ReasoningConfig()
+    _default_reasoning: Reasoning = Reasoning()
 
     def __init__(
         self,
         on_login: Callable[[LoginNotice], None],
         model_id: str | None = None,
-        reasoning: ReasoningConfig | None = None,
+        reasoning: Reasoning | None = None,
     ) -> None:
         """Initialize the client with its login callback and per-instance overrides.
 
@@ -62,7 +62,7 @@ class Client(ABC):
         """
         self._on_login: Callable[[LoginNotice], None] = on_login
         self._model_id: str | None = self._default_model_id
-        self._reasoning: ReasoningConfig = self._default_reasoning
+        self._reasoning: Reasoning = self._default_reasoning
         if model_id is not None:
             self.model_id = model_id
         if reasoning is not None:
@@ -127,7 +127,7 @@ class Client(ABC):
         return f"{provider}/{name}"
 
     @property
-    def reasoning(self) -> ReasoningConfig:
+    def reasoning(self) -> Reasoning:
         """The reasoning effort and summary level used for outgoing requests.
 
         Returns:
@@ -136,7 +136,7 @@ class Client(ABC):
         return self._reasoning
 
     @reasoning.setter
-    def reasoning(self, value: ReasoningConfig) -> None:
+    def reasoning(self, value: Reasoning) -> None:
         """Set the reasoning options used for subsequent requests.
 
         Args:

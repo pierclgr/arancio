@@ -11,9 +11,9 @@ from arancio.application.prompt.actions.executor import ActionExecutor
 from arancio.application.status import ApplicationStatus
 from arancio.core.agents.base import Agent
 from arancio.core.clients.base import Client
-from arancio.core.clients.configs.reasoning import ReasoningConfig
 from arancio.core.clients.constants import LITELLM_PROVIDER_NAMES
 from arancio.core.clients.litellm import LiteLLMClient
+from arancio.core.clients.types import Reasoning
 from arancio.core.hooks.base import Hook
 from arancio.core.hooks.manager import HookManager
 from arancio.core.messages.assistant import AssistantMessage
@@ -106,7 +106,7 @@ class Application:
         tool_session = ToolSession()
         client = LiteLLMClient(on_login=controller.show_login, stream=True)
         summary_client = LiteLLMClient(on_login=controller.show_login, stream=False)
-        summary_client.reasoning = ReasoningConfig()
+        summary_client.reasoning = Reasoning()
         tool_manager = ToolManager(
             web_summary_client=summary_client,
             hook_manager=hook_manager,
@@ -475,11 +475,8 @@ class Application:
         self.__summary_client.model_id = self.__summary_client.get_model_id(
             provider, name
         )
-        self.__summary_client.reasoning = ReasoningConfig()
-        self.__agent.max_turns = settings.max_turns
-        self.__agent.max_retries = settings.max_retries
-        self.__agent.retry_delay = settings.turn_wait_time
-        self.__agent.retry_delay_multiplier = settings.turn_wait_time_multiplier
+        self.__summary_client.reasoning = Reasoning()
+        self.__agent.turn = settings.turn
         self.__agent.set(self.__grants(settings))
 
     @classmethod

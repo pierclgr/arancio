@@ -6,8 +6,7 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from arancio.core.clients.configs.model import ModelConfig
-from arancio.core.clients.configs.reasoning import ReasoningConfig
+from arancio.core.clients.types import Model, Reasoning
 from arancio.core.permissions.types import PermissionCategory, PermissionLevel
 
 
@@ -20,7 +19,7 @@ class SessionConfiguration:
         permissions: the levels of the default permission categories.
     """
 
-    model: ModelConfig
+    model: Model
     permissions: dict[PermissionCategory, PermissionLevel]
 
     def to_dict(self) -> dict[str, Any]:
@@ -106,10 +105,10 @@ class SessionConfiguration:
                 raise ValueError(f"configuration {path} is invalid")
 
         return cls(
-            model=ModelConfig(
+            model=Model(
                 provider=values["model.provider"],
                 name=values["model.name"],
-                reasoning=ReasoningConfig(
+                reasoning=Reasoning(
                     effort=values["model.reasoning.effort"],
                     summary=values["model.reasoning.summary"],
                 ),
