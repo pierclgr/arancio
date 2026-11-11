@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Type
 
-from arancio.core.parsers.tool_result.files.write import WriteFileToolResultParser
+from arancio.core.parsers.tool_results.files.write import WriteFileToolResultParser
 from arancio.core.tools.base import Tool
 
 
@@ -25,8 +25,8 @@ class WriteFileTool(Tool):
 
         Args:
             file_path: absolute path of the file to create or overwrite.
-            content: full file contents to write. No trailing newline is
-                added implicitly.
+            content: full UTF-8 contents to write. No trailing newline is added
+                implicitly.
 
         Returns:
             A dict with keys ``file_path`` (str, canonical absolute path),

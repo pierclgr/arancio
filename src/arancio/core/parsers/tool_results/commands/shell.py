@@ -1,6 +1,6 @@
 """Shell command tool result parser."""
 
-from arancio.core.parsers.tool_result.base import ToolResultParser
+from arancio.core.parsers.tool_results.base import ToolResultParser
 
 
 class ShellCommandToolResultParser(ToolResultParser):

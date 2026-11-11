@@ -10,6 +10,7 @@ dependencies = [
     "dynamic-markdown",
     # LiteLLM imports MCP while dispatching ordinary tool requests
     "litellm[mcp]>=1.83.14",
+    "pydantic>=2.14.3",
     "pyyaml>=6.0.3",
     "requests>=2.33.1",
     "textual>=5.0.0",

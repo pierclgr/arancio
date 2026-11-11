@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Callable
 from arancio.core.hooks.base import Hook
 
 if TYPE_CHECKING:
-    from arancio.core.plugins.tool import PluginTool
+    from arancio.core.plugins.tools import PluginTool
 
 
 @dataclass

@@ -19,7 +19,7 @@ from arancio.core.plugins.constants import (
     PLUGINS_PATH,
 )
 from arancio.core.plugins.registry import PLUGIN_REGISTRY, REGISTRATION_MESSAGES
-from arancio.core.plugins.tool import CUSTOM, PluginTool
+from arancio.core.plugins.tools import CUSTOM, PluginTool
 from arancio.core.tools.definition import ToolDefinition
 from arancio.core.tools.manager import ToolManager
 

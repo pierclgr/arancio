@@ -3,10 +3,19 @@
 import platform
 import shutil
 import subprocess
-from typing import Type
+from typing import Annotated, Type
 
-from arancio.core.parsers.tool_result.commands.shell import ShellCommandToolResultParser
+from pydantic import Field
+
+from arancio.core.parsers.tool_results.commands.shell import (
+    ShellCommandToolResultParser,
+)
 from arancio.core.tools.base import Tool
+from arancio.core.tools.commands.constants import (
+    SHELL_DEFAULT_TIMEOUT,
+    SHELL_MAX_TIMEOUT,
+    SHELL_OUTPUT_LIMIT,
+)
 
 
 class ShellCommandTool(Tool):
@@ -17,9 +26,9 @@ class ShellCommandTool(Tool):
     whether the run timed out or produced truncated output.
     """
 
-    _default_timeout: int = 120
-    _max_timeout: int = 600
-    _output_limit: int = 30_000
+    _default_timeout: int = SHELL_DEFAULT_TIMEOUT
+    _max_timeout: int = SHELL_MAX_TIMEOUT
+    _output_limit: int = SHELL_OUTPUT_LIMIT
     _result_parser: Type[ShellCommandToolResultParser] = ShellCommandToolResultParser
 
     @property
@@ -44,17 +53,17 @@ class ShellCommandTool(Tool):
     def _call(
         self,
         command: str,
-        timeout: int | None = None,
+        timeout: Annotated[int, Field(ge=1, le=SHELL_MAX_TIMEOUT)] | None = None,
         cwd: str | None = None,
     ) -> dict:
         """Run a command through the host platform's native shell.
 
         Args:
-            command: the command line to execute.
-            timeout: maximum runtime in seconds. Defaults to ``120`` and
-                is capped at ``600``.
-            cwd: absolute working directory for the command. Defaults
-                to the current process working directory.
+            command: the command to run via the host platform's native shell
+                (POSIX /bin/sh on macOS/Linux, PowerShell on Windows).
+            timeout: maximum runtime in seconds. Defaults to 120, capped at 600.
+            cwd: absolute working directory for the command. Defaults to the
+                current process working directory ("./").
 
         Returns:
             A dict with keys ``stdout`` (str), ``stderr`` (str),
@@ -62,7 +71,9 @@ class ShellCommandTool(Tool):
             (bool). On timeout ``exit_code`` is ``-1`` and any partial
             output captured before the timeout is included.
         """
-        effective_timeout = min(timeout or self._default_timeout, self._max_timeout)
+        effective_timeout = max(
+            1, min(timeout or self._default_timeout, self._max_timeout)
+        )
 
         try:
             if self._is_windows:

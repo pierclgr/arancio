@@ -1,12 +1,18 @@
 """File read tool exposing a text-file reader to LLM clients."""
 
 from pathlib import Path
-from typing import Type
+from typing import Annotated, Type
 
 from dynamic_markdown.types.files.base import DynamicMarkdownFile
+from pydantic import Field
 
-from arancio.core.parsers.tool_result.files.read import ReadFileToolResultParser
+from arancio.core.parsers.tool_results.files.read import ReadFileToolResultParser
 from arancio.core.tools.base import Tool
+from arancio.core.tools.files.constants import (
+    READ_LINE_TRUNCATION_MARKER,
+    READ_MAX_LIMIT,
+    READ_MAX_LINE_CHARS,
+)
 
 
 class ReadFileTool(Tool):
@@ -19,28 +25,29 @@ class ReadFileTool(Tool):
     has a per-line character cap.
     """
 
-    _default_limit: int = 2000
-    _max_line_chars: int = 2000
-    _line_truncation_marker: str = "… [line truncated]"
+    _default_limit: int = READ_MAX_LIMIT
+    _max_line_chars: int = READ_MAX_LINE_CHARS
+    _line_truncation_marker: str = READ_LINE_TRUNCATION_MARKER
     _result_parser: Type[ReadFileToolResultParser] = ReadFileToolResultParser
 
     def _call(
         self,
         file_path: str,
-        offset: int = 1,
-        limit: int | None = None,
+        offset: Annotated[int, Field(ge=1)] = 1,
+        limit: Annotated[int, Field(ge=1, le=READ_MAX_LIMIT)] | None = None,
         raw_markdown: bool = False,
     ) -> dict:
         """Read a file slice and return its line-numbered contents.
 
         Args:
             file_path: absolute path to the file to read.
-            offset: 1-indexed source line to start paging from. Defaults to one.
-                An offset beyond the last source line reads from the beginning.
-            limit: source-line page size, capped at ``_default_limit``.
-            raw_markdown: whether to return raw ``.md`` source with source line
-                numbers. Defaults to False, expanding dynamic Markdown tags.
-                Has no effect on other file types.
+            offset: 1-indexed raw source line to start paging from. Defaults to 1.
+                An offset past EOF reads from the beginning with the default limit.
+            limit: maximum raw source lines to read. Defaults to 2000, capped at
+                2000.
+            raw_markdown: read raw .md source with source line numbers when true.
+                Defaults to false, expanding dynamic Markdown tags. Ignored for
+                other file types.
 
         Returns:
             A dict containing ``file_path``, numbered ``content``, ``start_line``,

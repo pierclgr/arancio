@@ -16,7 +16,7 @@ from arancio.core.clients.constants import (
 )
 from arancio.core.events import LoginNotice
 from arancio.core.messages.base import Message
-from arancio.core.parsers.response.litellm import LiteLLMResponseParser
+from arancio.core.parsers.responses.litellm import LiteLLMResponseParser
 from arancio.core.requests.litellm import LiteLLMRequest
 
 # silence LiteLLM's pydantic serializer warnings when streaming Responses

@@ -3,19 +3,15 @@
 from abc import ABC, abstractmethod
 from typing import Any, Type
 
-import yaml
 from dynamic_markdown.types.files.base import DynamicMarkdownFile
 
+from arancio.core.builders.tool_input_schemas.base import InputSchemaBuilder
 from arancio.core.hooks.base import Hook
 from arancio.core.hooks.manager import HookManager
 from arancio.core.messages.base import Message
 from arancio.core.messages.tool import ToolCallMessage, ToolResultMessage
-from arancio.core.parsers.tool_result.base import ToolResultParser
-from arancio.core.tools.constants import (
-    TOOL_DESCRIPTION_FILENAME,
-    TOOL_INPUT_SCHEMA_FILENAME,
-    TOOLS_HARNESS_PATH,
-)
+from arancio.core.parsers.tool_results.base import ToolResultParser
+from arancio.core.tools.constants import TOOLS_HARNESS_PATH
 from arancio.core.tools.schema import ToolSchema
 from arancio.core.tools.session import ToolSession
 from arancio.core.utils.naming import camel_to_snake
@@ -32,10 +28,7 @@ class Tool(ABC):
         description: natural-language description,
             loaded from the tool's harness directory.
         input_schema: JSON Schema describing the tool arguments,
-            loaded from the harness directory.
-        _description_file: the :class:`DynamicMarkdownFile` backing
-            :attr:`description`, retained so callers can refresh the
-            description from disk via ``.reload()``.
+            derived from the signature of :meth:`_call`.
         _result_parser: parser converting raw tool output into a tool
             result message.
         _tool_session: the injected :class:`ToolSession` for cross-tool
@@ -52,8 +45,9 @@ class Tool(ABC):
     def __init__(self, hook_manager: HookManager, tool_session: ToolSession) -> None:
         """Initialize the tool with its dependencies, description and input schema.
 
-        The description and raw input schema come from :meth:`_load_prompt`;
-        the schema is then wrapped as a closed JSON object.
+        The description comes from :meth:`_load_description`; the input schema is
+        derived from the signature and docstring of :meth:`_call` and wrapped as a
+        closed JSON object.
 
         Args:
             hook_manager: the hook manager :meth:`call` dispatches through.
@@ -62,44 +56,37 @@ class Tool(ABC):
         """
         self._hook_manager = hook_manager
         self._tool_session = tool_session
-        self.description, raw_input_schema = self._load_prompt()
+        self.description = self._load_description()
         self.input_schema = {
             "type": "object",
             "additionalProperties": False,
-            **raw_input_schema,
+            **InputSchemaBuilder.build(self._call),
         }
 
-    def _load_prompt(self) -> tuple[str, dict[str, Any]]:
-        """Load the tool's description and raw input schema from disk.
+    def _load_description(self) -> str:
+        """Load the tool's description from its harness file.
 
-        Reads ``description.md`` and ``input_schema.yml`` from
-        ``harness/tools/<snake_name>/``. The description is parsed as dynamic
-        markdown: ``<include>``/``@path``, ``<field>`` and ``<script>`` tags
-        are expanded with the tool instance as the field source; relative
-        include and script targets resolve against ``description.md``'s own
+        Reads ``harness/tools/<snake_name>.md``. The description is parsed as
+        dynamic markdown: ``<include>``/``@path``, ``<field>`` and ``<script>``
+        tags are expanded with the tool instance as the field source; relative
+        include and script targets resolve against the description file's own
         directory.
 
         Returns:
-            The description and the raw input schema.
+            The description.
 
         Raises:
-            FileNotFoundError: when the harness directory for this
-                tool does not exist.
+            FileNotFoundError: when the description file for this tool does not
+                exist.
         """
-        self._harness_dir = TOOLS_HARNESS_PATH / camel_to_snake(self.name)
+        description_path = TOOLS_HARNESS_PATH / f"{camel_to_snake(self.name)}.md"
 
-        if not self._harness_dir.is_dir():
+        if not description_path.is_file():
             raise FileNotFoundError(
-                f"Harness directory {self._harness_dir} for {self.name} not found."
+                f"Description file {description_path} for {self.name} not found."
             )
 
-        self._description_file = DynamicMarkdownFile(
-            self._harness_dir / TOOL_DESCRIPTION_FILENAME, tool=self
-        )
-        raw_input_schema = yaml.safe_load(
-            (self._harness_dir / TOOL_INPUT_SCHEMA_FILENAME).read_text()
-        )
-        return self._description_file.content, raw_input_schema
+        return DynamicMarkdownFile(description_path, tool=self).content
 
     def __repr__(self) -> str:
         """Return a developer-friendly representation of the tool.

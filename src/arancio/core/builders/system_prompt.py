@@ -13,7 +13,7 @@ from arancio.core.builders.constants import SYSTEM_PROMPT_HARNESS_PATH
 class SystemPromptBuilder(Builder):
     """Builder that assembles the system prompt for an agent.
 
-    ``SYSTEM_PROMPT.md`` is read and parsed once, when the builder is instantiated, and
+    ``system_prompt.md`` is read and parsed once, when the builder is instantiated, and
     cached on the instance for subsequent :meth:`build` calls; :meth:`reload` refreshes
     that cache from disk. Runtime context that must stay current (the date and the
     working directory) is appended by :meth:`build` instead of being part of the cached

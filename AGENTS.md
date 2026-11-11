@@ -27,9 +27,10 @@ lints staged files; `pre-push` runs the docstring check and the test suite.
 
 Paths are in `core/constants.py` and each component's `constants.py`.
 
-- `harness/tools/<snake_tool_name>/{description.md,input_schema.yml}`: read by
-  `Tool.__init__` (raises if missing).
-- `harness/SYSTEM_PROMPT.md`: seeded if absent, parsed once and cached by
+- `harness/tools/<snake_tool_name>.md`: the tool description, read by
+  `Tool.__init__` (raises if the file is missing). The input schema is not a
+  file: it is derived from `_call` (see Tools).
+- `harness/system_prompt.md`: seeded if absent, parsed once and cached by
   `SystemPromptBuilder`; `build()` appends the current date each turn. Put
   fresh runtime context in `build()`, never in a `<script>` tag.
 - `settings.yml`: written by `SettingsManager` through Storage.
@@ -101,8 +102,18 @@ low/medium/high are equal. Setting `thinking_summary` there crashes LiteLLM
 Subclasses implement `_call`; `call(call)` returns `(result, hook_messages)`,
 wrapping errors in `ToolErrorMessage` via `_result_parser`. Tool name = class
 name. Descriptions are dynamic markdown (`<field>`, `<include>`, `<script>`).
-The shared `ToolSession` (`_tool_session`) tracks read files so write/edit
-refuse unread or externally changed files; it survives `ToolManager.refresh`.
+The input schema is derived from `_call` by `InputSchemaBuilder`
+(`core/builders/tool_input_schemas/`): type hints give types and required arguments,
+`Annotated[..., Field(ge=, le=, min_length=)]` the constraints sent to the
+model (each family's `constants.py` holds the shared defaults and bounds; the
+tool still clamps/validates at runtime), and the docstring's parameter section
+(Google `Args:`, NumPy `Parameters` or Sphinx `:param`, read by the parsers in
+`core/parsers/docstrings/`) the per-parameter descriptions, so those lines are
+**model-facing**. `Tool.__init__` closes it as
+an object with `additionalProperties: false`. Variadic or untyped parameters and
+unsupported types raise `ValueError`. The shared `ToolSession` (`_tool_session`)
+tracks read files so write/edit refuse unread or externally changed files; it
+survives `ToolManager.refresh`.
 Families: `files/`, `commands/`, `web/` (fetch uses an injected summary client).
 
 `ReadFileTool` pages raw source lines (`offset`/`limit`) **before** Markdown
@@ -187,10 +198,12 @@ skipped. Each class is built once with `plugin_cls()`; its hooks and tools
 share that instance. A failing plugin method returns one `ErrorMessage` and is
 disabled; other methods keep running.
 
-`@tool(...)` creates `PluginTool.build(...)` classes named
-`<plugin_name>-<tool_name>` (method name by default). Description and schema
-come from the decorator (no harness, no dynamic markdown). Category: `READ`,
-`WRITE`, `WEB`, `EXECUTE`, `PLUGIN` (default) or `CUSTOM` (→
+`@tool(...)` creates `PluginTool.create_class(...)` classes named
+`<plugin_name>-<tool_name>` (method name by default). The description comes
+from the decorator (no harness, no dynamic markdown); the schema is derived
+from the decorated method like built-in tools (no `input_schema=` argument), and
+a method that cannot be described is skipped with a startup error. Category:
+`READ`, `WRITE`, `WEB`, `EXECUTE`, `PLUGIN` (default) or `CUSTOM` (→
 `PLUGIN:<plugin_name>`, default ASK). `PluginToolResultParser` keeps dicts raw
 and displays them as JSON.
 
@@ -282,9 +295,10 @@ state, confirmation, notices). Internals (`SessionRecorder`, `SessionChecksum`,
 - **Private members**: double leading underscore; constants in the package's
   `constants.py`; shared data types in `base.py`.
 - **New provider / tool / command**: subclass the `base.py`. A tool also needs
-  `harness/tools/<snake_name>/`. A command goes in `commands/registry.py`
-  (and `SESSION_DISCARDING_COMMANDS` if it switches session) and delegates to
-  Application.
+  `harness/tools/<snake_name>.md`; type-hint `_call` and document its
+  parameters in the docstring (Google `Args:` section). A command goes in
+  `commands/registry.py` (and `SESSION_DISCARDING_COMMANDS` if it switches
+  session) and delegates to Application.
 - **New plugin**: plain class with `@plugin(...)` in `plugin.py`, plus
   `@hook`/`@tool` methods; no-arg constructor; no base class, no YAML.
 - **Git**: branches `feature/snake_case` / `fix/snake_case`; past-tense commit

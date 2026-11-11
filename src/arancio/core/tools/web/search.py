@@ -1,12 +1,19 @@
 """Web search tool exposing DuckDuckGo search to LLM clients."""
 
-from typing import Type
+from typing import Annotated, Type
 
 from ddgs import DDGS
 from ddgs.exceptions import TimeoutException
+from pydantic import Field
 
-from arancio.core.parsers.tool_result.web.search import SearchWebToolResultParser
+from arancio.core.parsers.tool_results.web.search import SearchWebToolResultParser
 from arancio.core.tools.base import Tool
+from arancio.core.tools.web.constants import (
+    SEARCH_DEFAULT_NUM_RESULTS,
+    SEARCH_DEFAULT_TIMEOUT,
+    SEARCH_MAX_NUM_RESULTS,
+    SEARCH_MAX_TIMEOUT,
+)
 
 
 class SearchWebTool(Tool):
@@ -19,27 +26,27 @@ class SearchWebTool(Tool):
     ``ToolSession``.
     """
 
-    _default_num_results: int = 10
-    _max_num_results: int = 20
-    _default_timeout: int = 60
-    _max_timeout: int = 300
+    _default_num_results: int = SEARCH_DEFAULT_NUM_RESULTS
+    _max_num_results: int = SEARCH_MAX_NUM_RESULTS
+    _default_timeout: int = SEARCH_DEFAULT_TIMEOUT
+    _max_timeout: int = SEARCH_MAX_TIMEOUT
     _result_parser: Type[SearchWebToolResultParser] = SearchWebToolResultParser
 
     def _call(
         self,
         query: str,
-        num_results: int | None = None,
-        timeout: int | None = None,
+        num_results: Annotated[int, Field(ge=1, le=SEARCH_MAX_NUM_RESULTS)]
+        | None = None,
+        timeout: Annotated[int, Field(ge=1, le=SEARCH_MAX_TIMEOUT)] | None = None,
     ) -> dict:
         """Run a DuckDuckGo text search and return structured results.
 
         Args:
-            query: free-form search query string.
-            num_results: maximum number of results to return. Defaults to
-                :attr:`_default_num_results`. Clamped to
-                ``[1, _max_num_results]``.
-            timeout: per-search timeout in seconds. Defaults to
-                :attr:`_default_timeout`. Clamped to ``[1, _max_timeout]``.
+            query: the free-form search query (e.g. "pytorch transformer api
+                2026").
+            num_results: maximum number of results to return. Defaults to 10. Hard
+                cap 20.
+            timeout: per-search timeout in seconds. Defaults to 60. Hard cap 300.
 
         Returns:
             A dict with keys ``query`` (str), ``results`` (list of dicts

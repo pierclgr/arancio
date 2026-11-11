@@ -13,7 +13,7 @@ from arancio.core.plugins.registry import (
     PLUGIN_REGISTRY,
     REGISTRATION_MESSAGES,
 )
-from arancio.core.plugins.tool import PluginTool
+from arancio.core.plugins.tools import PluginTool
 
 
 def plugin(**metadata: Any) -> Callable[[type], type]:
@@ -57,9 +57,21 @@ def plugin(**metadata: Any) -> Callable[[type], type]:
             if func in PENDING_HOOKS:
                 record.hooks.append((func, PENDING_HOOKS[func]))
             if func in PENDING_TOOLS:
-                record.tools.append(
-                    PluginTool.create_class(record.name, func, **PENDING_TOOLS[func])
-                )
+                try:
+                    record.tools.append(
+                        PluginTool.create_class(
+                            record.name, func, **PENDING_TOOLS[func]
+                        )
+                    )
+                except ValueError as exc:
+                    REGISTRATION_MESSAGES.append(
+                        ErrorMessage(
+                            content=(
+                                f"{record.location}: tool "
+                                f"{PENDING_TOOLS[func]['name']!r} ignored: {exc}"
+                            )
+                        )
+                    )
         PLUGIN_REGISTRY.append(record)
         if not record.hooks and not record.tools:
             REGISTRATION_MESSAGES.append(
@@ -98,15 +110,18 @@ def hook(event: Hook) -> Callable[[Callable], Callable]:
 def tool(
     *,
     description: str,
-    input_schema: dict[str, Any],
     category: str = PluginTool.category,
     name: str | None = None,
 ) -> Callable[[Callable], Callable]:
     """Mark a plain plugin instance method as a tool the model can call.
 
+    The tool's argument schema is derived from the method: its type hints give the
+    types and required arguments, ``Annotated[..., Field(...)]`` hints give the
+    constraints, and the parameter section of its docstring (Google, NumPy or Sphinx
+    style) gives the descriptions.
+
     Args:
         description: the tool's natural-language description.
-        input_schema: JSON Schema for the tool's arguments.
         category: ``"READ"``/``"WRITE"``/``"WEB"``/``"EXECUTE"``/``"PLUGIN"``
             (the default) or ``"CUSTOM"`` — which creates a
             ``PLUGIN:<plugin_name>`` category dedicated to the owning
@@ -123,7 +138,6 @@ def tool(
         PENDING_TOOLS[func] = {
             "name": name or func.__name__,
             "description": description,
-            "input_schema": input_schema,
             "category": category.upper(),
         }
         return func

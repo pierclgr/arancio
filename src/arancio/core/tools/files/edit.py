@@ -2,9 +2,11 @@
 
 import difflib
 from pathlib import Path
-from typing import Type
+from typing import Annotated, Type
 
-from arancio.core.parsers.tool_result.files.edit import EditFileToolResultParser
+from pydantic import Field
+
+from arancio.core.parsers.tool_results.files.edit import EditFileToolResultParser
 from arancio.core.tools.base import Tool
 
 
@@ -22,22 +24,23 @@ class EditFileTool(Tool):
     def _call(
         self,
         file_path: str,
-        old_string: str,
+        old_string: Annotated[str, Field(min_length=1)],
         new_string: str,
         replace_all: bool = False,
     ) -> dict:
         """Replace ``old_string`` with ``new_string`` in ``file_path``.
 
         Args:
-            file_path: absolute path of the file to edit.
-            old_string: the verbatim substring to find. Must be non-empty
-                and, unless ``replace_all`` is true, must be unique in the
-                file.
-            new_string: the substring that replaces ``old_string``. May be
-                empty (deletes the matched snippet) but must differ from
-                ``old_string``.
-            replace_all: when true, replace every occurrence; when false
-                (default), require the match to be unique.
+            file_path: absolute path of the file to edit. The file must already
+                exist.
+            old_string: the exact substring to find and replace. Whitespace,
+                indentation and line endings must match the file verbatim. Must be
+                unique in the file unless `replace_all` is true.
+            new_string: the string that replaces `old_string`. May be empty
+                (deletes the snippet).
+            replace_all: when true, replace every occurrence of `old_string`. When
+                false (default), the tool refuses to edit unless `old_string` is
+                unique in the file.
 
         Returns:
             A dict with keys ``file_path`` (str, canonical absolute path),
