@@ -267,11 +267,9 @@ are no-ops and `ask` returns None.
 `MarkdownStream` per span; `LoginPanel` and `QuestionScreen` live in
 `ui/widgets/`.
 
-Tool calls render their `display_text` as plain text. Unless explicitly supplied,
-`ToolCallMessage.display_text` uses a nonblank string `arguments["description"]`,
-falling back to `content` for absent, blank or non-string descriptions.
-When a nonblank description is present, the log also shows the tool name and
-arguments beneath the display text.
+Tool calls render their `display_text` (default `content`, the `name(json)`
+call) as plain text. When `arguments["description"]` is a nonblank string, the
+log shows it first and the `display_text` beneath it.
 
 ### Application (`application/`)
 

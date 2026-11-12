@@ -167,10 +167,11 @@ class MessageLog(VerticalScroll):
         # markup is off so brackets in tool output or user text show verbatim
         # instead of being parsed as Textual style tags
         if isinstance(message, ToolCallMessage):
-            display_text: str = f"→ {message.display_text}"
+            display_text: str = ""
             description: Any = message.arguments.get("description")
             if isinstance(description, str) and description.strip():
-                display_text += f"\n  {message.name}({message.arguments})"
+                display_text += f"→ {description}\n"
+            display_text += f"→ {message.display_text}"
             return Static(
                 display_text,
                 classes="tool-call",

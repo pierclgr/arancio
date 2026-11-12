@@ -34,17 +34,10 @@ class ToolCallMessage(Message):
             id: provider-issued call identifier.
             name: name of the tool the model wants to invoke.
             arguments: keyword arguments for the tool and optional description metadata.
-            display_text: what is shown to the user through the UI; defaults to a
-                nonblank string ``description`` argument, otherwise ``content``.
+            display_text: what is shown to the user through the UI; defaults
+                to ``content`` when not specified.
             in_history: whether the message is part of the model's context.
         """
-        description: Any = arguments.get("description")
-        if (
-            display_text is None
-            and isinstance(description, str)
-            and description.strip()
-        ):
-            display_text = description
         super().__init__(content, display_text, in_history)
         self.id = id
         self.name = name
