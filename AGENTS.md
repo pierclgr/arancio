@@ -270,6 +270,8 @@ are no-ops and `ask` returns None.
 Tool calls render their `display_text` as plain text. Unless explicitly supplied,
 `ToolCallMessage.display_text` uses a nonblank string `arguments["description"]`,
 falling back to `content` for absent, blank or non-string descriptions.
+When a nonblank description is present, the log also shows the tool name and
+arguments beneath the display text.
 
 ### Application (`application/`)
 
