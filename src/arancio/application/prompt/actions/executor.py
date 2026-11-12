@@ -167,7 +167,10 @@ class ActionExecutor:
             The call, hook messages, result and save notices in existing order.
         """
         call_id = f"shell_{uuid.uuid4().hex}"
-        arguments = {"command": action.command}
+        arguments = {
+            "command": action.command,
+            "description": f"Run {action.command}",
+        }
         tool_call = ToolCallMessage(
             content=f"ShellCommandTool({json.dumps(arguments)})",
             id=call_id,
@@ -466,6 +469,7 @@ class ActionExecutor:
                     arguments["offset"] = start_line
                     arguments["limit"] = end_line - start_line + 1
                 tool = self.__read_file_tool
+            arguments["description"] = f"Read {target}"
             tool_call = ToolCallMessage(
                 content=f"{name}({json.dumps(arguments)})",
                 id=call_id,

@@ -143,7 +143,7 @@ class PluginManager:
                 for method, hooks in plugin.hooks
             ]
             for tool_class in plugin.tools:
-                tool_class._method = tool_class._method.__get__(
+                tool_class._execute = tool_class._execute.__get__(
                     plugin.instance, plugin.plugin_cls
                 )
             # register each declaration; an invalid tool does not block the rest

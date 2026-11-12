@@ -20,15 +20,16 @@ from arancio.core.utils.naming import camel_to_snake
 class Tool(ABC):
     """Base class for runnable tools exposed to LLM clients.
 
-    Subclasses implement :meth:`_call` to execute the tool and return
-    raw output. The public :meth:`call` wrapper executes :meth:`_call`
-    and returns its :class:`ToolResultMessage` alongside hook messages.
+    Subclasses implement :meth:`_execute` to execute the tool and return raw output.
+    The inherited :meth:`_call` binds common call metadata before delegating to
+    :meth:`_execute`. The public :meth:`call` returns its :class:`ToolResultMessage`
+    alongside hook messages.
 
     Attributes:
         description: natural-language description,
             loaded from the tool's harness directory.
         input_schema: JSON Schema describing the tool arguments,
-            derived from the signature of :meth:`_call`.
+            derived from :meth:`_execute` and the shared :meth:`_call` signature.
         _result_parser: parser converting raw tool output into a tool
             result message.
         _tool_session: the injected :class:`ToolSession` for cross-tool
@@ -46,8 +47,8 @@ class Tool(ABC):
         """Initialize the tool with its dependencies, description and input schema.
 
         The description comes from :meth:`_load_description`; the input schema is
-        derived from the signature and docstring of :meth:`_call` and wrapped as a
-        closed JSON object.
+        derived from the signatures and docstrings of :meth:`_execute` and
+        :meth:`_call`, then wrapped as a closed JSON object.
 
         Args:
             hook_manager: the hook manager :meth:`call` dispatches through.
@@ -60,7 +61,7 @@ class Tool(ABC):
         self.input_schema = {
             "type": "object",
             "additionalProperties": False,
-            **InputSchemaBuilder.build(self._call),
+            **InputSchemaBuilder.build(type(self)),
         }
 
     def _load_description(self) -> str:
@@ -115,8 +116,11 @@ class Tool(ABC):
         here does not route to another tool. Change the target in model-response
         hooks, before permission resolution and selection.
 
-        Only _call failures become tool errors. Ordinary hook failures propagate.
+        Only execution failures become tool errors. Ordinary hook failures propagate.
         Returned results keep edits made by after-tool handlers.
+        The optional ``description`` argument stays on the original call for hooks
+        and history. The inherited :meth:`_call` binds it before passing the execution
+        arguments to :meth:`_execute`.
 
         Args:
             tool_call: the original model call, or a call created for direct execution.
@@ -154,15 +158,27 @@ class Tool(ABC):
         )
         return result, messages
 
-    @abstractmethod
-    def _call(self, **kwargs) -> Any:
-        """Execute the tool and return its output.
+    def _call(self, description: str | None = None, **kwargs: Any) -> Any:
+        """Bind shared call metadata and execute the concrete tool.
 
         Args:
+            description: brief description of the operation this tool call will perform.
             **kwargs: the tool arguments matching ''input_schema''
 
         Returns:
             The output of the tool execution
+        """
+        return self._execute(**kwargs)
+
+    @abstractmethod
+    def _execute(self, **kwargs: Any) -> Any:
+        """Execute the tool and return its output.
+
+        Args:
+            **kwargs: the execution arguments declared by the concrete tool.
+
+        Returns:
+            The output of the tool execution.
 
         Raises:
             NotImplementedError: when the method is not implemented by the subclass.

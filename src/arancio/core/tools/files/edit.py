@@ -21,7 +21,7 @@ class EditFileTool(Tool):
 
     _result_parser: Type[EditFileToolResultParser] = EditFileToolResultParser
 
-    def _call(
+    def _execute(
         self,
         file_path: str,
         old_string: Annotated[str, Field(min_length=1)],

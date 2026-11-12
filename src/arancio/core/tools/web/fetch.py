@@ -85,7 +85,7 @@ class FetchWebTool(Tool):
         """
         return f"{type(self).__name__}(client={self._client!r})"
 
-    def _call(
+    def _execute(
         self,
         url: str,
         query: str,

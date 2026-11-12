@@ -50,7 +50,7 @@ class ShellCommandTool(Tool):
         """
         return "PowerShell" if self._is_windows else "POSIX shell (`/bin/sh -c`)"
 
-    def _call(
+    def _execute(
         self,
         command: str,
         timeout: Annotated[int, Field(ge=1, le=SHELL_MAX_TIMEOUT)] | None = None,

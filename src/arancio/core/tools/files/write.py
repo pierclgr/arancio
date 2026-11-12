@@ -20,7 +20,7 @@ class WriteFileTool(Tool):
 
     _result_parser: Type[WriteFileToolResultParser] = WriteFileToolResultParser
 
-    def _call(self, file_path: str, content: str) -> dict:
+    def _execute(self, file_path: str, content: str) -> dict:
         """Write ``content`` to ``file_path`` and return write metadata.
 
         Args:

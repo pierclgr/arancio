@@ -1,7 +1,9 @@
-"""Builder deriving a tool's JSON input schema from its method signature."""
+"""Builder deriving a tool's JSON input schema from its class methods."""
+
+from __future__ import annotations
 
 import inspect
-from typing import Any, Callable, get_type_hints
+from typing import TYPE_CHECKING, Any, Callable, get_type_hints
 
 from pydantic import Field, PydanticUserError, create_model
 
@@ -11,14 +13,18 @@ from arancio.core.parsers.docstrings.google import GoogleDocstringParser
 from arancio.core.parsers.docstrings.numpy import NumpyDocstringParser
 from arancio.core.parsers.docstrings.sphinx import SphinxDocstringParser
 
+if TYPE_CHECKING:
+    from arancio.core.tools.base import Tool
+
 
 class InputSchemaBuilder(Builder):
-    """Build the raw JSON input schema of a tool from the method it runs.
+    """Build the raw JSON input schema of a tool from its class methods.
 
     Property names, types and required-ness come from the signature, constraints from
     ``Annotated[..., Field(...)]`` hints, and descriptions from the parameter section of
     the docstring (Google, NumPy or Sphinx style). Optional ``X | None`` parameters are
-    shown to the model as plain ``X``.
+    shown to the model as plain ``X``. The execution parameters come from ``_execute``;
+    shared metadata comes from the inherited ``_call`` method.
     """
 
     _null_type_schema: dict[str, str] = {"type": "null"}
@@ -29,19 +35,53 @@ class InputSchemaBuilder(Builder):
     )
 
     @classmethod
-    def build(cls, method: Callable) -> dict[str, Any]:
-        """Build the input schema of a tool method.
+    def build(cls, tool_class: type[Tool]) -> dict[str, Any]:
+        """Build a tool's schema from its execution and shared call methods.
 
         Args:
-            method: a bound method, or an unbound one whose first parameter is the
-                instance; the instance is not part of the schema.
+            tool_class: the tool class exposing ``_execute`` and ``_call``. The
+                shared ``_call`` method's variadic keyword parameter is ignored.
 
         Returns:
             A mapping with the ``properties`` and ``required`` schema keys.
 
         Raises:
             ValueError: when a type hint cannot be resolved, a parameter is
-                variadic or has no type hint, or a type has no JSON schema.
+                variadic or has no type hint, a type has no JSON schema, or both
+                methods declare an argument with the same name.
+        """
+        result: dict[str, Any] = cls.__build_method(tool_class._execute)
+        shared_schema: dict[str, Any] = cls.__build_method(
+            tool_class._call, ignore_variadic_keyword=True
+        )
+        reserved_arguments: set[str] = (
+            result["properties"].keys() & shared_schema["properties"].keys()
+        )
+        if reserved_arguments:
+            argument: str = sorted(reserved_arguments)[0]
+            raise ValueError(
+                f"{tool_class.__name__}: argument {argument!r} is reserved for "
+                "the shared call method."
+            )
+        result["properties"].update(shared_schema["properties"])
+        result["required"].extend(shared_schema["required"])
+        return result
+
+    @classmethod
+    def __build_method(
+        cls, method: Callable, *, ignore_variadic_keyword: bool = False
+    ) -> dict[str, Any]:
+        """Build one method's schema, optionally ignoring its keyword placeholder.
+
+        Args:
+            method: the method whose parameters define the schema.
+            ignore_variadic_keyword: omit a base method's variadic keyword parameter.
+
+        Returns:
+            The method's properties and required argument names.
+
+        Raises:
+            ValueError: when the method's parameters cannot be described.
         """
         parameters: list[inspect.Parameter] = list(
             inspect.signature(method).parameters.values()
@@ -59,6 +99,11 @@ class InputSchemaBuilder(Builder):
         )
         fields: dict[str, Any] = {}
         for parameter in parameters:
+            if (
+                ignore_variadic_keyword
+                and parameter.kind is inspect.Parameter.VAR_KEYWORD
+            ):
+                continue
             if parameter.kind in (
                 inspect.Parameter.VAR_POSITIONAL,
                 inspect.Parameter.VAR_KEYWORD,

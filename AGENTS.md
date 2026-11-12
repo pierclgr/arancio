@@ -29,7 +29,7 @@ Paths are in `core/constants.py` and each component's `constants.py`.
 
 - `harness/tools/<snake_tool_name>.md`: the tool description, read by
   `Tool.__init__` (raises if the file is missing). The input schema is not a
-  file: it is derived from `_call` (see Tools).
+  file: it is derived from `_execute` and the base `_call` (see Tools).
 - `harness/system_prompt.md`: seeded if absent, parsed once and cached by
   `SystemPromptBuilder`; `build()` appends the current date each turn. Put
   fresh runtime context in `build()`, never in a `<script>` tag.
@@ -118,19 +118,30 @@ low/medium/high are equal. Setting a reasoning summary there crashes LiteLLM
 
 ### Tools (`core/tools/`)
 
-Subclasses implement `_call`; `call(tool_call)` returns `(result, hook_messages)`,
-wrapping errors in `ToolErrorMessage` via `_result_parser`. Tool name = class
+Subclasses implement `_execute`; the inherited `_call` binds shared metadata and
+delegates to it. `call(tool_call)` returns `(result, hook_messages)`, wrapping errors
+in `ToolErrorMessage` via `_result_parser`. Tool name = class
 name. Descriptions are dynamic markdown (`<field>`, `<include>`, `<script>`).
-The input schema is derived from `_call` by `InputSchemaBuilder`
+The input schema is derived from `_execute` by `InputSchemaBuilder`
 (`core/builders/tool_input_schemas/`): type hints give types and required arguments,
 `Annotated[..., Field(ge=, le=, min_length=)]` the constraints sent to the
 model (each family's `constants.py` holds the shared defaults and bounds; the
 tool still clamps/validates at runtime), and the docstring's parameter section
 (Google `Args:`, NumPy `Parameters` or Sphinx `:param`, read by the parsers in
 `core/parsers/docstrings/`) the per-parameter descriptions, so those lines are
-**model-facing**. `Tool.__init__` closes it as
-an object with `additionalProperties: false`. Variadic or untyped parameters and
-unsupported types raise `ValueError`. The shared `ToolSession` (`_tool_session`)
+**model-facing**. `InputSchemaBuilder.build(tool_class)` reads the class's `_execute`
+and inherited `_call` methods, merging their arguments and rejecting duplicate
+names. `Tool.__init__` passes `type(self)` and closes the result with
+`additionalProperties: false`.
+`Tool._call` declares the optional `description` argument for the current operation;
+tool methods must not declare this reserved argument.
+`Tool.call` passes the full arguments to `_call`, which binds `description` and
+forwards only execution arguments to `_execute`. The original call keeps metadata
+for hooks, history and sessions. `Tool.description` still holds the tool's general
+purpose. Concrete `_execute` methods with variadic or untyped parameters or
+unsupported types raise `ValueError`; the base `_call`'s `**kwargs` placeholder
+is excluded.
+The shared `ToolSession` (`_tool_session`)
 tracks read files so write/edit refuse unread or externally changed files; it
 survives `ToolManager.refresh`.
 Families: `files/`, `commands/`, `web/` (fetch uses an injected summary client).
@@ -191,7 +202,7 @@ def customize(self, agent, **kwargs):
 | agent_end | message_history | natural text-only stop |
 | before/after_permission_check | tool_call (+ permission_decision) | once per `validate` |
 | before/after_tool_call | tool_call (+ result) | `Tool.call`; after always fires |
-| error `source="tool"` | source, error, tool_call | `_call` raised |
+| error `source="tool"` | source, error, tool_call | tool execution raised |
 | error `source="model"` | source, error, request | every failed turn |
 | error `source="agent"` | source, error | run ends on failure |
 
@@ -233,7 +244,12 @@ from the decorated method like built-in tools (no `input_schema=` argument), and
 a method that cannot be described is skipped with a startup error. `permission_category`:
 `READ`, `WRITE`, `WEB`, `EXECUTE`, `PLUGIN` (default) or `CUSTOM` (→
 `PLUGIN:<plugin_name>`, level from the plugin's `permission_level`).
-`PluginToolResultParser` keeps dicts raw and displays them as JSON.
+`PluginToolResultParser` keeps dicts raw and displays them as JSON. Plugin method
+validation uses the shared tool schema builder, including the reserved
+`description` argument check. Generated classes store the plugin method directly
+as `_execute` and are validated before registration or instantiation. The manager
+binds `_execute` to the plugin instance during loading; the inherited `_call`
+binds metadata before invoking it.
 
 ### Frontend (`ui/`)
 
@@ -250,6 +266,10 @@ are no-ops and `ask` returns None.
 (closing the iterator in `finally`). `MessageLog` streams chunks into one
 `MarkdownStream` per span; `LoginPanel` and `QuestionScreen` live in
 `ui/widgets/`.
+
+Tool calls render their `display_text` as plain text. Unless explicitly supplied,
+`ToolCallMessage.display_text` uses a nonblank string `arguments["description"]`,
+falling back to `content` for absent, blank or non-string descriptions.
 
 ### Application (`application/`)
 
@@ -294,6 +314,8 @@ end_line, raw_markdown=False)` supports `@file:110` and `@file:110-120`
 executor turns valid ranges into `offset`/`limit`, invalid ones into a full
 read. `!` keeps the exchange in history; `!!` does not. Mentions and `!`
 use direct tools that bypass permissions.
+Synthetic calls include `description="Read <resolved path>"` for file/directory
+mentions and `description="Run <command>"` for both shell prefixes.
 
 Commands receive only `application`. Commands in
 `commands/registry.py:SESSION_DISCARDING_COMMANDS` are recorded before
@@ -368,7 +390,7 @@ the returned data.
 - **Private members**: double leading underscore; constants in the package's
   `constants.py`; shared data types in `base.py`.
 - **New provider / tool / command**: subclass the `base.py`. A tool also needs
-  `harness/tools/<snake_name>.md`; type-hint `_call` and document its
+  `harness/tools/<snake_name>.md`; type-hint `_execute` and document its
   parameters in the docstring (Google `Args:` section). A command goes in
   `commands/registry.py` (and `SESSION_DISCARDING_COMMANDS` if it switches
   session) and delegates to Application.

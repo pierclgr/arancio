@@ -30,7 +30,7 @@ class ReadFileTool(Tool):
     _line_truncation_marker: str = READ_LINE_TRUNCATION_MARKER
     _result_parser: Type[ReadFileToolResultParser] = ReadFileToolResultParser
 
-    def _call(
+    def _execute(
         self,
         file_path: str,
         offset: Annotated[int, Field(ge=1)] = 1,

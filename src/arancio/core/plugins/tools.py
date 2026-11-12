@@ -17,7 +17,8 @@ class PluginTool(Tool):
     attributes. The manager binds the method to the owning plugin instance, then
     registers the class as a tool definition with the tool manager, which builds it
     like any built-in tool; the tool runs, and its input schema is derived from, the
-    bound method. Its exposed name is
+    bound method through :meth:`_execute`. The shared :meth:`_call` is inherited
+    from :class:`Tool`. Its exposed name is
     ``<plugin_name>-<tool_name>``, using the decorator's name (defaulting to the
     class name) and the method name or tool override. Dictionary results keep their
     raw content and are displayed as JSON by
@@ -26,14 +27,12 @@ class PluginTool(Tool):
     Attributes:
         tool_name: the tool portion of the full name, defaulting to the method name.
         permission_category: the uppercased permission category, defaulting to PLUGIN.
-        _method: the declaring function, bound to its plugin instance during loading.
         _description: the description supplied by the decorator, without expansion.
     """
 
     _result_parser = PluginToolResultParser
     tool_name: ClassVar[str]
     permission_category: ClassVar[str] = "PLUGIN"
-    _method: ClassVar[Callable]
     _description: ClassVar[str]
 
     @classmethod
@@ -50,8 +49,8 @@ class PluginTool(Tool):
 
         It creates a class only: it builds no tool object and registers
         nothing. The schema is derived from ``method`` right away, so a method that
-        cannot be described fails here with the builder's ``ValueError`` instead of
-        when the tool is built.
+        cannot be described or declares the reserved ``description`` argument fails
+        here with the shared builder's ``ValueError`` instead of when the tool is built.
 
         Args:
             plugin_name: the owning plugin's name, used as the tool-name prefix.
@@ -63,19 +62,19 @@ class PluginTool(Tool):
         Returns:
             A fresh tool subclass named from ``plugin_name`` and ``name``.
         """
-        # validate the signature now: a bad plugin tool is skipped at load time
-        # (the caller catches the error), instead of failing when the tool is built
-        InputSchemaBuilder.build(method)
-        return type(
+        tool_class: type[PluginTool] = type(
             f"{plugin_name}-{name}",
             (cls,),
             {
                 "tool_name": name,
                 "permission_category": permission_category,
-                "_method": method,
+                "_execute": method,
                 "_description": description,
             },
         )
+        # validate before registering or constructing the tool
+        InputSchemaBuilder.build(tool_class)
+        return tool_class
 
     def _load_description(self) -> str:
         """Return the description stored on the tool class.
@@ -84,13 +83,3 @@ class PluginTool(Tool):
             The description declared by the decorator.
         """
         return self._description
-
-    @property
-    def _call(self) -> Callable:
-        """The plugin method bound to its plugin instance, run as the tool.
-
-        Returns:
-            The bound method; its signature and docstring describe the tool's
-            arguments.
-        """
-        return self._method

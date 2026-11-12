@@ -32,7 +32,7 @@ class SearchWebTool(Tool):
     _max_timeout: int = SEARCH_MAX_TIMEOUT
     _result_parser: Type[SearchWebToolResultParser] = SearchWebToolResultParser
 
-    def _call(
+    def _execute(
         self,
         query: str,
         num_results: Annotated[int, Field(ge=1, le=SEARCH_MAX_NUM_RESULTS)]

@@ -168,7 +168,7 @@ class MessageLog(VerticalScroll):
         # instead of being parsed as Textual style tags
         if isinstance(message, ToolCallMessage):
             return Static(
-                f"→ {message.name}({message.arguments})",
+                f"→ {message.display_text}",
                 classes="tool-call",
                 markup=False,
             )
